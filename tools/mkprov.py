@@ -70,9 +70,16 @@ for i, p in enumerate(plist):
     if nm is None:
         cnt[rn] = cnt.get(rn, 0) + 1; nm = f'{rn}, земля {cnt[rn]}'
     used.add(nm); p['name'] = nm
+mt = np.load(SP + 'umap/mt.npy')
 img = np.zeros((H2, W2, 3), np.uint8); img[..., 0] = (ids >> 8) & 255; img[..., 1] = ids & 255
+img[..., 2] = np.where(mt[::S, ::S][:H2, :W2] & (ids > 0), 255, 0)
+# доля гор в каждой провинции
+plf = pl.ravel(); mtf = mt.ravel(); sel = plf >= 0
+mcount = np.bincount(plf[sel], weights=mtf[sel].astype(np.float64), minlength=len(provs))
+for i, p in enumerate(plist):
+    p['mt'] = round(float(mcount[i]) / max(1, p['n']), 2) if i < len(provs) else 0
 Image.fromarray(img).save(OUT + '/ids.png', optimize=True)
-mi['provs'] = [[p['gi'] if p['gi'] is not None else -1, p['x'], p['y'], p['n'], p['name']] for p in plist]
+mi['provs'] = [[p['gi'] if p['gi'] is not None else -1, p['x'], p['y'], p['n'], p['name'], p.get('mt', 0)] for p in plist]
 mi['idsScale'] = S
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
 print('provinces', len(plist), 'ids.png', W2, H2, os.path.getsize(OUT + '/ids.png'))

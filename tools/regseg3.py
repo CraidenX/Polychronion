@@ -118,12 +118,14 @@ for r, plist in small_by_reg.items():
 rl = np.where(lab >= 0, c2r[np.maximum(lab, 0)], -1).astype(np.int32)
 pl = np.where(lab >= 0, c2p[np.maximum(lab, 0)], -1).astype(np.int32)
 # линии и подписи внутри зоны — ближайшей провинции (не дальше 6 px), но не серый фон
+MOUNT = kG == 0xFFFFFF
+np.save(SP + 'umap/mt.npy', MOUNT)
 land = kG != SEA
 dist = np.where(pl >= 0, 0, 99).astype(np.int32)
 q = deque(zip(*np.nonzero(pl >= 0)))
 while q:
     y, x = q.popleft(); dd = dist[y, x]
-    if dd >= 6: continue
+    if dd >= (14 if MOUNT[y, x] else 6): continue
     for Y, X in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
         if 0 <= Y < H and 0 <= X < W and land[Y, X] and pl[Y, X] < 0 and not fill[Y, X] and sat[Y, X] <= 10 and kG[Y, X] != 0x808080:
             pl[Y, X] = pl[y, x]; rl[Y, X] = rl[y, x]; dist[Y, X] = dd + 1; q.append((Y, X))

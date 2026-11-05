@@ -563,11 +563,18 @@ async function stepArmy(a, to) {
   a.region = to; a.moved = true; a.siege = 0;
   if (atWar(a.owner, r.owner) && r.garrison < 40) capture(r, a.owner);
 }
+// перевал: войско задерживается на нём на один сезон
+function crossPass(a, to) {
+  const lk = NEIGH[a.region].find(n => n.to === to);
+  if (lk && lk.t === 'pass' && a.passWait !== to) { a.passWait = to; if (a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт лишний сезон.`); return true; }
+  a.passWait = null; return false;
+}
 async function movePlayerArmies() {
   for (const a of myArmies().slice()) {
     if (!a.path.length || !G.armies.includes(a)) continue;
     const nxt = a.path[0];
     if (!canEnter('byz', nxt)) { a.path = []; continue; }
+    if (crossPass(a, nxt)) continue;
     a.path.shift();
     await stepArmy(a, nxt);
     if (G.over) return;
@@ -661,7 +668,7 @@ async function aiTurn() {
       let need = (1.75 - (D.aggr || 0.3) * 0.7) * (1 + extra * (f === 'osman' ? 0.12 : 0.4));
       if (extra >= (f === 'osman' ? 7 : 4) && best && R(best).owner !== f) best = null;
       if (best && D.trade && !SEA_PORTS.includes(best)) best = null;
-      if (best && bs > need) await stepArmy(a, best);
+      if (best && bs > need && !crossPass(a, best)) await stepArmy(a, best);
       if (G.over) return;
     }
   }
@@ -777,7 +784,7 @@ function worldTick() {
   // угроза Карла Анжуйского
   if (y >= 1267 && !G.flags.vespers) G.anjou = clamp(G.anjou + (G.union === 'accepted' ? 0.4 : 1.4) - (G.prestige > 60 ? 0.3 : 0), 0, 100);
   // турецкие набеги на анатолийские земли
-  const turkish = ['seljuk', 'osman', 'germiyan', 'menteshe', 'aydin', 'karasi'];
+  const turkish = ['seljuk', 'osman', 'germiyan', 'menteshe', 'aydin', 'karasi', 'candar'];
   const raid = BAL.raidBase + Math.max(0, y - 1275) * 0.0025;
   for (const r of myRegions().filter(r => ANATOLIA.includes(r.id))) {
     if (!NEIGH[r.id].some(n => turkish.includes(R(n.to).owner))) continue;

@@ -10,6 +10,11 @@ k = (a[..., 0] << 16) | (a[..., 1] << 8) | a[..., 2]
 L = a.max(2)
 keep = ((sat <= 10) & (L < 232)) | (k == 0x001F48) | (k == 0x000020)
 out = a.copy(); out[~keep] = (128, 128, 128)
+# горы с карты регионов: белые хребты поверх фона
+REG = sorted(glob.glob(SP + '../source/*regions*.png'))[0]
+g = np.asarray(Image.open(REG).convert('RGB')).astype(np.int32)
+mtn = (g[..., 0] == 255) & (g[..., 1] == 255) & (g[..., 2] == 255)
+out[mtn] = (232, 228, 214)
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]
 # исходный размер — без пересжатия

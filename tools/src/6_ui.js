@@ -137,7 +137,9 @@ function initMap() {
         const cx = c.getContext('2d'); cx.drawImage(im, 0, 0);
         const d = cx.getImageData(0, 0, im.width, im.height).data;
         const ids = new Uint16Array(im.width * im.height);
-        for (let k = 0; k < ids.length; k++) ids[k] = (d[k * 4] << 8) | d[k * 4 + 1];
+        const mtn = new Uint8Array(ids.length);
+        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; mtn[k] = d[k * 4 + 2] > 127 ? 1 : 0; }
+        PIX.mtn = mtn;
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
         const np = M.provs.length + 1, bb = new Int32Array(np * 4);
         for (let k = 0; k < np; k++) { bb[k * 4] = 1e9; bb[k * 4 + 1] = 1e9; bb[k * 4 + 2] = -1; bb[k * 4 + 3] = -1; }
@@ -237,7 +239,7 @@ function drawOverlay() {
         const i = row + x, v = ids[i]; if (!v) continue;
         const g = pr[v]; if (g < 0) continue;
         const c = regCol[g], o = i * 4;
-        const al = 112;
+        const al = PIX.mtn && PIX.mtn[i] ? 45 : 112;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = al;
         // соседи справа и снизу
         const vr = x + 1 < w ? ids[i + 1] : 0, vd = y + 1 < h ? ids[i + w] : 0;
@@ -382,7 +384,7 @@ function regionPanel(r) {
   if (UI.selProv != null && M.provs && M.provs[UI.selProv] && M.provs[UI.selProv][0] === ri) {
     const p = M.provs[UI.selProv], sh = p[3] / area;
     ph = `<div class="card" style="margin:0 0 8px;padding:8px"><div class="small muted">Провинция</div><b>${esc(p[4])}</b>
-      <div class="small">${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
+      <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}% — непроходимы для войск<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
   }
   let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
   <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}</div>
@@ -408,7 +410,7 @@ function regionPanel(r) {
   myHere.forEach(a => { if (atWar('byz', r.owner) && !a.stormed) h += `<div class="btnrow"><button class="main" data-storm="${a.id}">⚔ Штурм силами «${esc(a.name)}»</button></div>`; });
   if (besiegers.length && mine) h += `<p class="bad small">Город осаждён! Отправьте войско на выручку или ждите: осада длится до ${siegeTurns(r)} сезонов.</p>`;
   h += `<h3>Войска здесь</h3>` + (armies.map(a => `<div><button class="small" data-a="${a.id}" style="border-color:${FACTIONS[a.owner].color}">⚑ ${esc(a.name)}</button> <span class="small muted">${esc(fshort(a.owner))}, ${armyLabel(a)} чел.</span></div>`).join('') || '<p class="muted small">Нет.</p>');
-  h += `<h3>Соседи</h3><p class="small">${NEIGH[r.id].map(n => `${esc(RNAME[n.to])}${n.t === 'sea' ? ' (море)' : n.t === 'strait' ? ' (пролив)' : ''}`).join(', ')}</p>`;
+  h += `<h3>Соседи</h3><p class="small">${NEIGH[r.id].map(n => `${esc(RNAME[n.to])}${n.t === 'sea' ? ' (море)' : n.t === 'strait' ? ' (пролив)' : n.t === 'pass' ? ' (перевал: +1 сезон)' : ''}`).join(', ')}</p>`;
   return h;
 }
 function bindRegionPanel(r) {
@@ -791,7 +793,18 @@ function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } cat
 function load() { try { const s = localStorage.getItem(SAVE_KEY); if (!s) return false; G = JSON.parse(s); return true; } catch (e) { return false; } }
 function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
 function enterGame() { $('title').classList.add('hidden'); $('app').classList.remove('hidden'); if (!regionGrid) initMap(); else fitMap(); UI.sel = null; UI.selArmy = null; UI.tab = 'map'; ['map', 'court', 'state', 'log'].forEach(k => $('view-' + k).classList.toggle('hidden', k !== 'map')); renderAll(); if (G.over) showFinale(); }
-async function startNew() { newGame(); enterGame(); await runPrologue(); save(); renderAll(); setTimeout(() => showHelp(), 300); }
+function showIntro() {
+  return new Promise(res => {
+    SFX.play('event');
+    modal(`<div class="small muted">Пролог · Лето 1261</div><h2>Город снова ромейский</h2>
+    <p>${esc(INTRO_TEXT)}</p>
+    <div class="note"><b>Как играть.</b> Один ход — один сезон. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на регион — войско пойдёт туда. Пунктир — морские пути (нужен флот). Белые хребты — горы: через них не пройти, а перевал задерживает войско на сезон. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
+    <p class="small muted">Цель — дожить до 1347 года и встретить Чёрную смерть сильной державой. Потеря Константинополя — конец игры.</p>
+    <button class="main" id="introNext">Далее: кто будет править?</button>`);
+    $('introNext').onclick = () => { closeModal(); res(); };
+  });
+}
+async function startNew() { newGame(); enterGame(); await showIntro(); await runPrologue(); save(); renderAll(); }
 function boot() {
   $('titlebtns').innerHTML = `<button class="main" id="tNew">Новая игра</button>${hasSave() ? '<button id="tCont">Продолжить</button>' : ''}`;
   $('tNew').onclick = startNew;

@@ -181,9 +181,19 @@ for i, a in enumerate(ids):
         d = np.sqrt(((coast[a][:, None, :] - coast[b][None, :, :]) ** 2).sum(2)).min()
         sea_d[(a, b)] = d
 links = {}
-for (a, b) in adj: links[(a, b)] = 'land'
+NP = len(info)
+rid2i = {it['rid']: i for i, it in enumerate(info)}
+for (a, b) in adj:
+    if a < NP and b < NP: continue          # между регионами карты — по расчёту с горами (mkadj.py)
+    links[(a, b)] = 'land'
+WALLS = []
+for ra, rb, t, o, bl in json.load(open(SP + 'umap/adj.json')):
+    if ra not in rid2i or rb not in rid2i: continue
+    a, b = sorted((rid2i[ra], rid2i[rb]))
+    if t == 'wall': WALLS.append((a, b)); continue
+    links[(a, b)] = t
 for (a, b), d in sea_d.items():
-    if (a, b) in links: continue
+    if (a, b) in links or (a, b) in WALLS: continue
     if d < 40: links[(a, b)] = 'strait'
 for a in ids:
     cand = sorted((d, (min(a, b), max(a, b))) for (p, q), d in sea_d.items() for b in [q if p == a else p if q == a else None] if b is not None)
@@ -242,5 +252,5 @@ for a, b in alias.items(): mi['pos'][a] = mi['pos'][b]
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
 own_c = Counter(d[2] for d in out)
 print('regions', len(out), 'painted', len(info), 'fallback', len(fb), 'links', len(L), Counter(t for _, _, t in L))
-print('owners', dict(own_c)); print('unknown colours', unknown.most_common(8)); print('alias', alias); print('unmatched->fallback', unmatched)
+print('walls', [(allr[a]['name'], allr[b]['name']) for a, b in WALLS]); print('passes', [(allr[a]['name'], allr[b]['name']) for (a, b), t in links.items() if t == 'pass']); print('owners', dict(own_c)); print('unknown colours', unknown.most_common(8)); print('alias', alias); print('unmatched->fallback', unmatched)
 for it in info: print(it['id'], it.get('color'), it['name'], it['owner'], it['parts'], round(it['lon'], 1), round(it['lat'], 1))
