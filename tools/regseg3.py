@@ -2,7 +2,7 @@
 # Острова: мелкие острова одного региона — одна провинция (если между ними нет белой черточки),
 #          крупный остров — отдельная провинция (и может делиться линиями дальше).
 # Выход: umap/rl.npy (регион на пиксель), umap/pl.npy (провинция на пиксель), umap/regs.json, umap/provs.json, umap/meta.json
-import json, glob, os
+import json, glob, os, math
 from collections import deque, Counter
 import numpy as np
 from PIL import Image
@@ -83,37 +83,56 @@ def white_between(A, B):
         x = int(A['cx'] + (B['cx'] - A['cx']) * t); y = int(A['cy'] + (B['cy'] - A['cy']) * t)
         if pline[max(0, y - 1):y + 2, max(0, x - 1):x + 2].any(): return True
     return False
-small_by_reg = {}
+# острова-провинции из списка автора (islands.json): координаты -> пиксели
+fit = json.load(open(SP + 'umap/fit.json')); kf = W / fit.get('W', 2000)
+l0, fsx, p0, fsy = fit['p'][0], fit['p'][1] * kf, fit['p'][2], fit['p'][3] * kf
+ANCH = json.load(open(SP + 'islands.json')) if os.path.exists(SP + 'islands.json') else []
+# каждая точка острова — ровно к одному, ближайшему куску суши
+anchor_comp = {}
+for an in ANCH:
+    ax, ay = int((an['lon'] - l0) * fsx), int((p0 - an['lat']) * fsy)
+    y0, y1, x0, x1 = max(0, ay - 30), min(H, ay + 31), max(0, ax - 30), min(W, ax + 31)
+    win = lab[y0:y1, x0:x1]; ys, xs = np.nonzero(win >= 0)
+    if not len(ys): continue
+    d = (ys + y0 - ay) ** 2 + (xs + x0 - ax) ** 2; j = int(np.argmin(d))
+    anchor_comp[int(win[ys[j], xs[j]])] = an['name']
+def piece_has_anchor(ids):
+    for i in ids:
+        if i in anchor_comp: return anchor_comp[i]
+    return None
+attach = []   # мелкие острова: присоединяются к ближайшей провинции своего региона
 for root, ids in pieces.items():
     area = sum(comps[i]['n'] for i in ids); r = int(c2r[ids[0]])
-    if area >= BIG_ISLAND:
+    anc = piece_has_anchor(ids) if area < BIG_ISLAND else None
+    if area >= BIG_ISLAND or anc:
+        made = []
         for i in ids:
-            if comps[i]['n'] >= CRUMB:
-                c2p[i] = len(provs); provs.append({'region': r, 'comps': [i]})
-        # обрывки внутри большого куска — в ближайшую провинцию этого куска
-        bigs = [i for i in ids if c2p[i] >= 0]
-        if not bigs:
-            c2p[ids[0]] = len(provs); provs.append({'region': r, 'comps': [ids[0]]}); bigs = [ids[0]]
+            if comps[i]['n'] >= CRUMB or anc:
+                if anc and made: c2p[i] = made[0]; provs[made[0]]['comps'].append(i); continue
+                c2p[i] = len(provs); provs.append({'region': r, 'comps': [i], 'anchor': anc}); made.append(c2p[i])
+        if not made:
+            c2p[ids[0]] = len(provs); provs.append({'region': r, 'comps': [ids[0]], 'anchor': anc}); made = [c2p[ids[0]]]
         for i in ids:
             if c2p[i] < 0:
-                j = min(bigs, key=lambda j: (comps[j]['cx'] - comps[i]['cx']) ** 2 + (comps[j]['cy'] - comps[i]['cy']) ** 2)
-                c2p[i] = c2p[j]; provs[c2p[j]]['comps'].append(i)
+                j = min(made, key=lambda j: min((comps[q]['cx'] - comps[i]['cx']) ** 2 + (comps[q]['cy'] - comps[i]['cy']) ** 2 for q in provs[j]['comps']))
+                c2p[i] = j; provs[j]['comps'].append(i)
     else:
-        small_by_reg.setdefault(r, []).append(ids)
-for r, plist in small_by_reg.items():
-    d = DSU(len(plist))
-    cent = []
-    for ids in plist:
-        n = sum(comps[i]['n'] for i in ids)
-        cent.append({'cx': sum(comps[i]['cx'] * comps[i]['n'] for i in ids) / n, 'cy': sum(comps[i]['cy'] * comps[i]['n'] for i in ids) / n})
-    for a in range(len(plist)):
-        for b in range(a + 1, len(plist)):
-            if ((cent[a]['cx'] - cent[b]['cx']) ** 2 + (cent[a]['cy'] - cent[b]['cy']) ** 2) ** 0.5 < ISL_GAP and not white_between(cent[a], cent[b]): d.u(a, b)
-    grp = {}
-    for a in range(len(plist)): grp.setdefault(d.f(a), []).extend(plist[a])
-    for ids in grp.values():
-        pid = len(provs); provs.append({'region': r, 'comps': ids})
-        for i in ids: c2p[i] = pid
+        attach.append((r, ids))
+for r, ids in attach:
+    cx = sum(comps[i]['cx'] * comps[i]['n'] for i in ids) / sum(comps[i]['n'] for i in ids)
+    cy = sum(comps[i]['cy'] * comps[i]['n'] for i in ids) / sum(comps[i]['n'] for i in ids)
+    cand = [j for j, p in enumerate(provs) if p['region'] == r]
+    if not cand:
+        j = len(provs); provs.append({'region': r, 'comps': []}); cand = [j]
+    # ближайшая провинция региона — по расстоянию до её кусков (рамок)
+    def dist(j):
+        best = 1e18
+        for q in provs[j]['comps']:
+            c = comps[q]; dx = max(c['x0'] - cx, 0, cx - c['x1']); dy = max(c['y0'] - cy, 0, cy - c['y1']); best = min(best, dx * dx + dy * dy)
+        return best
+    j = min(cand, key=dist)
+    for i in ids: c2p[i] = j
+    provs[j]['comps'].extend(ids)
 # метки на пиксель
 rl = np.where(lab >= 0, c2r[np.maximum(lab, 0)], -1).astype(np.int32)
 pl = np.where(lab >= 0, c2p[np.maximum(lab, 0)], -1).astype(np.int32)

@@ -64,6 +64,7 @@ for i, p in enumerate(plist):
 # названия провинций: ближайший город из справочника (в пределах 0,2°), иначе «Регион, часть N»
 used = set(); cnt = {}
 for i, p in enumerate(plist):
+    if i < len(provs) and provs[i].get('anchor'): p['name'] = provs[i]['anchor']; used.add(p['name']); continue
     lon, lat = l0 + p['x'] / sx, p0 - p['y'] / sy
     rn = gen['regions'][p['gi']][1] if p['gi'] is not None else '—'
     best = sorted(GAZ, key=lambda g: (g[1] - lon) ** 2 + (g[2] - lat) ** 2)
