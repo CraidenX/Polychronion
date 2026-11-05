@@ -11,7 +11,7 @@ L = a.max(2)
 keep = ((sat <= 10) & (L < 232)) | (k == 0x001F48) | (k == 0x000020)
 out = a.copy(); out[~keep] = (128, 128, 128)
 im = Image.fromarray(out.astype(np.uint8))
-W = 4000; H = round(a.shape[0] * W / a.shape[1])
-im = im.resize((W, H), Image.LANCZOS)
+W, H = a.shape[1], a.shape[0]
+# исходный размер — без пересжатия
 im.quantize(colors=64, method=Image.MEDIANCUT, dither=Image.NONE).save(sys.argv[1] + '/map.png', optimize=True)
 print(W, H)

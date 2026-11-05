@@ -48,6 +48,10 @@ async function doEndTurn(n) {
 
 /* --- карта --- */
 let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
+// Попиксельная карта провинций: ids.png (номер провинции в цвете пикселя). Если браузер не даёт прочитать
+// пиксели (файл открыт с диска), остаётся запасная грубая сетка регионов.
+const PIX = { ids: null, w: 0, h: 0, s: 2, buf: null, provReg: null };
+const MAXZ = 4;
 function initMap() {
   const M = MAPINFO;
   ID_BY_IDX = M.ids;
@@ -58,26 +62,51 @@ function initMap() {
   borderSegs = [];
   for (let y = 0; y < M.GH; y++) for (let x = 0; x < M.GW; x++) {
     const a = regionGrid[y * M.GW + x];
-    if (x + 1 < M.GW) { const b = regionGrid[y * M.GW + x + 1]; if (a !== b && (a >= 0 || b >= 0)) borderSegs.push([a, b, (x + 1) * M.C, y * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
-    if (y + 1 < M.GH) { const b = regionGrid[(y + 1) * M.GW + x]; if (a !== b && (a >= 0 || b >= 0)) borderSegs.push([a, b, x * M.C, (y + 1) * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
+    if (x + 1 < M.GW) { const b = regionGrid[y * M.GW + x + 1]; if (a !== b && a >= 0 && b >= 0) borderSegs.push([a, b, (x + 1) * M.C, y * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
+    if (y + 1 < M.GH) { const b = regionGrid[(y + 1) * M.GW + x]; if (a !== b && a >= 0 && b >= 0) borderSegs.push([a, b, x * M.C, (y + 1) * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
   }
-  const cv = $('ovl'); cv.width = M.W; cv.height = M.H;
+  const cv = $('ovl'); cv.width = Math.ceil(M.W / 2); cv.height = Math.ceil(M.H / 2);
+  cv.style.width = M.W + 'px'; cv.style.height = M.H + 'px';
   $('mapinner').style.width = M.W + 'px'; $('mapinner').style.height = M.H + 'px';
   $('mapimg').width = M.W; $('mapimg').height = M.H;
   $('mapimg').onerror = () => { $('mapimg').style.display = 'none'; $('mapinner').style.background = '#808080'; };
+  if (M.provs) {
+    PIX.provReg = new Int16Array(M.provs.length + 1).fill(-1);
+    M.provs.forEach((p, k) => PIX.provReg[k + 1] = p[0]);
+    const im = new Image();
+    im.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+        const cx = c.getContext('2d'); cx.drawImage(im, 0, 0);
+        const d = cx.getImageData(0, 0, im.width, im.height).data;
+        const ids = new Uint16Array(im.width * im.height);
+        for (let k = 0; k < ids.length; k++) ids[k] = (d[k * 4] << 8) | d[k * 4 + 1];
+        PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
+        cv.width = PIX.w; cv.height = PIX.h;
+        if (G) renderAll();
+      } catch (e) { /* файл открыт с диска: браузер запрещает читать пиксели — работает запасная сетка */ }
+    };
+    im.src = 'ids.png';
+  }
   setupPanZoom();
   fitMap();
 }
 function fitMap() {
   const w = $('mapwrap').clientWidth || 800, h = $('mapwrap').clientHeight || 600;
   const f = MAPINFO.focus || [0, 0, MAPINFO.W, MAPINFO.H];
-  const z = clamp(Math.min(w / (f[2] - f[0]), h / (f[3] - f[1])), minZoom(), 2.5);
+  const z = clamp(Math.min(w / (f[2] - f[0]), h / (f[3] - f[1])), minZoom(), MAXZ);
   UI.view.z = z; UI.view.x = w / 2 - (f[0] + f[2]) / 2 * z; UI.view.y = h / 2 - (f[1] + f[3]) / 2 * z; clampView(); applyView();
 }
 function minZoom() { const w = $('mapwrap').clientWidth || 800, h = $('mapwrap').clientHeight || 600; return Math.min(w / MAPINFO.W, h / MAPINFO.H); }
 function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clientHeight, v = UI.view; const mw = MAPINFO.W * v.z, mh = MAPINFO.H * v.z; v.x = mw < w ? (w - mw) / 2 : clamp(v.x, w - mw, 0); v.y = mh < h ? (h - mh) / 2 : clamp(v.y, h - mh, 0); }
-function applyView() { $('mapinner').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${UI.view.z})`; $('markers').style.setProperty('--s', clamp(0.85 / UI.view.z, 1, 1.9).toFixed(3)); $('markers').classList.toggle('far', UI.view.z < 0.5 && REGION_DEFS.length > 40); }
-function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), 2.5); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
+function applyView() {
+  const z = UI.view.z, k = MAPINFO.W / 4000; // подписи держат читаемый размер при отдалении
+  $('mapinner').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${z})`;
+  $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.3, 2.2).toFixed(3));
+  $('markers').classList.toggle('far', z * k < 0.5 && REGION_DEFS.length > 40);
+  $('markers').classList.toggle('near', z * k >= 1.5);
+}
+function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), MAXZ); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
 function setupPanZoom() {
   const w = $('mapwrap'); let drag = null; const pts = new Map(); let pinch = null;
   w.addEventListener('wheel', e => { e.preventDefault(); const r = w.getBoundingClientRect(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
@@ -99,14 +128,19 @@ function setupPanZoom() {
 }
 function mapClick(e) {
   const t = e.target.closest('.ar,.rm');
-  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) clickRegion(t.dataset.reg); return; }
+  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) { UI.selProv = null; clickRegion(t.dataset.reg); } return; }
   const r = $('mapwrap').getBoundingClientRect();
   const mx = (e.clientX - r.left - UI.view.x) / UI.view.z, my = (e.clientY - r.top - UI.view.y) / UI.view.z;
-  const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
-  if (gx < 0 || gy < 0 || gx >= MAPINFO.GW || gy >= MAPINFO.GH) return;
-  const idx = regionGrid[gy * MAPINFO.GW + gx];
-  if (idx >= 0) clickRegion(ID_BY_IDX[idx]);
-  else { UI.sel = null; UI.selArmy = null; renderAll(); }
+  let idx = -1, prov = null;
+  if (PIX.ids) {
+    const px = Math.floor(mx / PIX.s), py = Math.floor(my / PIX.s);
+    if (px >= 0 && py >= 0 && px < PIX.w && py < PIX.h) { const v = PIX.ids[py * PIX.w + px]; if (v) { prov = v - 1; idx = PIX.provReg[v]; } }
+  } else {
+    const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
+    if (gx >= 0 && gy >= 0 && gx < MAPINFO.GW && gy < MAPINFO.GH) idx = regionGrid[gy * MAPINFO.GW + gx];
+  }
+  if (idx >= 0) { UI.selProv = prov; clickRegion(ID_BY_IDX[idx]); }
+  else { UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
 }
 function clickRegion(id) {
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
@@ -124,34 +158,59 @@ function clickArmy(id) {
 function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; }
 function drawOverlay() {
   const M = MAPINFO, cv = $('ovl'), ctx = cv.getContext('2d');
-  ctx.clearRect(0, 0, M.W, M.H);
-  const off = document.createElement('canvas'); off.width = M.GW; off.height = M.GH;
-  const oc = off.getContext('2d'); const img = oc.createImageData(M.GW, M.GH);
-  const cols = ID_BY_IDX.map(id => { const r = R(id); const n = parseInt(FACTIONS[r.owner].color.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255, id === UI.sel ? 190 : 130]; });
-  for (let i = 0; i < regionGrid.length; i++) { const v = regionGrid[i]; if (v < 0) continue; const c = cols[v]; img.data.set(c, i * 4); }
-  oc.putImageData(img, 0, 0);
-  ctx.imageSmoothingEnabled = true; ctx.drawImage(off, 0, 0, M.W, M.H);
-  // границы
-  ctx.lineCap = 'round';
-  const thin = new Path2D(), thick = new Path2D();
-  for (const [a, b, x1, y1, x2, y2] of borderSegs) {
-    const oa = a >= 0 ? R(ID_BY_IDX[a]).owner : null, ob = b >= 0 ? R(ID_BY_IDX[b]).owner : null;
-    const p = oa !== ob ? thick : thin; p.moveTo(x1, y1); p.lineTo(x2, y2);
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+  const selIdx = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
+  const ownIdx = {}; let on = 0;
+  const regOwn = new Int16Array(ID_BY_IDX.length), regCol = ID_BY_IDX.map(id => { const o = R(id).owner; if (!(o in ownIdx)) ownIdx[o] = on++; const n = parseInt(FACTIONS[o].color.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; });
+  ID_BY_IDX.forEach((id, k) => regOwn[k] = ownIdx[R(id).owner]);
+  if (PIX.ids) {
+    // попиксельно: заливка владельца, толстые границы между державами, выделение региона и провинции
+    const w = PIX.w, h = PIX.h, ids = PIX.ids, pr = PIX.provReg;
+    if (!PIX.buf) PIX.buf = ctx.createImageData(w, h);
+    const d = PIX.buf.data; d.fill(0);
+    const sp = UI.selProv != null ? UI.selProv + 1 : -1;
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = row + x, v = ids[i]; if (!v) continue;
+        const g = pr[v]; if (g < 0) continue;
+        const c = regCol[g], o = i * 4;
+        let al = g === selIdx ? 150 : 112;
+        if (v === sp) al = 190;
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = al;
+        // соседи справа и снизу
+        const vr = x + 1 < w ? ids[i + 1] : 0, vd = y + 1 < h ? ids[i + w] : 0;
+        const gr = vr ? pr[vr] : -1, gd = vd ? pr[vd] : -1;
+        if ((gr >= 0 && regOwn[gr] !== regOwn[g]) || (gd >= 0 && regOwn[gd] !== regOwn[g])) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
+        if (sp > 0 && ((v === sp) !== (vr === sp) || (v === sp) !== (vd === sp))) { d[o] = 255; d[o + 1] = 230; d[o + 2] = 120; d[o + 3] = 255; }
+        else if (selIdx >= 0 && ((g === selIdx) !== (gr === selIdx) || (g === selIdx) !== (gd === selIdx)) && (gr >= 0 || gd >= 0)) { d[o] = 255; d[o + 1] = 216; d[o + 2] = 74; d[o + 3] = 220; }
+      }
+    }
+    ctx.putImageData(PIX.buf, 0, 0);
+  } else {
+    // запасной режим: грубая сетка регионов
+    const off = document.createElement('canvas'); off.width = M.GW; off.height = M.GH;
+    const oc = off.getContext('2d'); const img = oc.createImageData(M.GW, M.GH);
+    for (let i = 0; i < regionGrid.length; i++) { const v = regionGrid[i]; if (v < 0) continue; const c = regCol[v]; img.data.set([c[0], c[1], c[2], v === selIdx ? 160 : 112], i * 4); }
+    oc.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true; ctx.drawImage(off, 0, 0, cv.width, cv.height);
+    ctx.setTransform(cv.width / M.W, 0, 0, cv.height / M.H, 0, 0);
+    const thick = new Path2D();
+    for (const [a, b, x1, y1, x2, y2] of borderSegs) if (regOwn[a] !== regOwn[b]) { thick.moveTo(x1, y1); thick.lineTo(x2, y2); }
+    ctx.strokeStyle = 'rgba(15,5,15,.85)'; ctx.lineWidth = 3; ctx.stroke(thick);
   }
-  ctx.strokeStyle = 'rgba(20,10,20,.35)'; ctx.lineWidth = 1.4; ctx.stroke(thin);
-  ctx.strokeStyle = 'rgba(15,5,15,.85)'; ctx.lineWidth = 3; ctx.stroke(thick);
-  // морские пути
-  ctx.setLineDash([6, 7]); ctx.lineWidth = 2;
-  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : UI.sel;
-  LINKS.forEach(([a, b, t]) => { if (t === 'land') return; if (LINKS.length > 120 && a !== focusR && b !== focusR) return; const pa = M.pos[a], pb = M.pos[b]; ctx.strokeStyle = t === 'sea' ? 'rgba(190,215,255,.5)' : 'rgba(255,210,120,.75)'; ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); });
+  ctx.setTransform(cv.width / M.W, 0, 0, cv.height / M.H, 0, 0);
+  // морские пути (у выбранного региона или войска)
+  ctx.setLineDash([8, 8]); ctx.lineWidth = 3;
+  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : (UI.sel && R(UI.sel) ? R(UI.sel).id : null);
+  LINKS.forEach(([a, b, t]) => { if (t === 'land') return; if (LINKS.length > 120 && a !== focusR && b !== focusR) return; const pa = M.pos[a], pb = M.pos[b]; ctx.strokeStyle = t === 'sea' ? 'rgba(190,215,255,.6)' : 'rgba(255,210,120,.8)'; ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); });
   ctx.setLineDash([]);
-  // выделенная армия: пути
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
   if (a) {
-    if (a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to]; ctx.fillStyle = 'rgba(255,240,180,.55)'; ctx.beginPath(); ctx.arc(p[0], p[1], 20, 0, 7); ctx.fill(); });
-    if (a.path.length) { ctx.strokeStyle = 'rgba(160,20,20,.9)'; ctx.lineWidth = 4; ctx.beginPath(); let p = M.pos[a.region]; ctx.moveTo(p[0], p[1]); a.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.fillStyle = 'rgba(160,20,20,.9)'; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
+    if (a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to]; ctx.fillStyle = 'rgba(255,240,180,.55)'; ctx.beginPath(); ctx.arc(p[0], p[1], 24, 0, 7); ctx.fill(); });
+    if (a.path.length) { ctx.strokeStyle = 'rgba(160,20,20,.9)'; ctx.lineWidth = 5; ctx.beginPath(); let p = M.pos[a.region]; ctx.moveTo(p[0], p[1]); a.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.fillStyle = 'rgba(160,20,20,.9)'; ctx.beginPath(); ctx.arc(p[0], p[1], 9, 0, 7); ctx.fill(); }
   }
-  myArmies().filter(x => x.path.length && x !== a).forEach(x => { ctx.strokeStyle = 'rgba(120,30,140,.7)'; ctx.lineWidth = 3; ctx.setLineDash([8, 5]); ctx.beginPath(); let p = M.pos[x.region]; ctx.moveTo(p[0], p[1]); x.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]); });
+  myArmies().filter(x => x.path.length && x !== a).forEach(x => { ctx.strokeStyle = 'rgba(120,30,140,.7)'; ctx.lineWidth = 4; ctx.setLineDash([10, 6]); ctx.beginPath(); let p = M.pos[x.region]; ctx.moveTo(p[0], p[1]); x.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]); });
 }
 function scouted(f) { return courtHeroes().some(h => h.role === 'spy' && h.mission && h.mission.type === 'scout' && h.mission.target === f); }
 function armyLabel(a) { const n = armyMen(a); if (a.owner === 'byz' || scouted(a.owner)) return fmt(n); return '~' + fmt(Math.round(n / 500) * 500 || 500); }
@@ -163,6 +222,7 @@ function renderMarkers() {
     h += `<div class="rm ${id === 'konst' ? 'cap' : ''} ${UI.sel === id ? 'selr' : ''} ${besieged ? 'siege' : ''}" data-reg="${id}" style="left:${p[0]}px;top:${p[1]}px">
       <span class="dot" style="background:${FACTIONS[r.owner].color}"></span> <span class="nm">${esc(RNAME[id])}</span><br><span class="fx">${'▮'.repeat(Math.min(6, r.fort))}${r.owner === 'byz' ? ' ' + Math.round(r.mood) + '☺' : ''}</span></div>`;
   }
+  if (M.provs) M.provs.forEach((p, k) => { if (p[0] < 0 || (p[4].includes(', земля ') && UI.selProv !== k)) return; h += `<div class="pm ${UI.selProv === k ? 'selp' : ''}" style="left:${p[1]}px;top:${p[2]}px">${esc(p[4])}</div>`; });
   const byReg = {};
   G.armies.forEach(a => (byReg[a.region] = byReg[a.region] || []).push(a));
   for (const rid in byReg) {
@@ -200,10 +260,20 @@ function regionPanel(r) {
   const armies = G.armies.filter(a => a.region === r.id);
   const myHere = armies.filter(a => a.owner === 'byz');
   const besiegers = armies.filter(a => atWar(a.owner, r.owner));
-  let h = `<h3>${esc(RNAME[r.id])}</h3>
+  const M = MAPINFO, ri = ID_BY_IDX.indexOf(r.id);
+  const provs = M.provs ? M.provs.map((p, k) => [k, p]).filter(([k, p]) => p[0] === ri) : [];
+  const area = provs.reduce((s2, [k, p]) => s2 + p[3], 0) || 1;
+  let ph = '';
+  if (UI.selProv != null && M.provs && M.provs[UI.selProv] && M.provs[UI.selProv][0] === ri) {
+    const p = M.provs[UI.selProv], sh = p[3] / area;
+    ph = `<div class="card" style="margin:0 0 8px;padding:8px"><div class="small muted">Провинция</div><b>${esc(p[4])}</b>
+      <div class="small">${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
+  }
+  let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
   <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}</div>
   <table class="small">
   <tr><td>Местность</td><td>${TERRAIN_NAMES[r.ter]}</td></tr>
+  ${provs.length ? `<tr><td>Провинций</td><td>${provs.length}</td></tr>` : ''}
   ${mine ? `<tr><td>Доход за сезон</td><td>${regionIncome(r).toFixed(1)} (база ${r.wealth})</td></tr>` : `<tr><td>Богатство</td><td>${r.wealth}</td></tr>`}
   <tr><td>Население</td><td>${fmt(r.pop)} тыс.</td></tr>
   <tr><td>Гарнизон</td><td>${fmt(r.garrison)} / ${fmt(garCap(r))}</td></tr>
@@ -605,7 +675,7 @@ function boot() {
   document.addEventListener('keydown', e => {
     if (!G || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden') || $('app').classList.contains('hidden')) return;
     if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); doEndTurn(1); }
-    if (e.key === 'Escape') { UI.sel = null; UI.selArmy = null; renderAll(); }
+    if (e.key === 'Escape') { UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
   });
 }
 if (!HEADLESS) boot();
