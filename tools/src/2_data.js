@@ -116,6 +116,8 @@ const ALIAS = GEN ? GEN.alias : {};      // старые ид. областей 
 const GREEK_REGIONS = GEN ? GEN.greek : LEGACY_GREEK;
 const ANATOLIA = GEN ? GEN.anatolia : LEGACY_ANATOLIA;
 const SEA_PORTS = GEN ? GEN.ports : LEGACY_PORTS;
+// цвета держав — с карты автора
+if (GEN && GEN.fcolors) for (const f in GEN.fcolors) if (FACTIONS[f]) FACTIONS[f].color = GEN.fcolors[f];
 const TERRAIN_NAMES = { plain: 'равнина', hills: 'холмы', mountains: 'горы', forest: 'леса', river: 'река', coast: 'побережье', walls: 'стены' };
 
 const UNIT = { // тип: имя, людей в отряде, атака, защита, скорость, дальность, цена найма, содержание за 100 чел./сезон

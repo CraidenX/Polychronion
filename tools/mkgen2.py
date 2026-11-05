@@ -41,6 +41,10 @@ FMAP = {  # точный цвет на карте держав -> держава
  (56,181,110): 'menteshe', (232,48,2): 'ilkhan', (36,132,247): 'georgia', (56,101,153): 'venice', (28,141,255): 'georgia', (127,71,77): 'hungary', (81,45,49): 'hungary',
  (240,167,130): 'bosnia', (168,113,87): 'vlachs', (188,166,93): 'mamluk', (214,140,190): 'armenia', (0,181,135): 'shirvan', (38,127,0): 'byz', (160,82,128): 'venice', (255,248,214): 'sicily',
 }
+MAIN = {'venice': (54, 100, 153)}
+FCOLORS = {}
+for col, f in FMAP.items():
+    if f not in FCOLORS: FCOLORS[f] = '#%02x%02x%02x' % MAIN.get(f, col)
 OVER = {0x808080, 0x001F48, 0x000020, 0x262626, 0x000000, 0xDFDFDF, 0x81817F, 0x5E5E5E, 0x404040}
 unknown = Counter()
 def owner_of(rid, lon, lat):
@@ -50,7 +54,10 @@ def owner_of(rid, lon, lat):
     cnt = Counter(ks.tolist())
     for k, n in cnt.most_common():
         col = ((k >> 16) & 255, (k >> 8) & 255, k & 255)
-        if col in FMAP: return FMAP[col], list(col)
+        if col in FMAP:
+            f = FMAP[col]
+            if col == (54, 167, 156) and lat > 42: f = 'trebizond'   # тот же бирюзовый в Крыму — Трапезунд (Перати́я)
+            return f, list(col)
         unknown[col] += n
     return None, None
 # --- точки подписей: самая «глубокая» клетка региона ---
@@ -114,6 +121,10 @@ for it in info:
 # --- запасные области для исторических мест вне закрашенной зоны (Вороной по незакрашенной суше) ---
 land = ~gsea
 free = land & (glab < 0)
+gpol = kP[np.ix_(YI, XI)]
+def own_mask(f):
+    cols = [((c[0] << 16) | (c[1] << 8) | c[2]) for c, ff in FMAP.items() if ff == f]
+    return np.isin(gpol, cols)
 NREG = len(info)
 gl = -np.ones((GH, GW), int)
 for it_i, it in enumerate(info): gl[glab == it['rid']] = it_i
@@ -121,6 +132,7 @@ fb = []
 for hid in unmatched:
     o = next(e for e in old if e[0] == hid)
     fb.append({'id': hid, 'name': LEG[hid][1], 'lon': o[2], 'lat': o[3], 'w': o[4], 'owner': LEG[hid][2], 'fallback': True})
+ownm = [own_mask(f['owner']) & free for f in fb]
 best = np.full((GH, GW), 1e18); pq = []
 for j, f in enumerate(fb):
     x, y = topx(f['lon'], f['lat']); gx, gy = int(x * SC / C), int(y * SC / C)
@@ -138,7 +150,7 @@ while pq:
         X, Y = x + dx, y + dy
         if 0 <= X < GW and 0 <= Y < GH and not done[Y, X] and free[Y, X]:
             nr = raw + math.hypot(dx, dy) * C; npr = nr / fb[j]['w']
-            if npr > 200: continue
+            if npr > 700 or not ownm[j][Y, X]: continue
             if npr < best[Y, X]: best[Y, X] = npr; heapq.heappush(pq, (npr, j, X, Y, nr))
 allr = info + fb
 # --- позиции подписей (в px показа) ---
@@ -234,7 +246,7 @@ greekOwners = {'byz', 'epirus', 'trebizond', 'achaea', 'athens', 'venice', 'cypr
 greek = [d[0] for d in out if d[2] in greekOwners and not (d[9] < 16)]
 anat = [d[0] for d in out if (d[9] > 29.1 and d[10] < 42.2) or (d[10] < 40.3 and d[9] > 26.4)]
 ports = sorted(set(x for a, b, t in L if t != 'land' for x in (a, b)))
-gen = {'rids': [it.get('rid', -1) for it in allr], 'colors': [it.get('color') for it in allr], 'regions': out, 'links': L, 'alias': alias, 'greek': greek, 'anatolia': anat, 'ports': ports}
+gen = {'fcolors': FCOLORS, 'rids': [it.get('rid', -1) for it in allr], 'colors': [it.get('color') for it in allr], 'regions': out, 'links': L, 'alias': alias, 'greek': greek, 'anatolia': anat, 'ports': ports}
 json.dump(gen, open(SP + 'gen.json', 'w'), ensure_ascii=False)
 np.save(SP + 'umap/gl.npy', gl.astype(np.int16)); json.dump({'C': C, 'GW': GW, 'GH': GH}, open(SP + 'umap/grid.json', 'w'))
 # RLE сетки
