@@ -33,14 +33,7 @@ src2 = open(SP + 'src/2_data.js').read()
 for m in re.finditer(r"\['(\w+)', '([^']+)', '(\w+)', (\d+), (\d+), (\d+), (\d+), (\d+), '(\w+)'\]", src2):
     LEG[m.group(1)] = [m.group(1), m.group(2), m.group(3)] + [int(m.group(i)) for i in range(4, 9)] + [m.group(9)]
 # --- палитра держав по карте 1261 года ---
-FMAP = {  # точный цвет на карте держав -> держава игры
- (114,6,80): 'byz', (144,182,161): 'seljuk', (86,76,163): 'sicily', (103,97,122): 'bulgaria', (165,39,62): 'serbia',
- (40,164,157): 'trebizond', (157,111,186): 'epirus', (128,153,104): 'thessaly', (255,213,51): 'achaea', (255,215,124): 'candar',
- (58,150,178): 'karaman', (56,101,153): 'venice', (54,100,153): 'venice', (24,50,123): 'venice', (114,140,213): 'venice', (248,195,36): 'venice', (54,167,156): 'venice',
- (247,123,0): 'cyprus', (113,112,96): 'athens', (76,255,0): 'athens', (252,112,214): 'athens', (211,172,185): 'achaea',
- (56,181,110): 'menteshe', (232,48,2): 'ilkhan', (36,132,247): 'georgia', (56,101,153): 'venice', (28,141,255): 'georgia', (127,71,77): 'hungary', (81,45,49): 'hungary',
- (240,167,130): 'bosnia', (168,113,87): 'vlachs', (188,166,93): 'mamluk', (214,140,190): 'armenia', (0,181,135): 'shirvan', (38,127,0): 'byz', (160,82,128): 'venice', (255,248,214): 'sicily',
-}
+exec(open(SP + 'fmap.py').read())
 MAIN = {'venice': (54, 100, 153)}
 FCOLORS = {}
 for col, f in FMAP.items():
@@ -54,10 +47,8 @@ def owner_of(rid, lon, lat):
     cnt = Counter(ks.tolist())
     for k, n in cnt.most_common():
         col = ((k >> 16) & 255, (k >> 8) & 255, k & 255)
-        if col in FMAP:
-            f = FMAP[col]
-            if col == (54, 167, 156) and lat > 42: f = 'trebizond'   # тот же бирюзовый в Крыму — Трапезунд (Перати́я)
-            return f, list(col)
+        f = faction_of(col, lon, lat)
+        if f: return f, list(col)
         unknown[col] += n
     return None, None
 # --- точки подписей: самая «глубокая» клетка региона ---

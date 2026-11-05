@@ -8,7 +8,7 @@ function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${cla
 function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
 function moodCol(m) { return m > 60 ? 'var(--good)' : m > 35 ? 'var(--warn)' : 'var(--bad)'; }
 
-function renderAll() { if (!G) return; renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); drawSelection(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
+function renderAll() { if (!G) return; syncProv(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); drawSelection(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
 
 function renderTop() {
   const I = computeIncome();
@@ -224,9 +224,12 @@ function drawOverlay() {
   const M = MAPINFO, cv = $('ovl'), ctx = cv.getContext('2d');
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
   const selIdx = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
-  const ownIdx = {}; let on = 0;
-  const regOwn = new Int16Array(ID_BY_IDX.length), regCol = ID_BY_IDX.map(id => { const o = R(id).owner; if (!(o in ownIdx)) ownIdx[o] = on++; const n = parseInt(FACTIONS[o].color.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; });
-  ID_BY_IDX.forEach((id, k) => regOwn[k] = ownIdx[R(id).owner]);
+  const ownIdx = {}; let on = 0; const oi = o => (o in ownIdx) ? ownIdx[o] : (ownIdx[o] = on++);
+  const hex = f => { const n = parseInt(((FACTIONS[f] || {}).color || '#808080').slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+  const regOwn = new Int16Array(ID_BY_IDX.length), regCol = ID_BY_IDX.map((id, k) => { const o = R(id).owner; regOwn[k] = oi(o); return hex(o); });
+  const NP = (MAPINFO.provs || []).length;
+  const pOwn = new Int16Array(NP + 1).fill(-1), pCol = new Array(NP + 1);
+  for (let k = 0; k < NP; k++) { const o = (G.prov && G.prov[k]) || (MAPINFO.provs[k][0] >= 0 ? R(ID_BY_IDX[MAPINFO.provs[k][0]]).owner : null); if (!o) continue; pOwn[k + 1] = oi(o); pCol[k + 1] = hex(o); }
   if (PIX.ids) {
     // попиксельно: заливка владельца, толстые границы между державами, выделение региона и провинции
     const w = PIX.w, h = PIX.h, ids = PIX.ids, pr = PIX.provReg;
@@ -237,14 +240,14 @@ function drawOverlay() {
       const row = y * w;
       for (let x = 0; x < w; x++) {
         const i = row + x, v = ids[i]; if (!v) continue;
-        const g = pr[v]; if (g < 0) continue;
-        const c = regCol[g], o = i * 4;
+        const g = pr[v]; if (g < 0 || pOwn[v] < 0) continue;
+        const c = pCol[v], o = i * 4;
         const al = PIX.mtn && PIX.mtn[i] ? 45 : 112;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = al;
         // соседи справа и снизу
         const vr = x + 1 < w ? ids[i + 1] : 0, vd = y + 1 < h ? ids[i + w] : 0;
-        const gr = vr ? pr[vr] : -1, gd = vd ? pr[vd] : -1;
-        if ((gr >= 0 && regOwn[gr] !== regOwn[g]) || (gd >= 0 && regOwn[gd] !== regOwn[g])) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
+        const orr = vr ? pOwn[vr] : -1, od = vd ? pOwn[vd] : -1;
+        if ((orr >= 0 && orr !== pOwn[v]) || (od >= 0 && od !== pOwn[v])) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -383,7 +386,9 @@ function regionPanel(r) {
   let ph = '';
   if (UI.selProv != null && M.provs && M.provs[UI.selProv] && M.provs[UI.selProv][0] === ri) {
     const p = M.provs[UI.selProv], sh = p[3] / area;
+    const po = G.prov && G.prov[UI.selProv];
     ph = `<div class="card" style="margin:0 0 8px;padding:8px"><div class="small muted">Провинция</div><b>${esc(p[4])}</b>
+      ${po && po !== r.owner ? `<div class="small"><span style="color:${FACTIONS[po].color}">■</span> ${esc(fname(po))}</div>` : ''}
       <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}% — непроходимы для войск<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
   }
   let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
@@ -391,6 +396,7 @@ function regionPanel(r) {
   <table class="small">
   <tr><td>Местность</td><td>${TERRAIN_NAMES[r.ter]}</td></tr>
   ${provs.length ? `<tr><td>Провинций</td><td>${provs.length}</td></tr>` : ''}
+  ${(() => { const c = {}; provs.forEach(([k]) => { const o = G.prov && G.prov[k]; if (o && o !== r.owner) c[o] = (c[o] || 0) + 1; }); const l = Object.entries(c); return l.length ? `<tr><td>Другие владельцы</td><td>${l.map(([o, n]) => `<span style="color:${FACTIONS[o].color}">■</span> ${esc(fshort(o))} (${n})`).join(', ')}</td></tr>` : ''; })()}
   ${mine ? `<tr><td>Доход за сезон</td><td>${regionIncome(r).toFixed(1)} (база ${r.wealth})</td></tr>` : `<tr><td>Богатство</td><td>${r.wealth}</td></tr>`}
   <tr><td>Население</td><td>${fmt(r.pop)} тыс.</td></tr>
   <tr><td>Гарнизон</td><td>${fmt(r.garrison)} / ${fmt(garCap(r))}</td></tr>
@@ -790,7 +796,7 @@ function bvAiTurn() {
 /* ---------- 6. СОХРАНЕНИЕ И ЗАПУСК ---------- */
 const SAVE_KEY = 'polychronion_save_v2';
 function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) { } }
-function load() { try { const s = localStorage.getItem(SAVE_KEY); if (!s) return false; G = JSON.parse(s); return true; } catch (e) { return false; } }
+function load() { try { const s = localStorage.getItem(SAVE_KEY); if (!s) return false; G = JSON.parse(s); if (!G.prov) initProv(); return true; } catch (e) { return false; } }
 function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
 function enterGame() { $('title').classList.add('hidden'); $('app').classList.remove('hidden'); if (!regionGrid) initMap(); else fitMap(); UI.sel = null; UI.selArmy = null; UI.tab = 'map'; ['map', 'court', 'state', 'log'].forEach(k => $('view-' + k).classList.toggle('hidden', k !== 'map')); renderAll(); if (G.over) showFinale(); }
 function showIntro() {

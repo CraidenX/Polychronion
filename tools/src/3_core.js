@@ -12,6 +12,22 @@ const NEIGH = {};
 REGION_DEFS.forEach(d => NEIGH[d[0]] = []);
 LINKS.forEach(([a, b, t]) => { NEIGH[a].push({ to: b, t }); NEIGH[b].push({ to: a, t }); });
 for (const k in ALIAS) { NEIGH[k] = NEIGH[ALIAS[k]]; RNAME[k] = RNAME[ALIAS[k]]; }
+// владение по провинциям: держава у каждой провинции; при смене хозяина региона все его провинции переходят к новому
+const REGION_IDX = {}; REGION_DEFS.forEach((d, i) => REGION_IDX[d[0]] = i);
+function initProv() {
+  const P = MAPINFO && MAPINFO.provs; if (!P) { G.prov = []; return; }
+  G.prov = P.map(p => p[6] || (p[0] >= 0 ? REGION_DEFS[p[0]][2] : null));
+  for (const id in G.regions) G.regions[id]._po = G.regions[id].owner;
+}
+function syncProv() {
+  const P = MAPINFO && MAPINFO.provs; if (!P || !G) return;
+  if (!G.prov || G.prov.length !== P.length) initProv();
+  for (const id in G.regions) {
+    const r = G.regions[id]; if (r._po === r.owner) continue;
+    const gi = REGION_IDX[id]; for (let k = 0; k < P.length; k++) if (P[k][0] === gi) G.prov[k] = r.owner;
+    r._po = r.owner;
+  }
+}
 const fname = f => (G && G.fnames && G.fnames[f]) || FACTIONS[f].name;
 const fshort = f => (G && G.fshort && G.fshort[f]) || FACTIONS[f].short;
 const dateStr = (y = G.year, s = G.season) => SEASONS[s] + ' ' + y;
@@ -83,6 +99,7 @@ function newGame() {
   });
   refreshCandidates();
   G.stats.peakRegions = myRegions().length; G.stats.startR = myRegions().length;
+  initProv();
   log('25 июля 1261 года кесарь Алексей Стратигопул вошёл в Константинополь. Латинская империя пала.');
   return G;
 }

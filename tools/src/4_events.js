@@ -437,6 +437,7 @@ async function endTurn() {
       if (G.turn % 4 === 0) refreshCandidates();
       if (nowNum() > dateNum(END.year, END.season)) G.over = 'plague';
     }
+    syncProv();
     if (G.over && !G.final) G.final = finale();
   } finally { busy = false; }
 }
