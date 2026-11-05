@@ -3,9 +3,10 @@ globalThis.__HEADLESS__ = true;
 const fs = require('fs'), vm = require('vm');
 const src = fs.readFileSync(__dirname + '/game.js', 'utf8');
 vm.runInThisContext(src + `
-globalThis.API = { get G(){return G}, newGame, endTurn, myArmies, myRegions, R, NEIGH, atWar, armyPower, garPower, setArmyPath, recruit, courtHeroes, hire, setMission, assignGeneral, genOf, computeIncome, playerStorm, factionAlive, FACTIONS, UNIT, linkOk, canEnter, defPower, newArmyAt, RNAME, setEvChooser: f => { eventChooser = f; }, BAL, siegeTurns, heroArmy, ANATOLIA, manualBuild };`);
+globalThis.API = { get G(){return G}, newGame, runPrologue, endTurn, myArmies, myRegions, R, NEIGH, atWar, armyPower, garPower, setArmyPath, recruit, courtHeroes, hire, setMission, assignGeneral, genOf, computeIncome, playerStorm, factionAlive, FACTIONS, UNIT, linkOk, canEnter, defPower, newArmyAt, RNAME, setEvChooser: f => { eventChooser = f; }, BAL, siegeTurns, heroArmy, ANATOLIA, manualBuild };`);
 const A = globalThis.API;
 const N = +process.argv[2] || 10, POL = process.argv[3] || 'smart';
+const LOGF = process.argv[4];
 
 function smartTurn() {
   const G = A.G;
@@ -64,12 +65,15 @@ async function smartArmies() {
 (async () => {
   const results = [];
   for (let g = 0; g < N; g++) {
-    A.newGame();
+    if (POL === 'strat') A.setEvChooser((ev, opts) => ev.id === 'prologue' ? opts[1] : opts[Math.floor(Math.random() * opts.length)]);
+    A.newGame(); await A.runPrologue();
     if (POL === 'first') A.setEvChooser((ev, opts) => opts[0]);
+    if (POL === 'strat') A.setEvChooser((ev, opts) => ev.id === 'prologue' ? opts[1] : opts[Math.floor(Math.random() * opts.length)]);
     let errs = 0;
     while (!A.G.over) {
       try {
         if (POL !== 'passive') { smartTurn(); await smartArmies(); }
+        if (POL === 'strat' && A.G.turn === 0) console.log('path', A.G.path);
         await A.endTurn();
       } catch (e) { errs++; console.error('ERR', A.G.year, e.stack.split('\n').slice(0, 3).join(' | ')); if (errs > 3) break; }
       const G = A.G;

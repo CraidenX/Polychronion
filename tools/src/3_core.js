@@ -17,7 +17,15 @@ const fshort = f => (G && G.fshort && G.fshort[f]) || FACTIONS[f].short;
 const dateStr = (y = G.year, s = G.season) => SEASONS[s] + ' ' + y;
 const dateNum = (y, s) => y * 4 + s;
 const nowNum = () => dateNum(G.year, G.season);
-const ruler = () => { const r = RULERS[G.rulerIdx], m = G.rulerMod || {}; return { ...r, mar: r.mar + (m.mar || 0), stw: r.stw + (m.stw || 0), pie: r.pie + (m.pie || 0), dip: r.dip }; };
+const STRAT_RULERS = [
+  { name: 'Алексей Стратигопул, регент', mar: 4, stw: 2, dip: 2, pie: 3, desc: 'Кесарь, взявший Город, правит от имени юного Иоанна IV Ласкариса.', minor: true },
+  { name: 'Иоанн IV Ласкарис', mar: 2, stw: 3, dip: 3, pie: 4, desc: 'Последний Ласкарис, вступивший в права после регентства.' },
+];
+const ruler = () => {
+  let r = RULERS[G.rulerIdx];
+  if (G.path === 'strat' && G.rulerIdx === 0) r = G.flags.john4 ? STRAT_RULERS[1] : STRAT_RULERS[0];
+  const m = G.rulerMod || {}; return { ...r, mar: r.mar + (m.mar || 0), stw: r.stw + (m.stw || 0), pie: r.pie + (m.pie || 0), dip: r.dip };
+};
 function succession(idx) {
   G.rulerIdx = idx;
   const e = G.heir.educ; G.rulerMod = e === 'war' ? { mar: 1 } : e === 'books' ? { stw: 1 } : e === 'church' ? { pie: 1 } : {};
@@ -29,7 +37,7 @@ const fmt = n => Math.round(n).toLocaleString('ru-RU');
 function log(text, kind = '') {
   G.log.unshift({ d: dateStr(), t: text, k: kind });
   if (G.log.length > 400) G.log.length = 400;
-  if (!HEADLESS && typeof toast === 'function' && kind === 'imp') toast(text);
+  if (!HEADLESS && typeof toast === 'function' && kind === 'imp') { toast(text); if (typeof SFX !== 'undefined' && !(typeof BV !== 'undefined' && BV.b)) SFX.play('alert'); }
 }
 
 function newGame() {
@@ -75,7 +83,7 @@ function newGame() {
   });
   refreshCandidates();
   G.stats.peakRegions = myRegions().length; G.stats.startR = myRegions().length;
-  log('25 июля 1261 года кесарь Алексей Стратигопул вошёл в Константинополь. Латинская империя пала. 15 августа Михаил VIII коронуется в Святой Софии.', 'imp');
+  log('25 июля 1261 года кесарь Алексей Стратигопул вошёл в Константинополь. Латинская империя пала.');
   return G;
 }
 

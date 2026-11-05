@@ -37,6 +37,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #mapinner{position:absolute;left:0;top:0;transform-origin:0 0}
 #mapinner img,#mapinner canvas{position:absolute;left:0;top:0;user-select:none;-webkit-user-drag:none}
 #ovl{image-rendering:auto}
+#selsvg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
 #markers{position:absolute;left:0;top:0}
 .rm{position:absolute;transform:translate(-50%,-50%) scale(var(--s,1));pointer-events:auto;cursor:pointer;text-align:center;white-space:nowrap}
 .rm .dot{display:inline-block;width:14px;height:14px;border-radius:3px;border:2px solid #2a1a10;vertical-align:middle}
@@ -116,7 +117,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
   <div id="main">
     <div id="view-map" class="view">
       <div id="mapwrap">
-        <div id="mapinner"><img id="mapimg" src="map.png" alt="Карта"><canvas id="ovl"></canvas><div id="markers"></div></div>
+        <div id="mapinner"><img id="mapimg" src="map.png" alt="Карта"><canvas id="ovl"></canvas><svg id="selsvg" xmlns="http://www.w3.org/2000/svg"></svg><div id="markers"></div></div>
         <div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
       </div>
       <div id="side"></div>

@@ -8,7 +8,7 @@ function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${cla
 function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
 function moodCol(m) { return m > 60 ? 'var(--good)' : m > 35 ? 'var(--warn)' : 'var(--bad)'; }
 
-function renderAll() { if (!G) return; renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
+function renderAll() { if (!G) return; renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); drawSelection(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
 
 function renderTop() {
   const I = computeIncome();
@@ -34,6 +34,7 @@ function renderTabs() {
 }
 async function doEndTurn(n) {
   if (busy || G.over) return;
+  SFX.play('turn');
   for (let i = 0; i < n; i++) {
     const before = G.log.length ? G.log[0] : null;
     await endTurn();
@@ -45,6 +46,61 @@ async function doEndTurn(n) {
     if (n > 1 && (imp || threat)) break;
   }
 }
+
+
+/* --- звуки (синтез Web Audio, без файлов и без музыки) --- */
+const SFX = (() => {
+  let ctx = null, master = null;
+  let on = true; try { on = localStorage.getItem('poly_sound') !== 'off'; } catch (e) { }
+  function ac() {
+    if (!on) return null;
+    try {
+      if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination); }
+      if (ctx.state === 'suspended') ctx.resume();
+    } catch (e) { return null; }
+    return ctx;
+  }
+  function tone(f, dur, type = 'sine', vol = 0.08, delay = 0, f2 = null, lp = null) {
+    const c = ac(); if (!c) return; const t = c.currentTime + delay;
+    const o = c.createOscillator(), g = c.createGain(); o.type = type; o.frequency.setValueAtTime(f, t);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let node = o; if (lp) { const fl = c.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = lp; o.connect(fl); node = fl; }
+    node.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function noise(dur, freq, vol = 0.1, delay = 0, type = 'bandpass', f2 = null) {
+    const c = ac(); if (!c) return; const t = c.currentTime + delay;
+    const n = Math.floor(c.sampleRate * dur), buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = c.createBufferSource(); src.buffer = buf;
+    const fl = c.createBiquadFilter(); fl.type = type; fl.frequency.setValueAtTime(freq, t); if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t + dur); fl.Q.value = 1.2;
+    const g = c.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(fl); fl.connect(g); g.connect(master); src.start(t);
+  }
+  const last = {};
+  const S = {
+    click: () => tone(1300, 0.035, 'square', 0.025, 0, 900, 3000),
+    select: () => { tone(660, 0.09, 'sine', 0.07); tone(990, 0.12, 'sine', 0.045, 0.05); },
+    army: () => { tone(196, 0.22, 'sawtooth', 0.05, 0, null, 900); tone(294, 0.3, 'sawtooth', 0.045, 0.1, null, 900); },
+    turn: () => { tone(392, 1.1, 'sine', 0.11); tone(784, 0.7, 'sine', 0.035); tone(1176, 0.4, 'sine', 0.015); },
+    event: () => { tone(523, 0.35, 'triangle', 0.06); tone(659, 0.4, 'triangle', 0.05, 0.09); tone(784, 0.55, 'triangle', 0.045, 0.18); },
+    coin: () => { tone(1760, 0.07, 'square', 0.03, 0, null, 5000); tone(2350, 0.12, 'square', 0.025, 0.06, null, 5000); },
+    hit: () => { noise(0.14, 900, 0.22); tone(150, 0.12, 'square', 0.05, 0, 70, 600); },
+    arrow: () => { noise(0.22, 2500, 0.07, 0, 'bandpass', 6000); },
+    rout: () => tone(330, 0.5, 'sawtooth', 0.045, 0, 140, 1200),
+    win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.45, 'triangle', 0.07, i * 0.11)),
+    lose: () => [440, 349, 294, 220].forEach((f, i) => tone(f, 0.5, 'sine', 0.07, i * 0.15)),
+    alert: () => { tone(880, 0.12, 'sine', 0.06); tone(660, 0.16, 'sine', 0.05, 0.11); },
+    error: () => tone(170, 0.16, 'square', 0.04, 0, null, 900),
+    bell: () => { tone(262, 2.2, 'sine', 0.12); tone(523, 1.6, 'sine', 0.05); tone(659, 1.2, 'sine', 0.025); },
+  };
+  return {
+    play(k) { try { const now = Date.now(); if (!on || !S[k] || (last[k] && now - last[k] < 350)) return; last[k] = now; S[k](); } catch (e) { } },
+    get on() { return on; },
+    toggle() { on = !on; try { localStorage.setItem('poly_sound', on ? 'on' : 'off'); } catch (e) { } if (on) S.select(); return on; },
+  };
+})();
+if (!HEADLESS) document.addEventListener('click', e => { if (e.target.closest && e.target.closest('button') && !e.target.closest('.nosfx')) SFX.play('click'); }, true);
 
 /* --- карта --- */
 let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
@@ -67,6 +123,7 @@ function initMap() {
   }
   const cv = $('ovl'); cv.width = Math.ceil(M.W / 2); cv.height = Math.ceil(M.H / 2);
   cv.style.width = M.W + 'px'; cv.style.height = M.H + 'px';
+  const sv = $('selsvg'); sv.setAttribute('viewBox', `0 0 ${M.W} ${M.H}`); sv.setAttribute('width', M.W); sv.setAttribute('height', M.H);
   $('mapinner').style.width = M.W + 'px'; $('mapinner').style.height = M.H + 'px';
   $('mapimg').width = M.W; $('mapimg').height = M.H;
   $('mapimg').onerror = () => { $('mapimg').style.display = 'none'; $('mapinner').style.background = '#808080'; };
@@ -82,6 +139,10 @@ function initMap() {
         const ids = new Uint16Array(im.width * im.height);
         for (let k = 0; k < ids.length; k++) ids[k] = (d[k * 4] << 8) | d[k * 4 + 1];
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
+        const np = M.provs.length + 1, bb = new Int32Array(np * 4);
+        for (let k = 0; k < np; k++) { bb[k * 4] = 1e9; bb[k * 4 + 1] = 1e9; bb[k * 4 + 2] = -1; bb[k * 4 + 3] = -1; }
+        for (let y = 0; y < im.height; y++) for (let x = 0; x < im.width; x++) { const v = ids[y * im.width + x]; if (!v) continue; const o = v * 4; if (x < bb[o]) bb[o] = x; if (y < bb[o + 1]) bb[o + 1] = y; if (x > bb[o + 2]) bb[o + 2] = x; if (y > bb[o + 3]) bb[o + 3] = y; }
+        PIX.bb = bb;
         cv.width = PIX.w; cv.height = PIX.h;
         if (G) renderAll();
       } catch (e) { /* файл открыт с диска: браузер запрещает читать пиксели — работает запасная сетка */ }
@@ -139,7 +200,7 @@ function mapClick(e) {
     const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
     if (gx >= 0 && gy >= 0 && gx < MAPINFO.GW && gy < MAPINFO.GH) idx = regionGrid[gy * MAPINFO.GW + gx];
   }
-  if (idx >= 0) { UI.selProv = prov; clickRegion(ID_BY_IDX[idx]); }
+  if (idx >= 0) { UI.selProv = prov; SFX.play('select'); clickRegion(ID_BY_IDX[idx]); }
   else { UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
 }
 function clickRegion(id) {
@@ -152,6 +213,7 @@ function clickRegion(id) {
 }
 function clickArmy(id) {
   const a = G.armies.find(x => x.id === id); if (!a) return;
+  if (UI.selArmy !== id) SFX.play('army');
   if (UI.selArmy === id) { UI.selArmy = null; UI.sel = a.region; } else { UI.selArmy = id; UI.sel = a.region; }
   renderAll();
 }
@@ -175,15 +237,12 @@ function drawOverlay() {
         const i = row + x, v = ids[i]; if (!v) continue;
         const g = pr[v]; if (g < 0) continue;
         const c = regCol[g], o = i * 4;
-        let al = g === selIdx ? 150 : 112;
-        if (v === sp) al = 190;
+        const al = 112;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = al;
         // соседи справа и снизу
         const vr = x + 1 < w ? ids[i + 1] : 0, vd = y + 1 < h ? ids[i + w] : 0;
         const gr = vr ? pr[vr] : -1, gd = vd ? pr[vd] : -1;
         if ((gr >= 0 && regOwn[gr] !== regOwn[g]) || (gd >= 0 && regOwn[gd] !== regOwn[g])) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
-        if (sp > 0 && ((v === sp) !== (vr === sp) || (v === sp) !== (vd === sp))) { d[o] = 255; d[o + 1] = 230; d[o + 2] = 120; d[o + 3] = 255; }
-        else if (selIdx >= 0 && ((g === selIdx) !== (gr === selIdx) || (g === selIdx) !== (gd === selIdx)) && (gr >= 0 || gd >= 0)) { d[o] = 255; d[o + 1] = 216; d[o + 2] = 74; d[o + 3] = 220; }
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -199,18 +258,74 @@ function drawOverlay() {
     for (const [a, b, x1, y1, x2, y2] of borderSegs) if (regOwn[a] !== regOwn[b]) { thick.moveTo(x1, y1); thick.lineTo(x2, y2); }
     ctx.strokeStyle = 'rgba(15,5,15,.85)'; ctx.lineWidth = 3; ctx.stroke(thick);
   }
-  ctx.setTransform(cv.width / M.W, 0, 0, cv.height / M.H, 0, 0);
-  // морские пути (у выбранного региона или войска)
-  ctx.setLineDash([8, 8]); ctx.lineWidth = 3;
-  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : (UI.sel && R(UI.sel) ? R(UI.sel).id : null);
-  LINKS.forEach(([a, b, t]) => { if (t === 'land') return; if (LINKS.length > 120 && a !== focusR && b !== focusR) return; const pa = M.pos[a], pb = M.pos[b]; ctx.strokeStyle = t === 'sea' ? 'rgba(190,215,255,.6)' : 'rgba(255,210,120,.8)'; ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); });
-  ctx.setLineDash([]);
-  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
-  if (a) {
-    if (a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to]; ctx.fillStyle = 'rgba(255,240,180,.55)'; ctx.beginPath(); ctx.arc(p[0], p[1], 24, 0, 7); ctx.fill(); });
-    if (a.path.length) { ctx.strokeStyle = 'rgba(160,20,20,.9)'; ctx.lineWidth = 5; ctx.beginPath(); let p = M.pos[a.region]; ctx.moveTo(p[0], p[1]); a.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.fillStyle = 'rgba(160,20,20,.9)'; ctx.beginPath(); ctx.arc(p[0], p[1], 9, 0, 7); ctx.fill(); }
+}
+/* --- чёткий векторный контур выделения (SVG поверх карты) ---
+   Берём пиксели провинции (или региона) из ids.png, обходим их границу,
+   сглаживаем углы (алгоритм Чайкина) и рисуем линией постоянной толщины на экране. */
+const SEL_CACHE = {};
+function traceOutline(test, x0, y0, x1, y1) {
+  const W = PIX.w, ids = PIX.ids, next = new Map();
+  const add = (ax, ay, bx, by) => { const k = ax * 65536 + ay; (next.get(k) || next.set(k, []).get(k)).push(bx * 65536 + by); };
+  const inS = (x, y) => x >= 0 && y >= 0 && x < W && y < PIX.h && test(ids[y * W + x]);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    if (!test(ids[y * W + x])) continue;
+    if (!inS(x, y - 1)) add(x, y, x + 1, y);
+    if (!inS(x + 1, y)) add(x + 1, y, x + 1, y + 1);
+    if (!inS(x, y + 1)) add(x + 1, y + 1, x, y + 1);
+    if (!inS(x - 1, y)) add(x, y + 1, x, y);
   }
-  myArmies().filter(x => x.path.length && x !== a).forEach(x => { ctx.strokeStyle = 'rgba(120,30,140,.7)'; ctx.lineWidth = 4; ctx.setLineDash([10, 6]); ctx.beginPath(); let p = M.pos[x.region]; ctx.moveTo(p[0], p[1]); x.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]); });
+  const loops = [];
+  for (const [start] of next) {
+    if (!next.get(start) || !next.get(start).length) continue;
+    const pts = []; let k = start, guard = 0;
+    while (guard++ < 200000) {
+      const lst = next.get(k); if (!lst || !lst.length) break;
+      const n = lst.pop(); pts.push([k >> 16 & 0xffff, k & 0xffff]); k = n;
+      if (k === start) break;
+    }
+    if (pts.length >= 4) loops.push(pts);
+  }
+  const S = PIX.s;
+  return loops.map(pts => {
+    // убрать промежуточные точки на прямых, затем два прохода сглаживания
+    let p = pts.filter((q, i) => { const a = pts[(i - 1 + pts.length) % pts.length], b = pts[(i + 1) % pts.length]; return !((a[0] === q[0] && q[0] === b[0]) || (a[1] === q[1] && q[1] === b[1])); });
+    if (p.length < 3) p = pts;
+    for (let it = 0; it < 2; it++) { const r = []; for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; r.push([a[0] * .75 + b[0] * .25, a[1] * .75 + b[1] * .25], [a[0] * .25 + b[0] * .75, a[1] * .25 + b[1] * .75]); } p = r; }
+    return 'M' + p.map(q => (q[0] * S).toFixed(1) + ' ' + (q[1] * S).toFixed(1)).join('L') + 'Z';
+  }).join('');
+}
+function provOutline(k) {
+  const key = 'p' + k; if (SEL_CACHE[key]) return SEL_CACHE[key];
+  const v = k + 1, o = v * 4, bb = PIX.bb; if (bb[o + 2] < 0) return '';
+  return SEL_CACHE[key] = traceOutline(x => x === v, bb[o], bb[o + 1], bb[o + 2], bb[o + 3]);
+}
+function regionOutline(ri) {
+  const key = 'r' + ri; if (SEL_CACHE[key]) return SEL_CACHE[key];
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1; const bb = PIX.bb, pr = PIX.provReg;
+  for (let v = 1; v < pr.length; v++) if (pr[v] === ri && bb[v * 4 + 2] >= 0) { x0 = Math.min(x0, bb[v * 4]); y0 = Math.min(y0, bb[v * 4 + 1]); x1 = Math.max(x1, bb[v * 4 + 2]); y1 = Math.max(y1, bb[v * 4 + 3]); }
+  if (x1 < 0) return '';
+  return SEL_CACHE[key] = traceOutline(x => x > 0 && pr[x] === ri, x0, y0, x1, y1);
+}
+function drawSelection() {
+  const svg = $('selsvg'); if (!svg) return;
+  const ri = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
+  let h = '';
+  if (ri >= 0 && PIX.bb) { const d = regionOutline(ri); h += `<path d="${d}" fill="rgba(255,225,140,.10)" stroke="rgba(255,216,74,.9)" stroke-width="1.6" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`; }
+  if (PIX.bb && UI.selProv != null && MAPINFO.provs[UI.selProv]) {
+    const d = provOutline(UI.selProv);
+    h += `<path d="${d}" fill="rgba(255,235,160,.16)" stroke="rgba(255,215,90,.35)" stroke-width="9" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+    h += `<path d="${d}" fill="none" stroke="#ffe37a" stroke-width="2.2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+  }
+  // морские пути и проливы у выбранного региона/войска, маршруты наших войск
+  const M = MAPINFO;
+  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : (UI.sel && R(UI.sel) ? R(UI.sel).id : null);
+  LINKS.forEach(([a, b, t]) => { if (t === 'land' || (a !== focusR && b !== focusR)) return; const pa = M.pos[a], pb = M.pos[b];
+    h += `<line x1="${pa[0]}" y1="${pa[1]}" x2="${pb[0]}" y2="${pb[1]}" stroke="${t === 'sea' ? 'rgba(200,225,255,.75)' : 'rgba(255,214,130,.9)'}" stroke-width="1.6" stroke-dasharray="7 6" vector-effect="non-scaling-stroke"/>`; });
+  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
+  if (a && a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to]; h += `<circle cx="${p[0]}" cy="${p[1]}" r="26" fill="rgba(255,240,180,.35)" stroke="rgba(255,240,180,.9)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`; });
+  const route = (x, col, w, dash) => { if (!x.path.length) return; const pts = [x.region, ...x.path].map(id => M.pos[id].join(',')).join(' '); h += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="${w}" ${dash ? 'stroke-dasharray="10 6"' : ''} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`; const e = M.pos[x.path[x.path.length - 1]]; h += `<circle cx="${e[0]}" cy="${e[1]}" r="7" fill="${col}"/>`; };
+  myArmies().forEach(x => route(x, x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)', x === a ? 3.5 : 2.5, x !== a));
+  svg.innerHTML = h;
 }
 function scouted(f) { return courtHeroes().some(h => h.role === 'spy' && h.mission && h.mission.type === 'scout' && h.mission.target === f); }
 function armyLabel(a) { const n = armyMen(a); if (a.owner === 'byz' || scouted(a.owner)) return fmt(n); return '~' + fmt(Math.round(n / 500) * 500 || 500); }
@@ -300,7 +415,7 @@ function bindRegionPanel(r) {
   const S = $('side');
   S.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
     if (b.dataset.b === 'army') { const a = newArmyAt(r.id); if (!a) toast('Нельзя: не хватает денег или полководцев (войск не больше, чем полководцев + 2).'); else { UI.selArmy = a.id; toast('Войско создано. Наймите в него отряды.'); } }
-    else if (!manualBuild(r, b.dataset.b)) toast('Не хватает денег.');
+    else if (!manualBuild(r, b.dataset.b)) { toast('Не хватает денег.'); SFX.play('error'); } else SFX.play('coin');
     renderAll();
   });
   S.querySelectorAll('[data-a]').forEach(b => b.onclick = () => clickArmy(+b.dataset.a));
@@ -336,7 +451,7 @@ function bindArmyPanel(a) {
   const S = $('side');
   if ($('bBack')) $('bBack').onclick = () => { UI.selArmy = null; renderAll(); };
   if ($('selGen')) $('selGen').onchange = e => { const v = +e.target.value; if (!v) { const g = genOf(a); if (g && g.id) unassignGeneral(g); a.gen = null; } else assignGeneral(G.heroes.find(h => h.id === v), a); renderAll(); };
-  S.querySelectorAll('[data-rec]').forEach(b => b.onclick = () => { if (!recruit(a, b.dataset.rec)) toast('Нельзя нанять (деньги, люди или лимит отрядов).'); renderAll(); });
+  S.querySelectorAll('[data-rec]').forEach(b => b.onclick = () => { if (!recruit(a, b.dataset.rec)) { toast('Нельзя нанять (деньги, люди или лимит отрядов).'); SFX.play('error'); } else SFX.play('coin'); renderAll(); });
   S.querySelectorAll('[data-dis]').forEach(b => b.onclick = () => { const u = a.units[+b.dataset.dis]; if (u.type !== 'merc' && R(a.region).owner === 'byz') R(a.region).pop += u.men / 2000; a.units.splice(+b.dataset.dis, 1); if (!a.units.length) { removeArmyQuiet(a); UI.selArmy = null; } renderAll(); });
   S.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => { const o = G.armies.find(x => x.id === +b.dataset.merge); const room = 12 - a.units.length; a.units.push(...o.units.splice(0, room)); if (!o.units.length) removeArmyQuiet(o); renderAll(); });
   if ($('bStop')) $('bStop').onclick = () => { a.path = []; renderAll(); };
@@ -402,7 +517,7 @@ function renderCourt() {
     toast(`${h.name}: ${missionText(h)}`); renderAll();
   });
   V.querySelectorAll('[data-dm]').forEach(b => b.onclick = () => { const h = G.heroes.find(x => x.id === +b.dataset.dm); if (confirm(`Отпустить ${h.name}?`)) { dismiss(h); renderAll(); } });
-  V.querySelectorAll('[data-hire]').forEach(b => b.onclick = () => { if (!hire(+b.dataset.hire)) toast('Нельзя нанять.'); renderAll(); });
+  V.querySelectorAll('[data-hire]').forEach(b => b.onclick = () => { if (!hire(+b.dataset.hire)) { toast('Нельзя нанять.'); SFX.play('error'); } else SFX.play('coin'); renderAll(); });
   V.querySelectorAll('[data-ransom]').forEach(b => b.onclick = () => { const h = G.heroes.find(x => x.id === +b.dataset.ransom); if (G.treasury < h.ransom) return; G.treasury -= h.ransom; if (courtHeroes().length < COUNCIL) { h.status = 'court'; const taken = new Set(courtHeroes().filter(x => x !== h).map(x => x.slot)); for (let s = 0; s < COUNCIL; s++) if (!taken.has(s)) { h.slot = s; break; } log(`${h.name} выкуплен из плена.`); } else { h.status = 'gone'; log(`${h.name} выкуплен, но места в совете нет — он удалился в имение.`); } renderAll(); });
 }
 
@@ -471,7 +586,7 @@ function renderLog() {
 function modal(html) { $('mbox').innerHTML = html; $('modal').classList.remove('hidden'); }
 function closeModal() { $('modal').classList.add('hidden'); }
 eventHook = (ev, opts) => new Promise(res => {
-  renderAll();
+  renderAll(); SFX.play('event');
   modal(`<div class="small muted">${dateStr()}</div><h2>${esc(ev.title)}</h2><p>${esc(evText(ev.text))}</p>${ev.note ? `<div class="note">${esc(ev.note)}</div>` : ''}
    ${opts.map((o, k) => `<button class="opt" data-k="${k}">${esc(o.t)}<span class="h">${esc(evText(o.h) || '')}</span></button>`).join('')}`);
   $('mbox').querySelectorAll('.opt').forEach(b => b.onclick = () => { closeModal(); res(opts[+b.dataset.k]); });
@@ -480,10 +595,12 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
+   <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
   $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
   $('mLoad').onclick = () => { if (load()) { closeModal(); renderAll(); toast('Загружено.'); } else toast('Сохранения нет.'); };
   $('mAuto').onclick = () => { G.autoBattle = !G.autoBattle; closeModal(); renderAll(); };
+  $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
@@ -527,6 +644,7 @@ function fleetAction(k) {
 }
 function showFinale() {
   const F = G.final || (G.final = finale());
+  SFX.play('bell');
   modal(`<h2>${G.over === 'konst' ? 'Город пал' : 'Чёрная смерть, 1347'}</h2>
    <p style="font-size:22px;color:var(--gold2)">«${esc(F.title)}» — ${F.score} из 100</p>
    ${F.ep.map(p => `<p>${esc(p)}</p>`).join('')}
@@ -540,7 +658,7 @@ function showFinale() {
 const BV = { b: null, pk: 'A', sel: null, cs: 40, busy: false, resolve: null, fx: null };
 battleHook = input => new Promise(res => {
   if (G.autoBattle) { const r = Battle.autoResolve(input); toast(`Битва: ${input.place}. ${r.winner === (input.attacker.player ? 'attacker' : 'defender') ? 'Победа!' : 'Поражение.'}`); res(r); return; }
-  BV.b = Battle.Sim.create(input); BV.pk = input.attacker.player ? 'A' : 'D'; BV.sel = null; BV.resolve = res; BV.fx = null;
+  BV.endSfx = false; BV.b = Battle.Sim.create(input); BV.pk = input.attacker.player ? 'A' : 'D'; BV.sel = null; BV.resolve = res; BV.fx = null;
   $('battle').classList.remove('hidden');
   const cv = $('bcv');
   const avail = Math.min(window.innerWidth - (window.innerWidth > 760 ? 330 : 20), 18 * 48);
@@ -607,6 +725,7 @@ function bvSide() {
   if (b.over) {
     const R0 = S.result(BV.b); BV.result = BV.result || R0;
     const won = (BV.result.winner === 'attacker') === (me === 'A');
+    if (!BV.endSfx) { BV.endSfx = true; SFX.play(won ? 'win' : 'lose'); }
     h += `<h2 class="${won ? 'good' : 'bad'}">${won ? 'Победа!' : 'Поражение'}</h2><p class="small">Наши потери: ${fmt(BV.result[me === 'A' ? 'attacker' : 'defender'].lost)}<br>Потери врага: ${fmt(BV.result[me === 'A' ? 'defender' : 'attacker'].lost)}</p><button class="main" id="bvDone">Вернуться на карту</button><hr>`;
   } else if (u) {
     const c = b.grid[u.y][u.x];
@@ -633,18 +752,23 @@ function bvClick(e) {
   if (t && t.side === BV.pk) { BV.sel = t.id; bvRender(); return; }
   if (u && u.side === BV.pk) {
     if (t && t.side !== BV.pk) {
-      if (S.canAttack(b, u, t)) { S.attack(b, u, t); BV.fx = b.lastFx; BV.sel = u.out ? null : u.id; bvRender(); return; }
+      if (S.canAttack(b, u, t)) { bvAttackSfx(b, () => S.attack(b, u, t), u); BV.fx = b.lastFx; BV.sel = u.out ? null : u.id; bvRender(); return; }
       // подойти и ударить
       if (!u.moved && u.type !== 'arch') {
         let best = null, bc = 1e9;
         for (const [k, c] of S.reachable(b, u)) { const [X, Y] = k.split(',').map(Number); if (Math.max(Math.abs(X - t.x), Math.abs(Y - t.y)) === 1 && c < bc) { bc = c; best = [X, Y]; } }
-        if (best) { S.move(b, u, best[0], best[1]); S.attack(b, u, t); BV.fx = b.lastFx; bvRender(); return; }
+        if (best) { S.move(b, u, best[0], best[1]); bvAttackSfx(b, () => S.attack(b, u, t), u); BV.fx = b.lastFx; bvRender(); return; }
       }
       toast('Не достать: подойдите ближе.'); BV.sel = t.id; bvRender(); return;
     }
     if (!t && S.move(b, u, x, y)) { bvRender(); return; }
   }
   BV.sel = t ? t.id : null; bvRender();
+}
+function bvAttackSfx(b, fn, u) {
+  const before = b.units.filter(x => x.out).length; fn();
+  SFX.play(u.type === 'arch' ? 'arrow' : 'hit');
+  if (b.units.filter(x => x.out).length > before) setTimeout(() => SFX.play('rout'), 160);
 }
 function bvAiTurn() {
   const b = BV.b, side = b.active, S = Battle.Sim;
@@ -653,7 +777,7 @@ function bvAiTurn() {
     if (!BV.b || b.over || b.active !== side || !BV.busy) { BV.busy = false; if (BV.b) bvRender(); return; }
     const act = Battle.AI.next(b, side);
     if (!act) { S.endSide(b); BV.busy = false; BV.fx = null; bvRender(); if (!b.over && b.active !== BV.pk) bvAiTurn(); return; }
-    Battle.AI.apply(b, side, act);
+    if (act.kind === 'attack' || act.kind === 'moveAttack') bvAttackSfx(b, () => Battle.AI.apply(b, side, act), act.u); else Battle.AI.apply(b, side, act);
     BV.fx = (act.kind === 'attack' || act.kind === 'moveAttack') ? b.lastFx : null;
     bvRender();
     setTimeout(step, act.kind === 'wait' || act.kind === 'defend' ? 60 : 280);
@@ -667,7 +791,7 @@ function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } cat
 function load() { try { const s = localStorage.getItem(SAVE_KEY); if (!s) return false; G = JSON.parse(s); return true; } catch (e) { return false; } }
 function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
 function enterGame() { $('title').classList.add('hidden'); $('app').classList.remove('hidden'); if (!regionGrid) initMap(); else fitMap(); UI.sel = null; UI.selArmy = null; UI.tab = 'map'; ['map', 'court', 'state', 'log'].forEach(k => $('view-' + k).classList.toggle('hidden', k !== 'map')); renderAll(); if (G.over) showFinale(); }
-function startNew() { newGame(); save(); enterGame(); setTimeout(() => showHelp(), 300); }
+async function startNew() { newGame(); enterGame(); await runPrologue(); save(); renderAll(); setTimeout(() => showHelp(), 300); }
 function boot() {
   $('titlebtns').innerHTML = `<button class="main" id="tNew">Новая игра</button>${hasSave() ? '<button id="tCont">Продолжить</button>' : ''}`;
   $('tNew').onclick = startNew;
