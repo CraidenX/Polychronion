@@ -57,7 +57,7 @@ function newGame() {
   // стартовые армии
   addArmy('byz', 'konst', [['inf', 3], ['cav', 2], ['arch', 2]], 'Армия Города');
   addArmy('byz', 'thessal', [['inf', 3], ['cav', 2], ['arch', 1]], 'Западная армия');
-  addArmy('epirus', 'thessaly', [['inf', 3], ['cav', 1], ['arch', 2]]);
+  addArmy('epirus', 'epirus', [['inf', 3], ['cav', 1], ['arch', 2]]);
   addArmy('achaea', 'achaea', [['inf', 2], ['cav', 3], ['merc', 1]]);
   addArmy('bulgaria', 'tarnovo', [['inf', 3], ['cav', 3], ['arch', 1]]);
   // стартовый двор

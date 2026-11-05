@@ -38,6 +38,7 @@ const FACTIONS = {
   karasi:   { name: 'Бейлик Караси', short: 'Караси', color: '#5a9a72', rel: -40, aggr: .7, mix: [2, 5, 3, 0] },
   anjou:    { name: 'Анжуйцы (Карл I)', short: 'Анжуйцы', color: '#2e4fa8', rel: -60, aggr: .7, mix: [3, 3, 2, 4] },
   catalan:  { name: 'Каталонская компания', short: 'Каталонцы', color: '#d0502a', rel: 0, aggr: .8, mix: [2, 2, 2, 6] },
+  thessaly: { name: 'Фессалия (Неопатры)', short: 'Фессалия', color: '#7f996a', rel: -20, aggr: .3, mix: [4, 3, 2, 0], greek: true },
   sicily:   { name: 'Сицилийское королевство', short: 'Сицилия', color: '#5a4fb0', rel: 0, aggr: .05, mix: [3, 3, 2, 2] },
   cyprus:   { name: 'Кипрское королевство', short: 'Кипр', color: '#e88a20', rel: 0, aggr: .05, mix: [3, 3, 2, 2] },
   rebel:    { name: 'Мятежники', short: 'Мятежники', color: '#555055', rel: -80, aggr: .55, mix: [5, 2, 3, 1], greek: true },

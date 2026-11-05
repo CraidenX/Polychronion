@@ -6,20 +6,26 @@ from collections import deque, Counter
 import numpy as np
 from PIL import Image, ImageFilter
 SP = __import__('os').path.dirname(__import__('os').path.abspath(__file__)) + '/'
-fit = json.load(open(SP + 'umap/fit.json')); l0, sx, p0, sy = fit['p']
-SC = 2; C = 6  # карта показывается вдвое больше исходника; клетка сетки = 6 px показа = 3 px исходника
-rl = np.load(SP + 'umap/rl.npy'); regs = json.load(open(SP + 'umap/regs.json'))
-H0, W0 = rl.shape; W, H = W0 * SC, H0 * SC; GW, GH = W // C + 1, H // C + 1
-st = np.asarray(Image.open(SP + 'umap/src.webp').convert('RGB').filter(ImageFilter.MedianFilter(5))).astype(int)
-stRaw = np.asarray(Image.open(SP + 'umap/src.webp').convert('RGB')).astype(int)
-dnav = np.abs(stRaw - np.array([1, 31, 73])).sum(axis=2)
+import glob
+fit = json.load(open(SP + 'umap/fit.json'))
+rl = np.load(SP + 'umap/rl.npy').astype(np.int32); regs = json.load(open(SP + 'umap/regs.json'))
+H0, W0 = rl.shape
+kfit = W0 / fit.get('W', 2000)
+l0, sx, p0, sy = fit['p'][0], fit['p'][1] * kfit, fit['p'][2], fit['p'][3] * kfit
+SC = 4000 / W0; C = 6  # карта показывается шириной 4000 px; клетка сетки = 6 px показа
+W, H = int(round(W0 * SC)), int(round(H0 * SC)); GW, GH = W // C + 1, H // C + 1
+POL = sorted(glob.glob(SP + '../source/*political*.png'))[0]
+stRaw = np.asarray(Image.open(POL).convert('RGB')).astype(np.int32)
+kP = (stRaw[..., 0] << 16) | (stRaw[..., 1] << 8) | stRaw[..., 2]
+dnav = np.where(kP == 0x001F48, 0, 999)
 def topx(lon, lat): return ((lon - l0) * sx, (p0 - lat) * sy)  # исходные px
 def tolonlat(x, y): return (l0 + x / sx, p0 - y / sy)
 # сетка: метки и море
-cx = (np.arange(GW) * C + C / 2) / SC; cy = (np.arange(GH) * C + C / 2) / SC
+cx = (np.arange(GW) * C + C / 2) / SC; cy = (np.arange(GH) * C + C / 2) / SC  # в исходных px
 XI = np.clip(cx.astype(int), 0, W0 - 1); YI = np.clip(cy.astype(int), 0, H0 - 1)
 glab = rl[np.ix_(YI, XI)]
 gsea = dnav[np.ix_(YI, XI)] < 60
+glab = rl[np.ix_(YI, XI)]
 # --- исторические области (старые 34) ---
 old = json.load(open(SP + 'regions.json'))
 LEG = {}  # id -> def из старых данных
@@ -27,19 +33,26 @@ src2 = open(SP + 'src/2_data.js').read()
 for m in re.finditer(r"\['(\w+)', '([^']+)', '(\w+)', (\d+), (\d+), (\d+), (\d+), (\d+), '(\w+)'\]", src2):
     LEG[m.group(1)] = [m.group(1), m.group(2), m.group(3)] + [int(m.group(i)) for i in range(4, 9)] + [m.group(9)]
 # --- палитра держав по карте 1261 года ---
-PAL = [('byz', (112, 8, 80)), ('seljuk', (146, 182, 163)), ('sicily', (85, 76, 161)), ('bulgaria', (103, 98, 121)), ('serbia', (164, 40, 62)),
-       ('trebizond', (41, 163, 155)), ('epirus', (157, 112, 184)), ('epirus', (127, 153, 104)), ('achaea', (254, 212, 52)), ('seljuk', (253, 215, 125)),
-       ('seljuk', (60, 150, 178)), ('venice', (58, 100, 152)), ('cyprus', (250, 130, 20)), ('athens', (130, 120, 100)), ('athens', (120, 250, 20)), ('athens', (240, 140, 200))]
+FMAP = {  # точный цвет на карте держав -> держава игры
+ (114,6,80): 'byz', (144,182,161): 'seljuk', (86,76,163): 'sicily', (103,97,122): 'bulgaria', (165,39,62): 'serbia',
+ (40,164,157): 'trebizond', (157,111,186): 'epirus', (128,153,104): 'thessaly', (255,213,51): 'achaea', (255,215,124): 'candar',
+ (58,150,178): 'karaman', (56,101,153): 'venice', (54,100,153): 'venice', (24,50,123): 'venice', (114,140,213): 'venice', (248,195,36): 'venice', (54,167,156): 'venice',
+ (247,123,0): 'cyprus', (113,112,96): 'athens', (76,255,0): 'athens', (252,112,214): 'athens', (211,172,185): 'achaea',
+ (56,181,110): 'menteshe', (232,48,2): 'ilkhan', (36,132,247): 'georgia', (56,101,153): 'venice', (28,141,255): 'georgia', (127,71,77): 'hungary', (81,45,49): 'hungary',
+ (240,167,130): 'bosnia', (168,113,87): 'vlachs', (188,166,93): 'mamluk', (214,140,190): 'armenia', (0,181,135): 'shirvan', (38,127,0): 'byz', (160,82,128): 'venice', (255,248,214): 'sicily',
+}
+OVER = {0x808080, 0x001F48, 0x000020, 0x262626, 0x000000, 0xDFDFDF, 0x81817F, 0x5E5E5E, 0x404040}
+unknown = Counter()
 def owner_of(rid, lon, lat):
     m = rl == rid
-    px = st[m]; s = px.max(1) - px.min(1); px = px[(s > 12) & (np.abs(px - np.array([1, 31, 73])).sum(1) > 60)]
-    if len(px) < 20: return None, None
-    if len(px) == 0: return 'byz', None
-    col = np.median(px, axis=0)
-    d = [np.abs(np.array(c) - col).sum() for _, c in PAL]; f = PAL[int(np.argmin(d))][0]
-    if f == 'trebizond' and lon < 31: f = 'venice'   # бирюза Крита — Венеция
-    if f == 'venice' and lon > 38: f = 'trebizond'
-    return f, [int(v) for v in col]
+    ks = kP[m]; ks = ks[~np.isin(ks, list(OVER))]
+    if len(ks) < 20: return None, None
+    cnt = Counter(ks.tolist())
+    for k, n in cnt.most_common():
+        col = ((k >> 16) & 255, (k >> 8) & 255, k & 255)
+        if col in FMAP: return FMAP[col], list(col)
+        unknown[col] += n
+    return None, None
 # --- точки подписей: самая «глубокая» клетка региона ---
 def label_point(mask):
     dist = np.zeros(mask.shape, int); q = deque()
@@ -70,12 +83,13 @@ unmatched = []
 for hid in prio:
     o = next(e for e in old if e[0] == hid)
     x, y = topx(o[2], o[3]); xi, yi = int(x), int(y)
+    R0 = 21 * 3
     found = None; first = None
-    for rad in range(0, 21):
+    for rad in range(0, R0, 3):
         win = rl[max(0, yi - rad):yi + rad + 1, max(0, xi - rad):xi + rad + 1]
         v = [r for r in set(win[win >= 0].tolist()) if r in byrid]
-        if v and first is None and rad <= 4: first = Counter(win[win >= 0].tolist()).most_common(1)[0][0]
-        good = [r for r in v if byrid[r]['owner'] == LEG[hid][2] and (byrid[r]['id'] is None)]
+        if v and first is None and rad <= 12: first = Counter(win[win >= 0].tolist()).most_common(1)[0][0]
+        good = [r for r in v if byrid[r]['owner'] == LEG[hid][2] and (byrid[r]['id'] is None)] if LEG[hid][2] == 'byz' else []
         if good: found = good[0]; break
     if found is None: found = first if first in byrid else None
     if found is None: unmatched.append(hid); continue
@@ -117,7 +131,7 @@ while pq:
         X, Y = x + dx, y + dy
         if 0 <= X < GW and 0 <= Y < GH and not done[Y, X] and free[Y, X]:
             nr = raw + math.hypot(dx, dy) * C; npr = nr / fb[j]['w']
-            if npr > 151: continue
+            if npr > 151 * (4000 / 4000): continue
             if npr < best[Y, X]: best[Y, X] = npr; heapq.heappush(pq, (npr, j, X, Y, nr))
 allr = info + fb
 # --- позиции подписей (в px показа) ---
@@ -128,7 +142,12 @@ for i, it in enumerate(allr):
         if not m.any(): x, y = topx(it['lon'], it['lat']); pos[it['id']] = [round(x * SC), round(y * SC)]; continue
         mm = np.zeros((GH + 2, GW + 2), bool); mm[1:-1, 1:-1] = m
         x, y = label_point(mm); pos[it['id']] = [(x - 1) * C + C // 2, (y - 1) * C + C // 2]
-    else: pos[it['id']] = [it['x'] * SC, it['y'] * SC]
+    else:
+        pos[it['id']] = [round(it['x'] * SC), round(it['y'] * SC)]
+        o = next((e for e in old if e[0] == it['id']), None)
+        if o:
+            hx, hy = topx(o[2], o[3])
+            if 0 <= int(hy) < H0 and 0 <= int(hx) < W0 and rl[int(hy), int(hx)] == it['rid']: pos[it['id']] = [round(hx * SC), round(hy * SC)]
 # --- связи: суша по сетке, море/пролив по расстоянию между берегами ---
 adj = set()
 for y in range(GH):
@@ -183,7 +202,7 @@ for i, it in enumerate(allr):
     else:
         near = min(LEG, key=lambda e: (next(o for o in old if o[0] == e)[2] - lon) ** 2 + (next(o for o in old if o[0] == e)[3] - lat) ** 2)
         ter = TER[near] if TER[near] != 'walls' else 'plain'
-        w = int(round(min(22, max(4, 3 + math.sqrt(it['n']) * 0.12 + it['parts']))))
+        w = int(round(min(26, max(4, 3 + it['parts'] * 1.2))))
         d = [rid, it['name'], it['owner'], w, w * 4 + 10, 2, 300, 52, ter]
     out.append(d + [round(lon, 2), round(lat, 2)])
 # масштаб богатства: суммарный доход ромеев — как в версии 0.1 (≈263)
@@ -214,5 +233,5 @@ for a, b in alias.items(): mi['pos'][a] = mi['pos'][b]
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
 own_c = Counter(d[2] for d in out)
 print('regions', len(out), 'painted', len(info), 'fallback', len(fb), 'links', len(L), Counter(t for _, _, t in L))
-print('owners', dict(own_c)); print('alias', alias); print('unmatched->fallback', unmatched)
-for it in info: print(it['id'], it['name'], it['owner'], it['col'], round(it['lon'], 1), round(it['lat'], 1))
+print('owners', dict(own_c)); print('unknown colours', unknown.most_common(8)); print('alias', alias); print('unmatched->fallback', unmatched)
+for it in info: print(it['id'], it['name'], it['owner'], it['parts'], round(it['lon'], 1), round(it['lat'], 1))
