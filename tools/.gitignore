@@ -1,0 +1,9 @@
+umap/*.webp
+umap/*.npy
+umap/*.png
+umap/regs.json
+umap/comps.json
+gen.json
+mapinfo*.json
+game.js
+ne/

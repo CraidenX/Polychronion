@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Полихроний</title>
+<meta name="description" content="Пошаговая стратегия: Византия 1261–1347, от возвращения Константинополя до Чёрной смерти.">
+<style>
+:root{
+  --bg:#17101c; --panel:#241a2b; --panel2:#2f2238; --line:#4d3a58; --text:#efe5cf; --muted:#b5a6ba;
+  --gold:#d9b75f; --gold2:#f3dc95; --purple:#7a2f8f; --good:#86d08f; --bad:#ef8383; --warn:#f0bb5c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font:15px/1.4 "Palatino Linotype","Book Antiqua",Palatino,Georgia,serif}
+button{font:inherit;color:inherit;cursor:pointer;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+button:hover:not(:disabled){border-color:var(--gold);color:var(--gold2)}
+button:disabled{opacity:.45;cursor:default}
+button.main{background:#5b2470;border-color:#8e45ab}
+button.sel{background:#4a3a1a;border-color:var(--gold);color:var(--gold2)}
+select{font:inherit;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:3px}
+h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
+.muted{color:var(--muted)} .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+.small{font-size:13px}
+.hidden{display:none!important}
+#app{display:flex;flex-direction:column;height:100%}
+#top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 10px;background:#1d1424;border-bottom:1px solid var(--line)}
+#top .date{font-size:18px;color:var(--gold2);min-width:120px}
+#top .stat{padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+#top .sp{flex:1}
+#tabs{display:flex;gap:4px;padding:5px 10px;background:#1a1220;border-bottom:1px solid var(--line);flex-wrap:wrap}
+#tabs button{border-radius:7px 7px 0 0}
+#main{flex:1;position:relative;overflow:hidden}
+.view{position:absolute;inset:0;overflow:auto;padding:12px}
+#view-map{padding:0;overflow:hidden;display:flex}
+#mapwrap{flex:1;position:relative;overflow:hidden;background:#011f49;cursor:grab;touch-action:none}
+#mapinner{position:absolute;left:0;top:0;transform-origin:0 0}
+#mapinner img,#mapinner canvas{position:absolute;left:0;top:0;user-select:none;-webkit-user-drag:none}
+#markers{position:absolute;left:0;top:0}
+.rm{position:absolute;transform:translate(-50%,-50%) scale(var(--s,1));pointer-events:auto;cursor:pointer;text-align:center;white-space:nowrap}
+.rm .dot{display:inline-block;width:14px;height:14px;border-radius:3px;border:2px solid #2a1a10;vertical-align:middle}
+.rm .nm{font-size:15px;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000,0 0 2px #000;font-weight:bold}
+.rm .fx{font-size:12px;color:#ffe9a8;text-shadow:0 0 2px #000,0 0 2px #000}
+.rm.cap .nm{font-size:16px}
+#markers.far .rm:not(.cap):not(.selr) .nm,#markers.far .rm .fx{display:none}
+.rm.selr .nm{color:#ffd84a}
+.rm.siege .nm::after{content:" ⚔";color:#a01010}
+.ar{position:absolute;transform:translate(-50%,-100%) scale(var(--s,1));transform-origin:50% 100%;pointer-events:auto;cursor:pointer;font-size:12px;
+  padding:1px 5px;border-radius:5px;border:2px solid #1a1010;color:#fff;text-shadow:0 0 2px #000;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,.5)}
+.ar.mine{border-color:#f3dc95}
+.ar.sela{outline:3px solid #fff}
+#zoombtns{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:5}
+#zoombtns button{width:36px;height:36px;padding:0;font-size:20px}
+#side{width:340px;max-width:45%;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:10px}
+#side table{width:100%;border-collapse:collapse}
+#side td{padding:2px 4px;border-bottom:1px solid #3a2b42}
+.btnrow{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+.hero .hd{display:flex;gap:8px;align-items:center}
+.hero .av{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;background:#3d2a48;border:2px solid var(--gold)}
+.hero .lv{font-size:12px;color:var(--muted)}
+.tag{display:inline-block;font-size:12px;padding:0 6px;margin:1px;border-radius:8px;background:#3a2c44;border:1px solid var(--line)}
+.bar{height:6px;background:#3a2b42;border-radius:3px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--gold)}
+.log div{padding:3px 0;border-bottom:1px solid #31243a}
+.log .d{color:var(--gold);margin-right:6px}
+#modal{position:fixed;inset:0;background:rgba(5,2,8,.72);display:flex;align-items:center;justify-content:center;z-index:50;padding:12px}
+#modal .box{background:var(--panel);border:1px solid var(--gold);border-radius:12px;max-width:640px;width:100%;max-height:92vh;overflow:auto;padding:16px;box-shadow:0 10px 40px #000}
+#modal .opt{display:block;width:100%;text-align:left;margin:6px 0;padding:8px 10px}
+#modal .opt .h{display:block;font-size:13px;color:var(--muted)}
+.note{font-size:13px;color:var(--muted);border-left:3px solid var(--line);padding-left:8px;margin:8px 0}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:60;display:flex;flex-direction:column;gap:4px;align-items:center;pointer-events:none}
+#toast div{background:#2c1f34;border:1px solid var(--gold);padding:6px 12px;border-radius:8px;max-width:90vw}
+#title{position:fixed;inset:0;z-index:40;background:radial-gradient(circle at 50% 30%,#3a1a4a,#120a16 70%);display:flex;align-items:center;justify-content:center;text-align:center;padding:16px}
+#title h1{font-weight:normal;color:var(--gold2);font-size:40px;margin:0 0 6px}
+#title .box{max-width:600px}
+#title button{margin:6px;font-size:18px;padding:8px 18px}
+/* battle */
+#battle{position:fixed;inset:0;z-index:30;background:#140e10;display:flex;flex-direction:column}
+#btop{display:flex;align-items:center;gap:10px;padding:6px 10px;background:#22161a;border-bottom:1px solid var(--line);flex-wrap:wrap}
+#bbody{flex:1;display:flex;overflow:hidden}
+#bfield{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:8px}
+#bcv{background:#6b7a4a;border:2px solid #3a2a1a;touch-action:manipulation;max-width:100%}
+#bside{width:300px;max-width:40%;overflow:auto;background:var(--panel);border-left:1px solid var(--line);padding:8px}
+#blog{font-size:13px}
+#blog div{border-bottom:1px solid #31243a;padding:2px 0}
+table.t{border-collapse:collapse;width:100%}
+table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align:left;font-weight:normal}
+@media (max-width:760px){
+  #view-map{flex-direction:column}
+  #side{width:auto;max-width:none;height:42%;border-left:0;border-top:1px solid var(--line)}
+  #bbody{flex-direction:column} #bside{width:auto;max-width:none;height:38%}
+  #title h1{font-size:30px}
+  #top{gap:5px;padding:4px 6px} #top .stat{font-size:12px;padding:1px 5px} #top .date{font-size:15px;min-width:0} #top .rul{display:none} #top button{padding:4px 7px}
+}
+</style>
+</head>
+<body>
+<div id="title">
+  <div class="box">
+    <h1>Полихроний</h1>
+    <div style="color:var(--gold);font-size:20px;margin-bottom:4px">Держава Палеологов</div>
+    <div class="muted">1261 — 1347. От возвращения Константинополя до Чёрной смерти</div>
+    <p>Вы — василевс ромеев. Город снова ваш, но вокруг — латиняне, болгары, сербы, сельджуки, а за горизонтом ждёт Карл Анжуйский. Через восемьдесят шесть лет придёт чума. Что останется от державы к тому дню?</p>
+    <div id="titlebtns"></div>
+    <p class="small muted">Один ход — один сезон. Карта: перетаскивайте мышью, колесо — масштаб. Сохранение — в браузере.</p>
+  </div>
+</div>
+<div id="app" class="hidden">
+  <div id="top"></div>
+  <div id="tabs"></div>
+  <div id="main">
+    <div id="view-map" class="view">
+      <div id="mapwrap">
+        <div id="mapinner"><img id="mapimg" src="map.png" alt="Карта"><canvas id="ovl"></canvas><div id="markers"></div></div>
+        <div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
+      </div>
+      <div id="side"></div>
+    </div>
+    <div id="view-court" class="view hidden"></div>
+    <div id="view-state" class="view hidden"></div>
+    <div id="view-log" class="view hidden"></div>
+  </div>
+</div>
+<div id="battle" class="hidden">
+  <div id="btop"></div>
+  <div id="bbody"><div id="bfield"><canvas id="bcv"></canvas></div><div id="bside"></div></div>
+</div>
+<div id="modal" class="hidden"><div class="box" id="mbox"></div></div>
+<div id="toast"></div>
+<script>

@@ -1,0 +1,611 @@
+
+/* ---------- 5. ИНТЕРФЕЙС ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 } };
+function toast(t) { const d = document.createElement('div'); d.textContent = t; $('toast').appendChild(d); setTimeout(() => d.remove(), 4200); while ($('toast').children.length > 4) $('toast').firstChild.remove(); }
+function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${clamp(v / max * 100, 0, 100)}%;${col ? 'background:' + col : ''}"></i></div>`; }
+function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
+function moodCol(m) { return m > 60 ? 'var(--good)' : m > 35 ? 'var(--warn)' : 'var(--bad)'; }
+
+function renderAll() { if (!G) return; renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
+
+function renderTop() {
+  const I = computeIncome();
+  $('top').innerHTML = `<span class="date">${dateStr()}</span>
+   <span class="stat rul" title="${esc(ruler().desc)}">♛ ${esc(ruler().name)}</span>
+   <span class="stat" title="Казна (тыс. иперпиров) и ожидаемый итог за сезон">⛁ ${fmt(G.treasury)} <span class="${I.total >= 0 ? 'good' : 'bad'}">(${sign(I.total)})</span></span>
+   <span class="stat" title="Порядок в державе">⚖ Порядок ${Math.round(G.order)}</span>
+   <span class="stat" title="Единство Церкви">☦ Церковь ${Math.round(G.church)}</span>
+   <span class="stat" title="Престиж императора">✦ Престиж ${Math.round(G.prestige)}</span>
+   <span class="stat" title="Областей у ромеев">▦ ${myRegions().length}</span>
+   <span class="sp"></span>
+   <button id="bEnd" class="main" title="Закончить сезон (клавиша Enter)">Конец хода ▶</button>
+   <button id="bYear" title="Сыграть до 4 сезонов подряд; остановится при важных событиях">Год ▶▶</button>
+   <button id="bMenu">Меню</button>`;
+  $('bEnd').onclick = () => doEndTurn(1);
+  $('bYear').onclick = () => doEndTurn(4);
+  $('bMenu').onclick = showMenu;
+}
+function renderTabs() {
+  const tabs = [['map', 'Карта'], ['court', 'Двор'], ['state', 'Государство'], ['log', 'Летопись']];
+  $('tabs').innerHTML = tabs.map(([k, n]) => `<button class="${UI.tab === k ? 'sel' : ''}" data-t="${k}">${n}</button>`).join('') + `<span class="small muted" style="margin-left:auto;align-self:center">${G.autoBattle ? 'Бои: автоматически' : ''}</span>`;
+  $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => { UI.tab = b.dataset.t; ['map', 'court', 'state', 'log'].forEach(k => $('view-' + k).classList.toggle('hidden', k !== UI.tab)); renderAll(); });
+}
+async function doEndTurn(n) {
+  if (busy || G.over) return;
+  for (let i = 0; i < n; i++) {
+    const before = G.log.length ? G.log[0] : null;
+    await endTurn();
+    save();
+    renderAll();
+    if (G.over) { showFinale(); return; }
+    const imp = G.log.slice(0, Math.max(0, G.log.indexOf(before))).some(l => l.k === 'imp');
+    const threat = myRegions().some(r => G.armies.some(a => a.region === r.id && atWar('byz', a.owner)));
+    if (n > 1 && (imp || threat)) break;
+  }
+}
+
+/* --- карта --- */
+let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
+function initMap() {
+  const M = MAPINFO;
+  ID_BY_IDX = M.ids;
+  regionGrid = new Int16Array(M.GW * M.GH).fill(-1);
+  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+  let i = 0, p = 0; const s = M.rle;
+  while (p < s.length) { let n = 0; while (s[p] >= '0' && s[p] <= '9') n = n * 10 + (s.charCodeAt(p++) - 48); const ch = s[p++]; const v = ch === '.' ? -1 : (M.abase ? ch.charCodeAt(0) - M.abase : alpha.indexOf(ch)); for (let k = 0; k < (n || 1); k++) regionGrid[i++] = v; }
+  borderSegs = [];
+  for (let y = 0; y < M.GH; y++) for (let x = 0; x < M.GW; x++) {
+    const a = regionGrid[y * M.GW + x];
+    if (x + 1 < M.GW) { const b = regionGrid[y * M.GW + x + 1]; if (a !== b && (a >= 0 || b >= 0)) borderSegs.push([a, b, (x + 1) * M.C, y * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
+    if (y + 1 < M.GH) { const b = regionGrid[(y + 1) * M.GW + x]; if (a !== b && (a >= 0 || b >= 0)) borderSegs.push([a, b, x * M.C, (y + 1) * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
+  }
+  const cv = $('ovl'); cv.width = M.W; cv.height = M.H;
+  $('mapinner').style.width = M.W + 'px'; $('mapinner').style.height = M.H + 'px';
+  $('mapimg').width = M.W; $('mapimg').height = M.H;
+  $('mapimg').onerror = () => { $('mapimg').style.display = 'none'; $('mapinner').style.background = '#808080'; };
+  setupPanZoom();
+  fitMap();
+}
+function fitMap() {
+  const w = $('mapwrap').clientWidth || 800, h = $('mapwrap').clientHeight || 600;
+  const f = MAPINFO.focus || [0, 0, MAPINFO.W, MAPINFO.H];
+  const z = clamp(Math.min(w / (f[2] - f[0]), h / (f[3] - f[1])), minZoom(), 2.5);
+  UI.view.z = z; UI.view.x = w / 2 - (f[0] + f[2]) / 2 * z; UI.view.y = h / 2 - (f[1] + f[3]) / 2 * z; clampView(); applyView();
+}
+function minZoom() { const w = $('mapwrap').clientWidth || 800, h = $('mapwrap').clientHeight || 600; return Math.min(w / MAPINFO.W, h / MAPINFO.H); }
+function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clientHeight, v = UI.view; const mw = MAPINFO.W * v.z, mh = MAPINFO.H * v.z; v.x = mw < w ? (w - mw) / 2 : clamp(v.x, w - mw, 0); v.y = mh < h ? (h - mh) / 2 : clamp(v.y, h - mh, 0); }
+function applyView() { $('mapinner').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${UI.view.z})`; $('markers').style.setProperty('--s', clamp(0.85 / UI.view.z, 1, 1.9).toFixed(3)); $('markers').classList.toggle('far', UI.view.z < 0.5 && REGION_DEFS.length > 40); }
+function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), 2.5); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
+function setupPanZoom() {
+  const w = $('mapwrap'); let drag = null; const pts = new Map(); let pinch = null;
+  w.addEventListener('wheel', e => { e.preventDefault(); const r = w.getBoundingClientRect(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  w.addEventListener('pointerdown', e => { pts.set(e.pointerId, [e.clientX, e.clientY]); if (pts.size === 1) drag = { x: e.clientX, y: e.clientY, vx: UI.view.x, vy: UI.view.y, moved: false }; else if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), z: UI.view.z }; } });
+  w.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pinch && pts.size === 2) { const [a, b] = [...pts.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); const r = w.getBoundingClientRect(); zoomAt(pinch.z * d / pinch.d / UI.view.z, (a[0] + b[0]) / 2 - r.left, (a[1] + b[1]) / 2 - r.top); if (drag) drag.moved = true; return; }
+    if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+    if (drag.moved) { UI.view.x = drag.vx + dx; UI.view.y = drag.vy + dy; clampView(); applyView(); w.style.cursor = 'grabbing'; }
+  });
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; w.style.cursor = ''; if (pts.size === 0) { const d = drag; drag = null; if (d && !d.moved && e.type === 'pointerup') mapClick(e); } };
+  w.addEventListener('pointerup', up); w.addEventListener('pointercancel', up);
+  $('zin').onclick = e => { e.stopPropagation(); zoomAt(1.3, w.clientWidth / 2, w.clientHeight / 2); };
+  $('zout').onclick = e => { e.stopPropagation(); zoomAt(1 / 1.3, w.clientWidth / 2, w.clientHeight / 2); };
+  $('zfit').onclick = e => { e.stopPropagation(); fitMap(); };
+  ['zin', 'zout', 'zfit'].forEach(id => $(id).addEventListener('pointerdown', e => e.stopPropagation()));
+  window.addEventListener('resize', () => { clampView(); applyView(); });
+}
+function mapClick(e) {
+  const t = e.target.closest('.ar,.rm');
+  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) clickRegion(t.dataset.reg); return; }
+  const r = $('mapwrap').getBoundingClientRect();
+  const mx = (e.clientX - r.left - UI.view.x) / UI.view.z, my = (e.clientY - r.top - UI.view.y) / UI.view.z;
+  const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
+  if (gx < 0 || gy < 0 || gx >= MAPINFO.GW || gy >= MAPINFO.GH) return;
+  const idx = regionGrid[gy * MAPINFO.GW + gx];
+  if (idx >= 0) clickRegion(ID_BY_IDX[idx]);
+  else { UI.sel = null; UI.selArmy = null; renderAll(); }
+}
+function clickRegion(id) {
+  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
+  if (a && a.owner === 'byz' && id !== a.region) {
+    if (setArmyPath(a, id)) { toast(`${a.name}: поход на ${RNAME[id]} (${a.path.length} ход.)`); renderAll(); return; }
+    else toast(canEnter('byz', id) ? 'Туда не пройти (нужен флот или путь через чужие земли).' : `С державой «${fshort(R(id).owner)}» нет войны — войти нельзя.`);
+  }
+  UI.sel = id; UI.selArmy = null; renderAll();
+}
+function clickArmy(id) {
+  const a = G.armies.find(x => x.id === id); if (!a) return;
+  if (UI.selArmy === id) { UI.selArmy = null; UI.sel = a.region; } else { UI.selArmy = id; UI.sel = a.region; }
+  renderAll();
+}
+function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; }
+function drawOverlay() {
+  const M = MAPINFO, cv = $('ovl'), ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, M.W, M.H);
+  const off = document.createElement('canvas'); off.width = M.GW; off.height = M.GH;
+  const oc = off.getContext('2d'); const img = oc.createImageData(M.GW, M.GH);
+  const cols = ID_BY_IDX.map(id => { const r = R(id); const n = parseInt(FACTIONS[r.owner].color.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255, id === UI.sel ? 190 : 130]; });
+  for (let i = 0; i < regionGrid.length; i++) { const v = regionGrid[i]; if (v < 0) continue; const c = cols[v]; img.data.set(c, i * 4); }
+  oc.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true; ctx.drawImage(off, 0, 0, M.W, M.H);
+  // границы
+  ctx.lineCap = 'round';
+  const thin = new Path2D(), thick = new Path2D();
+  for (const [a, b, x1, y1, x2, y2] of borderSegs) {
+    const oa = a >= 0 ? R(ID_BY_IDX[a]).owner : null, ob = b >= 0 ? R(ID_BY_IDX[b]).owner : null;
+    const p = oa !== ob ? thick : thin; p.moveTo(x1, y1); p.lineTo(x2, y2);
+  }
+  ctx.strokeStyle = 'rgba(20,10,20,.35)'; ctx.lineWidth = 1.4; ctx.stroke(thin);
+  ctx.strokeStyle = 'rgba(15,5,15,.85)'; ctx.lineWidth = 3; ctx.stroke(thick);
+  // морские пути
+  ctx.setLineDash([6, 7]); ctx.lineWidth = 2;
+  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : UI.sel;
+  LINKS.forEach(([a, b, t]) => { if (t === 'land') return; if (LINKS.length > 120 && a !== focusR && b !== focusR) return; const pa = M.pos[a], pb = M.pos[b]; ctx.strokeStyle = t === 'sea' ? 'rgba(190,215,255,.5)' : 'rgba(255,210,120,.75)'; ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); });
+  ctx.setLineDash([]);
+  // выделенная армия: пути
+  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
+  if (a) {
+    if (a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to]; ctx.fillStyle = 'rgba(255,240,180,.55)'; ctx.beginPath(); ctx.arc(p[0], p[1], 20, 0, 7); ctx.fill(); });
+    if (a.path.length) { ctx.strokeStyle = 'rgba(160,20,20,.9)'; ctx.lineWidth = 4; ctx.beginPath(); let p = M.pos[a.region]; ctx.moveTo(p[0], p[1]); a.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.fillStyle = 'rgba(160,20,20,.9)'; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fill(); }
+  }
+  myArmies().filter(x => x.path.length && x !== a).forEach(x => { ctx.strokeStyle = 'rgba(120,30,140,.7)'; ctx.lineWidth = 3; ctx.setLineDash([8, 5]); ctx.beginPath(); let p = M.pos[x.region]; ctx.moveTo(p[0], p[1]); x.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]); });
+}
+function scouted(f) { return courtHeroes().some(h => h.role === 'spy' && h.mission && h.mission.type === 'scout' && h.mission.target === f); }
+function armyLabel(a) { const n = armyMen(a); if (a.owner === 'byz' || scouted(a.owner)) return fmt(n); return '~' + fmt(Math.round(n / 500) * 500 || 500); }
+function renderMarkers() {
+  const M = MAPINFO; let h = '';
+  for (const d of REGION_DEFS) {
+    const id = d[0], r = R(id), p = M.pos[id];
+    const besieged = G.armies.some(a => a.region === id && atWar(a.owner, r.owner));
+    h += `<div class="rm ${id === 'konst' ? 'cap' : ''} ${UI.sel === id ? 'selr' : ''} ${besieged ? 'siege' : ''}" data-reg="${id}" style="left:${p[0]}px;top:${p[1]}px">
+      <span class="dot" style="background:${FACTIONS[r.owner].color}"></span> <span class="nm">${esc(RNAME[id])}</span><br><span class="fx">${'▮'.repeat(Math.min(6, r.fort))}${r.owner === 'byz' ? ' ' + Math.round(r.mood) + '☺' : ''}</span></div>`;
+  }
+  const byReg = {};
+  G.armies.forEach(a => (byReg[a.region] = byReg[a.region] || []).push(a));
+  for (const rid in byReg) {
+    const p = M.pos[rid];
+    byReg[rid].forEach((a, i) => {
+      const g = genOf(a);
+      h += `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${p[0] + 26 + i * 6}px;top:${p[1] - 8 - i * 24}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.path.length ? ' ➜' : ''}</div>`;
+    });
+  }
+  $('markers').innerHTML = h;
+}
+
+/* --- боковая панель --- */
+function renderSide() {
+  const S = $('side');
+  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
+  if (a) { S.innerHTML = armyPanel(a); bindArmyPanel(a); return; }
+  if (!UI.sel) { S.innerHTML = introPanel(); bindIntro(); return; }
+  const r = R(UI.sel); S.innerHTML = regionPanel(r); bindRegionPanel(r);
+}
+function introPanel() {
+  const threats = myRegions().filter(r => G.armies.some(a => a.region === r.id && atWar('byz', a.owner)));
+  const near = myRegions().filter(r => NEIGH[r.id].some(n => G.armies.some(a => a.region === n.to && atWar('byz', a.owner) && a.units.length >= 3)));
+  return `<h3>Держава ромеев</h3>
+  <p class="small">Нажмите на область, чтобы увидеть её; на флажок войска — чтобы выбрать его и затем нажать область, куда идти.</p>
+  ${threats.length ? `<p class="bad">Враг в наших землях: ${threats.map(r => RNAME[r.id]).join(', ')}</p>` : ''}
+  ${near.length ? `<p class="warn">Вражеские войска у границ: ${near.map(r => RNAME[r.id]).join(', ')}</p>` : ''}
+  <h3>Наши войска</h3>${myArmies().map(a => `<div><button class="small" data-a="${a.id}">⚑ ${esc(a.name)}</button> <span class="small muted">${RNAME[a.region]}, ${fmt(armyMen(a))} чел.</span></div>`).join('') || '<p class="muted">Нет войск.</p>'}
+  <h3>Войны</h3><p class="small">${Object.keys(FACTIONS).filter(f => f !== 'byz' && G.factions[f].war && factionAlive(f)).map(f => `<span class="tag" style="border-color:${FACTIONS[f].color}">${esc(fshort(f))}</span>`).join(' ') || 'Мир со всеми.'}</p>
+  <h3>Последние вести</h3><div class="log small">${G.log.slice(0, 8).map(l => `<div><span class="d">${l.d}</span>${esc(l.t)}</div>`).join('')}</div>`;
+}
+function bindIntro() { $('side').querySelectorAll('[data-a]').forEach(b => b.onclick = () => clickArmy(+b.dataset.a)); }
+function regionPanel(r) {
+  const mine = r.owner === 'byz', gv = governorOf(r.id);
+  const armies = G.armies.filter(a => a.region === r.id);
+  const myHere = armies.filter(a => a.owner === 'byz');
+  const besiegers = armies.filter(a => atWar(a.owner, r.owner));
+  let h = `<h3>${esc(RNAME[r.id])}</h3>
+  <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}</div>
+  <table class="small">
+  <tr><td>Местность</td><td>${TERRAIN_NAMES[r.ter]}</td></tr>
+  ${mine ? `<tr><td>Доход за сезон</td><td>${regionIncome(r).toFixed(1)} (база ${r.wealth})</td></tr>` : `<tr><td>Богатство</td><td>${r.wealth}</td></tr>`}
+  <tr><td>Население</td><td>${fmt(r.pop)} тыс.</td></tr>
+  <tr><td>Гарнизон</td><td>${fmt(r.garrison)} / ${fmt(garCap(r))}</td></tr>
+  <tr><td>Укрепления</td><td>${r.fort} ${'▮'.repeat(r.fort)} (осада ≈ ${siegeTurns(r)} сез.)</td></tr>
+  <tr><td>Настроение</td><td style="color:${moodCol(r.mood)}">${Math.round(r.mood)} ${r.mood < 25 ? '— грозит бунт!' : ''}</td></tr>
+  ${mine ? `<tr><td>Хозяйство</td><td>${r.dev}/5</td></tr><tr><td>Наместник</td><td>${gv ? esc(gv.name) : '<span class="muted">нет</span>'}</td></tr>` : ''}
+  ${r.siege ? `<tr><td class="bad">Осада</td><td class="bad">${r.siege} из ${siegeTurns(r)} сез.</td></tr>` : ''}
+  ${r.devast > 10 ? `<tr><td>Разорение</td><td class="warn">${Math.round(r.devast)}%</td></tr>` : ''}
+  </table>`;
+  if (mine) {
+    h += `<div class="btnrow">
+      <button data-b="fort" ${G.treasury < buildCost(r, 'fort') || r.fort >= (r.id === 'konst' ? 6 : 5) ? 'disabled' : ''}>Укрепить (${buildCost(r, 'fort')})</button>
+      <button data-b="econ" ${G.treasury < buildCost(r, 'econ') || r.dev >= 5 ? 'disabled' : ''}>Хозяйство (${buildCost(r, 'econ')})</button>
+      <button data-b="gar" ${G.treasury < 12 ? 'disabled' : ''}>Гарнизон +200 (12)</button>
+      <button data-b="army" title="Новое войско (10); число войск ограничено числом полководцев + 2">Новое войско</button></div>`;
+  }
+  myHere.forEach(a => { if (atWar('byz', r.owner) && !a.stormed) h += `<div class="btnrow"><button class="main" data-storm="${a.id}">⚔ Штурм силами «${esc(a.name)}»</button></div>`; });
+  if (besiegers.length && mine) h += `<p class="bad small">Город осаждён! Отправьте войско на выручку или ждите: осада длится до ${siegeTurns(r)} сезонов.</p>`;
+  h += `<h3>Войска здесь</h3>` + (armies.map(a => `<div><button class="small" data-a="${a.id}" style="border-color:${FACTIONS[a.owner].color}">⚑ ${esc(a.name)}</button> <span class="small muted">${esc(fshort(a.owner))}, ${armyLabel(a)} чел.</span></div>`).join('') || '<p class="muted small">Нет.</p>');
+  h += `<h3>Соседи</h3><p class="small">${NEIGH[r.id].map(n => `${esc(RNAME[n.to])}${n.t === 'sea' ? ' (море)' : n.t === 'strait' ? ' (пролив)' : ''}`).join(', ')}</p>`;
+  return h;
+}
+function bindRegionPanel(r) {
+  const S = $('side');
+  S.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
+    if (b.dataset.b === 'army') { const a = newArmyAt(r.id); if (!a) toast('Нельзя: не хватает денег или полководцев (войск не больше, чем полководцев + 2).'); else { UI.selArmy = a.id; toast('Войско создано. Наймите в него отряды.'); } }
+    else if (!manualBuild(r, b.dataset.b)) toast('Не хватает денег.');
+    renderAll();
+  });
+  S.querySelectorAll('[data-a]').forEach(b => b.onclick = () => clickArmy(+b.dataset.a));
+  S.querySelectorAll('[data-storm]').forEach(b => b.onclick = async () => { const a = G.armies.find(x => x.id === +b.dataset.storm); if (!a) return; await playerStorm(a); save(); renderAll(); if (G.over) showFinale(); });
+}
+function armyPanel(a) {
+  const mine = a.owner === 'byz', g = genOf(a);
+  let h = `<h3>⚑ ${esc(a.name)}</h3><div class="small">${esc(fname(a.owner))} · ${esc(RNAME[a.region])}</div>`;
+  if (!mine) {
+    h += `<p>Полководец: ${g ? esc(g.name) : 'нет'}</p><p>Численность: ${armyLabel(a)} чел.</p>`;
+    if (scouted(a.owner)) h += `<table class="small">${a.units.map(u => `<tr><td>${UNIT[u.type].icon} ${UNIT[u.type].name}</td><td>${fmt(u.men)}</td></tr>`).join('')}</table>`;
+    else h += `<p class="small muted">Пошлите шпиона на разведку к «${esc(fshort(a.owner))}», чтобы знать точный состав.</p>`;
+    h += `<p class="small">Сила ≈ ${Math.round(armyPower(a))}. Сила наших войск рядом: ${Math.round(myArmies().filter(x => x.region === a.region || NEIGH[a.region].some(n => n.to === x.region)).reduce((s, x) => s + armyPower(x), 0))}</p>`;
+    h += `<div class="btnrow"><button id="bBack">Назад</button></div>`;
+    return h;
+  }
+  const gens = courtHeroes().filter(x => x.role === 'general');
+  h += `<p>Полководец: <select id="selGen"><option value="">— нет —</option>${gens.map(x => `<option value="${x.id}" ${a.gen === x.id ? 'selected' : ''}>${esc(x.name)} (ур. ${x.level})${heroArmy(x) && heroArmy(x) !== a ? ' [в другом войске]' : ''}</option>`).join('')}</select></p>`;
+  if (!a.gen) h += `<p class="small warn">Без полководца войско слабее на 15%.</p>`;
+  h += `<table class="small">${a.units.map((u, i) => `<tr><td>${UNIT[u.type].icon} ${UNIT[u.type].name}</td><td>${fmt(u.men)}/${u.max}</td><td>опыт ${u.xp.toFixed(1)}</td><td><button class="small" data-dis="${i}" title="Распустить отряд">✕</button></td></tr>`).join('')}</table>
+  <p class="small">Всего ${fmt(armyMen(a))} чел., сила ≈ ${Math.round(armyPower(a))}, содержание ${upkeepOf(a).toFixed(1)} за сезон.</p>`;
+  if (canRecruit(a)) h += `<div class="small">Нанять отряд:</div><div class="btnrow">${UTYPES.map(t => `<button class="small" data-rec="${t}" ${G.treasury < recruitCost(t) ? 'disabled' : ''} title="Атака ${UNIT[t].atk}, защита ${UNIT[t].def}, ход ${UNIT[t].spd}${UNIT[t].rng > 1 ? ', стреляет на ' + UNIT[t].rng : ''}; содержание ${UNIT[t].up} за 100 чел.">${UNIT[t].icon} ${UNIT[t].name} (${recruitCost(t)})</button>`).join('')}</div>`;
+  else h += `<p class="small muted">Нанимать можно только в своей области без врагов (не больше 12 отрядов).</p>`;
+  h += `<p class="small">${a.path.length ? 'Поход: ' + a.path.map(x => RNAME[x]).join(' → ') : 'Стоит на месте. Нажмите на область на карте, чтобы отдать приказ идти.'}</p>
+  <div class="btnrow">${a.path.length ? '<button id="bStop">Стоять</button>' : ''}
+  ${atWar('byz', R(a.region).owner) && !a.stormed ? `<button class="main" id="bStorm">⚔ Штурмовать (${RNAME[a.region]})</button>` : ''}
+  ${myArmies().filter(x => x !== a && x.region === a.region).map(x => `<button data-merge="${x.id}">Влить «${esc(x.name)}»</button>`).join('')}
+  <button id="bBack">Готово</button></div>`;
+  if (atWar('byz', R(a.region).owner)) h += `<p class="small">Идёт осада: ${a.siege} из ${siegeTurns(R(a.region))} сезонов. Гарнизон ${fmt(R(a.region).garrison)}, укрепления ${R(a.region).fort}.</p>`;
+  return h;
+}
+function bindArmyPanel(a) {
+  const S = $('side');
+  if ($('bBack')) $('bBack').onclick = () => { UI.selArmy = null; renderAll(); };
+  if ($('selGen')) $('selGen').onchange = e => { const v = +e.target.value; if (!v) { const g = genOf(a); if (g && g.id) unassignGeneral(g); a.gen = null; } else assignGeneral(G.heroes.find(h => h.id === v), a); renderAll(); };
+  S.querySelectorAll('[data-rec]').forEach(b => b.onclick = () => { if (!recruit(a, b.dataset.rec)) toast('Нельзя нанять (деньги, люди или лимит отрядов).'); renderAll(); });
+  S.querySelectorAll('[data-dis]').forEach(b => b.onclick = () => { const u = a.units[+b.dataset.dis]; if (u.type !== 'merc' && R(a.region).owner === 'byz') R(a.region).pop += u.men / 2000; a.units.splice(+b.dataset.dis, 1); if (!a.units.length) { removeArmyQuiet(a); UI.selArmy = null; } renderAll(); });
+  S.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => { const o = G.armies.find(x => x.id === +b.dataset.merge); const room = 12 - a.units.length; a.units.push(...o.units.splice(0, room)); if (!o.units.length) removeArmyQuiet(o); renderAll(); });
+  if ($('bStop')) $('bStop').onclick = () => { a.path = []; renderAll(); };
+  if ($('bStorm')) $('bStorm').onclick = async () => { await playerStorm(a); save(); renderAll(); if (G.over) showFinale(); };
+}
+function removeArmyQuiet(a) { const g = genOf(a); if (g && g.id) unassignGeneral(g); G.armies = G.armies.filter(x => x !== a); }
+
+/* --- двор --- */
+function heroCard(h) {
+  const R0 = ROLES[h.role];
+  const opts = MISSIONS[h.role];
+  const cur = h.mission ? h.mission.type : '';
+  return `<div class="card hero">
+   <div class="hd"><div class="av" title="${R0.name}">${R0.icon}</div><div><b>${esc(h.name)}</b><div class="lv">${R0.name}, ур. ${h.level} · ${h.age} лет</div></div></div>
+   <div class="small muted">${esc(h.desc)}</div>
+   <div class="small">${R0.skills[0]} ${'★'.repeat(h.sk[0])}${'☆'.repeat(5 - h.sk[0])} · ${R0.skills[1]} ${'★'.repeat(h.sk[1])}${'☆'.repeat(5 - h.sk[1])}</div>
+   <div>${h.traits.map(t => `<span class="tag" title="${esc(TRAITS[t])}">${t}</span>`).join('')}</div>
+   <div class="small">Опыт ${Math.round(h.xp)}/${h.level * 60}</div>${bar(h.xp, h.level * 60)}
+   <div class="small">Верность <span style="color:${moodCol(h.loyalty)}">${Math.round(h.loyalty)}</span></div>${bar(h.loyalty, 100, moodCol(h.loyalty))}
+   <div class="small" style="margin-top:4px">Сейчас: <b>${esc(missionText(h))}</b></div>
+   <div class="btnrow"><select data-mt="${h.id}">${opts.map(o => `<option value="${o[0]}" ${o[0] === cur ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+   <select data-mg="${h.id}"></select></div>
+   <div class="btnrow"><button class="small main" data-ms="${h.id}">Поручить</button><button class="small" data-dm="${h.id}">Отпустить</button></div></div>`;
+}
+function missionTargets(h, type) {
+  const kind = (MISSIONS[h.role].find(o => o[0] === type) || [])[2];
+  if (kind === 'army') return myArmies().map(a => [a.id, a.name + ' (' + RNAME[a.region] + ')']);
+  if (kind === 'region') return myRegions().map(r => [r.id, RNAME[r.id]]);
+  if (kind === 'enemyRegion') return Object.values(G.regions).filter(r => r.owner !== 'byz' && NEIGH[r.id].some(n => R(n.to).owner === 'byz')).map(r => [r.id, RNAME[r.id] + ' (' + fshort(r.owner) + ')']);
+  if (kind === 'faction') return Object.keys(FACTIONS).filter(f => f !== 'byz' && factionAlive(f)).map(f => [f, fshort(f) + (G.factions[f].war ? ' (война)' : '')]);
+  if (kind === 'trade') return [['genoa', 'Генуя'], ['venice', 'Венеция'], ['trebizond', 'Трапезунд']];
+  return [];
+}
+function renderCourt() {
+  const V = $('view-court');
+  const court = courtHeroes();
+  const slots = []; for (let s = 0; s < COUNCIL; s++) slots.push(court.find(h => h.slot === s));
+  const captives = G.heroes.filter(h => h.status === 'captive');
+  V.innerHTML = `<h2>Совет императора (${court.length}/${COUNCIL})</h2>
+  <p class="small muted">Назначайте героям поручения. Полководцы водят войска, купцы приносят доход от торговли, наместники управляют областями, священники держат веру, шпионы разведывают и подкупают, дипломаты заключают мир, союзы и браки. Герои растут в уровне, но могут погибнуть, попасть в плен или предать.</p>
+  <div class="grid">${slots.map(h => h ? heroCard(h) : `<div class="card muted">Свободное место в совете</div>`).join('')}</div>
+  <h2>Ищут места при дворе</h2>
+  <div class="grid">${G.candidates.map((h, i) => `<div class="card hero"><div class="hd"><div class="av">${ROLES[h.role].icon}</div><div><b>${esc(h.name)}</b><div class="lv">${ROLES[h.role].name}, ур. ${h.level}${h.hist ? ' · историческое лицо' : ''}</div></div></div>
+     <div class="small muted">${esc(h.desc)}</div><div>${h.traits.map(t => `<span class="tag" title="${esc(TRAITS[t])}">${t}</span>`).join('')}</div>
+     <div class="btnrow"><button class="main" data-hire="${i}" ${court.length >= COUNCIL || G.treasury < hireCost(h) ? 'disabled' : ''}>Принять (${hireCost(h)})</button></div></div>`).join('')}</div>
+  <p class="small muted">Новые кандидаты появляются раз в год. Жалованье: 2 + 0,8×уровень за сезон каждому.</p>
+  ${captives.length ? `<h2>В плену</h2>${captives.map(h => `<div class="card">${esc(h.name)} (${ROLES[h.role].name}) — в плену у «${esc(fshort(h.captor))}». <button data-ransom="${h.id}" ${G.treasury < h.ransom ? 'disabled' : ''}>Выкупить (${h.ransom})</button></div>`).join('')}` : ''}
+  ${G.heroes.some(h => h.status === 'dead' || h.status === 'traitor') ? `<h2>Ушедшие</h2><p class="small">${G.heroes.filter(h => h.status === 'dead' || h.status === 'traitor').map(h => esc(h.name) + (h.status === 'traitor' ? ' (изменник)' : ' †')).join(', ')}</p>` : ''}`;
+  V.querySelectorAll('[data-mt]').forEach(s => {
+    const h = G.heroes.find(x => x.id === +s.dataset.mt);
+    const tg = V.querySelector(`[data-mg="${h.id}"]`);
+    const fill = () => { const list = missionTargets(h, s.value); tg.innerHTML = list.map(([v, n]) => `<option value="${v}" ${h.mission && String(h.mission.target) === String(v) ? 'selected' : ''}>${esc(n)}</option>`).join(''); tg.style.display = list.length ? '' : 'none'; };
+    s.onchange = fill; fill();
+  });
+  V.querySelectorAll('[data-ms]').forEach(b => b.onclick = () => {
+    const h = G.heroes.find(x => x.id === +b.dataset.ms);
+    const type = V.querySelector(`[data-mt="${h.id}"]`).value, tgs = V.querySelector(`[data-mg="${h.id}"]`);
+    const target = tgs.style.display === 'none' ? null : tgs.value;
+    const kind = (MISSIONS[h.role].find(o => o[0] === type) || [])[2];
+    if (kind && !target) { toast('Нет подходящей цели.'); return; }
+    if (type === 'army') { const a = G.armies.find(x => x.id === +target); assignGeneral(h, a); }
+    else if (!setMission(h, type, target)) { toast('Нельзя: не хватает денег, цель занята или условие не выполнено.'); return; }
+    toast(`${h.name}: ${missionText(h)}`); renderAll();
+  });
+  V.querySelectorAll('[data-dm]').forEach(b => b.onclick = () => { const h = G.heroes.find(x => x.id === +b.dataset.dm); if (confirm(`Отпустить ${h.name}?`)) { dismiss(h); renderAll(); } });
+  V.querySelectorAll('[data-hire]').forEach(b => b.onclick = () => { if (!hire(+b.dataset.hire)) toast('Нельзя нанять.'); renderAll(); });
+  V.querySelectorAll('[data-ransom]').forEach(b => b.onclick = () => { const h = G.heroes.find(x => x.id === +b.dataset.ransom); if (G.treasury < h.ransom) return; G.treasury -= h.ransom; if (courtHeroes().length < COUNCIL) { h.status = 'court'; const taken = new Set(courtHeroes().filter(x => x !== h).map(x => x.slot)); for (let s = 0; s < COUNCIL; s++) if (!taken.has(s)) { h.slot = s; break; } log(`${h.name} выкуплен из плена.`); } else { h.status = 'gone'; log(`${h.name} выкуплен, но места в совете нет — он удалился в имение.`); } renderAll(); });
+}
+
+/* --- государство --- */
+function renderState() {
+  const V = $('view-state'), I = computeIncome(), r = ruler();
+  const row = (n, v) => `<tr><td>${n}</td><td class="${v >= 0 ? 'good' : 'bad'}">${sign(v)}</td></tr>`;
+  const relTxt = f => { const F = G.factions[f]; return F.war ? '<span class="bad">война</span>' : F.ally ? '<span class="good">союз</span>' : F.truce ? `перемирие (${F.truce})` : 'мир'; };
+  V.innerHTML = `<h2>Государство</h2><p class="small muted">Здесь — то, что василевс решает сам. У решений долгие последствия: они действуют каждый сезон.</p>
+  <div class="grid">
+  <div class="card"><h3>Казна и налоги</h3>
+    <table class="t small">${row('Области', I.regions)}${row('Таможня Города', I.customs)}${row('Торговля (купцы)', I.trade)}${row('Законы', I.laws)}${row('Войска', I.army)}${row('Флот', I.fleet)}${row('Жалованье двора', I.heroes)}${row('Стройки', I.build)}<tr><td><b>Итого за сезон</b></td><td class="${I.total >= 0 ? 'good' : 'bad'}"><b>${sign(I.total)}</b></td></tr></table>
+    <p class="small">Налоги:</p><div class="btnrow">${Object.entries(TAX).map(([k, t]) => `<button class="small ${G.tax === k ? 'sel' : ''}" data-tax="${k}" title="Доход ×${t.m}, настроение ${sign(t.mood)}">${t.name}</button>`).join('')}</div>
+    <p class="small muted">Высокие налоги быстро дают деньги, но области начинают бунтовать.</p></div>
+  <div class="card"><h3>Монета</h3>
+    <p>Иперпир: <b>${G.coin}</b> каратов золота из 24.</p>${bar(G.coin, 24)}
+    <p class="small">Порча монеты сразу приносит деньги, но бьёт по торговле и таможне (их доход ×${(G.coin / 15).toFixed(2)}), а ниже 12 каратов жители недовольны ростом цен.</p>
+    <div class="btnrow"><button data-coin="down" ${G.coin <= 6 ? 'disabled' : ''}>Испортить (+55, −1 карат)</button><button data-coin="up" ${G.coin >= 18 || G.treasury < 90 ? 'disabled' : ''}>Восстановить (−90)</button></div></div>
+  <div class="card"><h3>Законы и указы</h3>${Object.entries(LAWS).map(([k, l]) => `<div style="margin-bottom:6px"><button class="small ${G.laws[k] ? 'sel' : ''}" data-law="${k}">${G.laws[k] ? '✔' : '✗'} ${l.name}</button><div class="small muted">${l.desc} <i>${l.on}</i></div></div>`).join('')}
+    <p class="small muted">Изменить закон можно раз в год.${G.flags.lawCd > G.turn ? ` Следующее изменение через ${G.flags.lawCd - G.turn} сез.` : ''}</p></div>
+  <div class="card"><h3>Уния с Римом</h3>
+    <p>Положение: <b>${{ none: 'нет переговоров', talks: 'идут переговоры', accepted: 'уния принята', rejected: 'уния отвергнута', repudiated: 'уния расторгнута' }[G.union]}</b></p>
+    <p class="small">Угроза Карла Анжуйского: ${Math.round(G.anjou)}${G.flags.vespers ? ' (миновала после Сицилийской вечерни)' : ''}</p>${bar(G.anjou, 100, 'var(--bad)')}
+    <p class="small muted">Переговоры сдерживают Карла и Запад, но раскалывают Церковь. Принятая уния злит греков во всех областях.</p>
+    <div class="btnrow">${G.union !== 'talks' && G.union !== 'accepted' ? '<button data-un="talks">Начать переговоры</button>' : ''}${G.union === 'talks' ? `<button data-un="accept" ${G.unionProg < 8 ? 'disabled title="Нужен прогресс переговоров (священник на поручении «Переговоры об унии»)"' : ''}>Принять унию (${Math.round(G.unionProg)}/8)</button><button data-un="stop">Прервать</button>` : ''}${G.union === 'accepted' ? '<button data-un="repud">Расторгнуть унию</button>' : ''}</div></div>
+  <div class="card"><h3>Флот</h3>
+    <p>${['Флота нет. Морские пути закрыты, пираты хозяйничают у берегов.', 'Малый флот (расход 18 за сезон).', 'Полный флот (расход 34 за сезон).'][G.fleet]}${G.fleetRebuild ? ` Строится новый флот: ещё ${G.fleetRebuild} сез.` : ''}</p>
+    <p class="small muted">Флот нужен, чтобы перебрасывать войска по морю (пунктир на карте), защищать острова и побережье от пиратов. Андроник II распустил флот около 1285 года — и потом горько об этом пожалел.</p>
+    <div class="btnrow">${G.fleet > 0 ? `<button data-fl="2" ${G.fleet === 2 ? 'disabled' : ''}>Полный</button><button data-fl="1" ${G.fleet === 1 ? 'disabled' : ''}>Малый</button><button data-fl="0">Распустить (+40)</button>` : `<button data-fl="build" ${G.treasury < 150 || G.fleetRebuild ? 'disabled' : ''}>Построить заново (−150, 4 сезона)</button>`}</div></div>
+  <div class="card"><h3>Строительство</h3>
+    <p class="small">Каждый сезон часть дохода откладывается на стройки и тратится по приоритету.</p>
+    <p>Приоритет: <select id="bPrio">${Object.entries(BUILD_PRIO).map(([k, n]) => `<option value="${k}" ${G.build.prio === k ? 'selected' : ''}>${n}</option>`).join('')}</select></p>
+    <p>Доля дохода: <select id="bShare">${[0, 5, 10, 20, 30].map(v => `<option ${G.build.share === v ? 'selected' : ''}>${v}</option>`).join('')}</select>% · накоплено ${Math.round(G.build.fund)}</p></div>
+  <div class="card"><h3>Трон и наследник</h3>
+    <p><b>${esc(r.name)}</b><br><span class="small muted">${esc(r.desc)}</span></p>
+    <p class="small">Война ${r.mar} · Хозяйство ${r.stw} · Дипломатия ${r.dip} · Благочестие ${r.pie}</p>
+    ${r.minor ? `<p class="small">Регентство: <b>${{ kant: 'Иоанн Кантакузин', anna: 'Анна Савойская и Алексей Апокавк', council: 'совет регентов' }[G.regent] || 'не определено'}</b></p>` : `
+    <p class="small">Наследник: ${G.heir.co ? 'коронован соправителем' : 'не коронован'}. Воспитание: <b>${{ none: 'обычное', war: 'военное', books: 'книжное', church: 'церковное' }[G.heir.educ]}</b></p>
+    <div class="btnrow"><button data-heir="co" ${G.heir.co || G.treasury < 40 ? 'disabled' : ''}>Короновать соправителем (−40)</button></div>
+    <div class="btnrow">${['war', 'books', 'church'].map(k => `<button class="small ${G.heir.educ === k ? 'sel' : ''}" data-educ="${k}">${{ war: 'Военное', books: 'Книжное', church: 'Церковное' }[k]} воспитание</button>`).join('')}</div>
+    <p class="small muted">Соправитель укрепляет порядок при смене императора. Воспитание даёт следующему правителю +1 к войне, хозяйству или благочестию.</p>`}</div>
+  <div class="card" style="grid-column:1/-1"><h3>Державы</h3><table class="t small"><tr><th>Держава</th><th>Отношение</th><th>Положение</th><th></th></tr>
+    ${Object.keys(FACTIONS).filter(f => f !== 'byz' && factionAlive(f)).map(f => `<tr><td><span style="color:${FACTIONS[f].color}">■</span> ${esc(fname(f))}${G.factions[f].married ? ' 💍' : ''}</td><td>${Math.round(G.factions[f].rel)}</td><td>${relTxt(f)}</td><td>${!G.factions[f].war && f !== 'rebel' ? `<button class="small" data-war="${f}">Объявить войну</button>` : ''}</td></tr>`).join('')}</table>
+    <p class="small muted">Мир, союзы и браки заключают дипломаты (вкладка «Двор»). Война нарушает перемирие — это бьёт по престижу.</p></div>
+  </div>`;
+  V.querySelectorAll('[data-tax]').forEach(b => b.onclick = () => { G.tax = b.dataset.tax; renderAll(); });
+  V.querySelectorAll('[data-coin]').forEach(b => b.onclick = () => {
+    if (b.dataset.coin === 'down') { G.coin--; G.treasury += 55; G.order -= 3; G.prestige -= 2; G.factions.venice.rel -= 5; G.factions.genoa.rel -= 5; log(`Иперпир испорчен: теперь ${G.coin} каратов.`); }
+    else { G.coin++; G.treasury -= 90; G.order += 2; G.prestige += 3; log(`Монета улучшена: ${G.coin} каратов.`); }
+    normalize(); renderAll();
+  });
+  V.querySelectorAll('[data-law]').forEach(b => b.onclick = () => { if (!toggleLaw(b.dataset.law)) toast('Законы можно менять раз в год.'); renderAll(); });
+  V.querySelectorAll('[data-un]').forEach(b => b.onclick = () => { unionAction(b.dataset.un); renderAll(); });
+  V.querySelectorAll('[data-fl]').forEach(b => b.onclick = () => { fleetAction(b.dataset.fl); renderAll(); });
+  $('bPrio').onchange = e => { G.build.prio = e.target.value; };
+  $('bShare').onchange = e => { G.build.share = +e.target.value; renderAll(); };
+  V.querySelectorAll('[data-heir]').forEach(b => b.onclick = () => { G.treasury -= 40; G.heir.co = true; G.order += 4; log('Наследник коронован соправителем.'); renderAll(); });
+  V.querySelectorAll('[data-educ]').forEach(b => b.onclick = () => { G.heir.educ = b.dataset.educ; renderAll(); });
+  V.querySelectorAll('[data-war]').forEach(b => b.onclick = () => { if (confirm(`Объявить войну: ${fname(b.dataset.war)}?`)) { declareWar(b.dataset.war); renderAll(); } });
+}
+function renderLog() {
+  $('view-log').innerHTML = `<h2>Летопись</h2><div class="log">${G.log.map(l => `<div><span class="d">${l.d}</span>${l.k === 'imp' ? '<b>' + esc(l.t) + '</b>' : esc(l.t)}</div>`).join('')}</div>`;
+}
+
+/* --- окна --- */
+function modal(html) { $('mbox').innerHTML = html; $('modal').classList.remove('hidden'); }
+function closeModal() { $('modal').classList.add('hidden'); }
+eventHook = (ev, opts) => new Promise(res => {
+  renderAll();
+  modal(`<div class="small muted">${dateStr()}</div><h2>${esc(ev.title)}</h2><p>${esc(evText(ev.text))}</p>${ev.note ? `<div class="note">${esc(ev.note)}</div>` : ''}
+   ${opts.map((o, k) => `<button class="opt" data-k="${k}">${esc(o.t)}<span class="h">${esc(evText(o.h) || '')}</span></button>`).join('')}`);
+  $('mbox').querySelectorAll('.opt').forEach(b => b.onclick = () => { closeModal(); res(opts[+b.dataset.k]); });
+});
+function showMenu() {
+  modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
+   <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
+   <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
+   <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
+  $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
+  $('mLoad').onclick = () => { if (load()) { closeModal(); renderAll(); toast('Загружено.'); } else toast('Сохранения нет.'); };
+  $('mAuto').onclick = () => { G.autoBattle = !G.autoBattle; closeModal(); renderAll(); };
+  $('mHelp').onclick = showHelp;
+  $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
+  $('mClose').onclick = closeModal;
+}
+function showHelp() {
+  modal(`<h2>Как играть</h2>
+  <p><b>Цель.</b> Пройти от лета 1261 до 1347 года и встретить Чёрную смерть сильной державой. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
+  <p><b>Ход</b> — один сезон. Отдайте приказы и нажмите «Конец хода». «Год ▶▶» проматывает до четырёх сезонов, но останавливается при опасности.</p>
+  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда по одной области за сезон. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы.</p>
+  <p><b>Осады.</b> Войско во вражеской области осаждает её: через несколько сезонов (зависит от укреплений) гарнизон сдаётся. Можно штурмовать сразу — откроется экран боя.</p>
+  <p><b>Бой.</b> Выберите свой отряд, нажмите светлую клетку, чтобы пойти, или врага с красной рамкой, чтобы атаковать. Лучники стреляют на 3 клетки. Конница с разгона (2+ клетки) бьёт в полтора раза сильнее, но вязнет в лесу и против пехоты в обороне. Холмы и леса защищают. Отряд с низким духом бежит. Можно «Рассчитать автоматически».</p>
+  <p><b>Двор</b> — до 7 героев с поручениями. <b>Государство</b> — налоги, монета, законы, уния, флот, стройки, наследник, войны.</p>
+  <p class="small muted">Клавиши: Enter — конец хода, Esc — снять выбор.</p>
+  <button class="main" onclick="closeModal()">Понятно</button>`);
+}
+function toggleLaw(k) {
+  if ((G.flags.lawCd || 0) > G.turn) return false;
+  G.laws[k] = !G.laws[k]; G.flags.lawCd = G.turn + 4;
+  const on = G.laws[k];
+  if (k === 'pronoia' && on) G.order += 5;
+  if (k === 'monktax' && on) G.church -= 5;
+  if (k === 'judges' && on) G.treasury -= 20;
+  if (k === 'grain') { G.factions.venice.rel += on ? -10 : 5; G.factions.genoa.rel += on ? -10 : 5; }
+  if (k === 'genoapriv' && !on) { G.factions.genoa.rel -= 30; if (G.factions.genoa.rel < -40) declareWar('genoa'); }
+  if (k === 'genoapriv' && on) G.factions.genoa.rel += 15;
+  if (k === 'akritai' && !on) ANATOLIA.forEach(id => { if (own(id)) R(id).mood -= 10; });
+  log(`Указ: «${LAWS[k].name}» ${on ? 'введён' : 'отменён'}.`);
+  normalize(); return true;
+}
+function unionAction(k) {
+  if (k === 'talks') { G.union = 'talks'; G.church -= 5; G.anjou -= 5; log('Начаты переговоры с папой об унии.'); }
+  if (k === 'accept') { G.union = 'accepted'; G.church -= 25; G.order -= 8; G.anjou -= 40; G.prestige += 5; log('Уния с Римом принята.', 'imp'); }
+  if (k === 'stop') { G.union = 'rejected'; G.church += 5; G.anjou += 10; log('Переговоры об унии прерваны.'); }
+  if (k === 'repud') { G.union = 'repudiated'; G.church += 15; G.anjou += 20; log('Уния расторгнута.', 'imp'); }
+  normalize();
+}
+function fleetAction(k) {
+  if (k === 'build') { G.treasury -= 150; G.fleetRebuild = 4; log('На верфях заложены новые корабли.'); return; }
+  const v = +k; if (v === 0) { G.treasury += 40; G.prestige -= 4; log('Флот распущен.', 'imp'); }
+  G.fleet = v;
+}
+function showFinale() {
+  const F = G.final || (G.final = finale());
+  modal(`<h2>${G.over === 'konst' ? 'Город пал' : 'Чёрная смерть, 1347'}</h2>
+   <p style="font-size:22px;color:var(--gold2)">«${esc(F.title)}» — ${F.score} из 100</p>
+   ${F.ep.map(p => `<p>${esc(p)}</p>`).join('')}
+   <table class="t small"><tr><td>Областей к концу</td><td>${F.regs} (больше всего: ${G.stats.peakRegions})</td></tr><tr><td>Побед / поражений</td><td>${G.stats.won} / ${G.stats.lost}</td></tr><tr><td>Казна</td><td>${fmt(G.treasury)}</td></tr><tr><td>Порядок / Церковь / Престиж</td><td>${Math.round(G.order)} / ${Math.round(G.church)} / ${Math.round(G.prestige)}</td></tr><tr><td>Смертность от чумы</td><td>${Math.round(F.mort * 100)}%</td></tr></table>
+   <div class="btnrow"><button class="main" id="fNew">Новая игра</button><button id="fLook">Посмотреть на карту</button></div>`);
+  $('fNew').onclick = () => { closeModal(); startNew(); };
+  $('fLook').onclick = closeModal;
+}
+
+/* --- экран боя --- */
+const BV = { b: null, pk: 'A', sel: null, cs: 40, busy: false, resolve: null, fx: null };
+battleHook = input => new Promise(res => {
+  if (G.autoBattle) { const r = Battle.autoResolve(input); toast(`Битва: ${input.place}. ${r.winner === (input.attacker.player ? 'attacker' : 'defender') ? 'Победа!' : 'Поражение.'}`); res(r); return; }
+  BV.b = Battle.Sim.create(input); BV.pk = input.attacker.player ? 'A' : 'D'; BV.sel = null; BV.resolve = res; BV.fx = null;
+  $('battle').classList.remove('hidden');
+  const cv = $('bcv');
+  const avail = Math.min(window.innerWidth - (window.innerWidth > 760 ? 330 : 20), 18 * 48);
+  BV.cs = clamp(Math.floor(avail / 18), 22, 48);
+  cv.width = 18 * BV.cs; cv.height = 12 * BV.cs;
+  cv.onclick = bvClick;
+  bvRender();
+  if (BV.b.active !== BV.pk) bvAiTurn();
+});
+const TCOL = { g: '#7f9a55', h: '#a8955f', f: '#3f6a35', w: '#3f6f9f', d: '#79a2bb', r: '#6e6a66', s: '#335f8c', W: '#7d7064', G: '#5a3c22', t: '#b8a988' };
+function bvRender() {
+  const b = BV.b, cv = $('bcv'), ctx = cv.getContext('2d'), cs = BV.cs, S = Battle.Sim;
+  for (let y = 0; y < S.H; y++) for (let x = 0; x < S.W; x++) {
+    const c = b.grid[y][x]; ctx.fillStyle = TCOL[c]; ctx.fillRect(x * cs, y * cs, cs, cs);
+    if (c === 'h') { ctx.strokeStyle = 'rgba(80,60,30,.6)'; ctx.beginPath(); ctx.arc(x * cs + cs / 2, y * cs + cs * 0.75, cs * 0.35, Math.PI, 0); ctx.stroke(); }
+    if (c === 'f') { ctx.fillStyle = '#2c5228'; for (let k = 0; k < 3; k++) { ctx.beginPath(); ctx.arc(x * cs + cs * (0.25 + k * 0.25), y * cs + cs * (k % 2 ? 0.35 : 0.65), cs * 0.16, 0, 7); ctx.fill(); } }
+    if (c === 'W') { ctx.fillStyle = '#5d5248'; for (let k = 0; k < 3; k++) ctx.fillRect(x * cs + k * cs / 3, y * cs, cs / 5, cs / 4); }
+    if (c === 'd') { ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.beginPath(); ctx.moveTo(x * cs + 4, y * cs + cs / 2); ctx.lineTo(x * cs + cs - 4, y * cs + cs / 2); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(0,0,0,.08)'; ctx.strokeRect(x * cs, y * cs, cs, cs);
+  }
+  const u0 = BV.sel && b.units.find(u => u.id === BV.sel && !u.out);
+  if (u0 && b.active === BV.pk && !b.over) {
+    for (const [k] of S.reachable(b, u0)) { const [x, y] = k.split(',').map(Number); ctx.fillStyle = 'rgba(255,255,220,.33)'; ctx.fillRect(x * cs + 2, y * cs + 2, cs - 4, cs - 4); }
+  }
+  for (const u of b.units) {
+    if (u.out) continue;
+    const cx = u.x * cs + cs / 2, cy = u.y * cs + cs / 2, rr = cs * 0.38;
+    const col = b.sides[u.side].color || (u.side === 'A' ? '#a33' : '#33a');
+    ctx.fillStyle = col; ctx.strokeStyle = u.id === BV.sel ? '#fff' : (u.side === BV.pk ? '#f3dc95' : '#111'); ctx.lineWidth = u.id === BV.sel ? 3 : 2;
+    ctx.beginPath();
+    if (u.type === 'cav') { ctx.moveTo(cx, cy - rr); ctx.lineTo(cx + rr, cy); ctx.lineTo(cx, cy + rr); ctx.lineTo(cx - rr, cy); ctx.closePath(); }
+    else if (u.type === 'inf') ctx.rect(cx - rr, cy - rr, rr * 2, rr * 2);
+    else if (u.type === 'merc') { for (let k = 0; k < 6; k++) { const a = Math.PI / 3 * k; ctx.lineTo(cx + rr * Math.cos(a), cy + rr * Math.sin(a)); } ctx.closePath(); }
+    else ctx.arc(cx, cy, rr, 0, 7);
+    ctx.fill(); ctx.stroke();
+    if (u.stance === 'defend') { ctx.strokeStyle = '#e8e8ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, rr + 3, 0, 7); ctx.stroke(); }
+    ctx.fillStyle = '#fff'; ctx.font = `${Math.round(cs * 0.4)}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(UNIT[u.type].icon, cx, cy);
+    if (u.gen) { ctx.fillStyle = '#ffd84a'; ctx.font = `${Math.round(cs * 0.3)}px serif`; ctx.fillText('♛', cx + rr * 0.8, cy - rr * 0.8); }
+    ctx.fillStyle = '#300'; ctx.fillRect(cx - rr, cy + rr + 1, rr * 2, 3); ctx.fillStyle = '#5c5'; ctx.fillRect(cx - rr, cy + rr + 1, rr * 2 * u.men / u.start, 3);
+    ctx.fillStyle = '#330'; ctx.fillRect(cx - rr, cy + rr + 4, rr * 2, 2); ctx.fillStyle = '#fd4'; ctx.fillRect(cx - rr, cy + rr + 4, rr * 2 * clamp(u.morale / 100, 0, 1), 2);
+    if (u.side === b.active && b.active === BV.pk && !u.acted) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx - rr * 0.85, cy - rr * 0.85, 3, 0, 7); ctx.fill(); }
+    if (u0 && u.side !== u0.side && S.canAttack(b, u0, u)) { ctx.strokeStyle = '#ff3030'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx, cy, rr + 5, 0, 7); ctx.stroke(); }
+  }
+  if (BV.fx) { const f = BV.fx; ctx.strokeStyle = f.ranged ? 'rgba(255,255,255,.8)' : 'rgba(255,60,40,.9)'; ctx.lineWidth = 3; ctx.setLineDash(f.ranged ? [4, 4] : []); ctx.beginPath(); ctx.moveTo(f.from[0] * cs + cs / 2, f.from[1] * cs + cs / 2); ctx.lineTo(f.to[0] * cs + cs / 2, f.to[1] * cs + cs / 2); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(cs * 0.4)}px sans-serif`; ctx.fillText('−' + f.cas, f.to[0] * cs + cs / 2, f.to[1] * cs + 4); }
+  bvSide();
+}
+function sideSum(b, k) { const l = Battle.Sim.active(b, k); return { men: l.reduce((s, u) => s + u.men, 0), mor: l.length ? Math.round(l.reduce((s, u) => s + u.morale, 0) / l.length) : 0, n: l.length }; }
+function bvSide() {
+  const b = BV.b, S = Battle.Sim, me = BV.pk, en = me === 'A' ? 'D' : 'A';
+  const sm = sideSum(b, me), se = sideSum(b, en);
+  const myTurn = b.active === me && !b.over && !BV.busy;
+  $('btop').innerHTML = `<b style="color:var(--gold2)">⚔ ${esc(b.input.place || 'Битва')}${b.input.storm ? ' — штурм' : ''}</b>
+   <span>Раунд ${Math.min(b.round, S.MAX_ROUNDS)}/${S.MAX_ROUNDS}</span>
+   <span class="${myTurn ? 'good' : 'warn'}">${b.over ? 'Бой окончен' : myTurn ? 'Ваш ход' : 'Ход противника…'}</span>
+   <span style="flex:1"></span>
+   <button id="bvEnd" class="main" ${myTurn ? '' : 'disabled'}>Конец хода</button>
+   <button id="bvInsp" ${myTurn && !b.inspired[me] && b.sides[me].general ? '' : 'disabled'} title="Один раз за бой: +15 к духу всех отрядов">Воодушевить</button>
+   <button id="bvRet" ${b.over ? 'disabled' : ''}>Отступить</button>
+   <button id="bvAuto" ${b.over ? 'disabled' : ''}>Рассчитать автоматически</button>`;
+  const u = BV.sel && b.units.find(x => x.id === BV.sel && !x.out);
+  let h = `<div class="small"><b style="color:${b.sides[me].color}">■ ${esc(b.sides[me].name)}</b> (вы): ${fmt(sm.men)} чел., дух ${sm.mor}${b.sides[me].general ? '<br>Полководец: ' + esc(b.sides[me].general.name) : ''}</div>
+   <div class="small"><b style="color:${b.sides[en].color}">■ ${esc(b.sides[en].name)}</b>: ${fmt(se.men)} чел., дух ${se.mor}${b.sides[en].general ? '<br>Полководец: ' + esc(b.sides[en].general.name) : ''}</div><hr>`;
+  if (b.over) {
+    const R0 = S.result(BV.b); BV.result = BV.result || R0;
+    const won = (BV.result.winner === 'attacker') === (me === 'A');
+    h += `<h2 class="${won ? 'good' : 'bad'}">${won ? 'Победа!' : 'Поражение'}</h2><p class="small">Наши потери: ${fmt(BV.result[me === 'A' ? 'attacker' : 'defender'].lost)}<br>Потери врага: ${fmt(BV.result[me === 'A' ? 'defender' : 'attacker'].lost)}</p><button class="main" id="bvDone">Вернуться на карту</button><hr>`;
+  } else if (u) {
+    const c = b.grid[u.y][u.x];
+    h += `<div><b>${UNIT[u.type].icon} ${UNIT[u.type].name}</b> ${u.side === me ? '' : '(враг)'}${u.gen ? ' ♛' : ''}</div>
+     <div class="small">Люди: ${u.men}/${u.start} · Дух: ${Math.round(u.morale)} · ${u.stance === 'defend' ? 'в обороне' : 'обычный строй'}<br>Клетка: ${Battle.Rules.CELL[c].n} (защита ×${Battle.Rules.CELL[c].def})</div>`;
+    if (u.side === me && myTurn) h += `<div class="btnrow"><button id="bvDef" ${u.acted ? 'disabled' : ''}>Оборона</button><button id="bvWait" ${u.acted ? 'disabled' : ''}>Ждать</button></div><div class="small muted">Светлые клетки — куда можно пойти. Красная рамка — кого можно атаковать.</div>`;
+  } else h += `<p class="small muted">Выберите свой отряд (с золотой рамкой). Белая точка — отряд ещё не ходил.<br>▣ пехота · ♞ конница · ➶ лучники · ✠ наёмники.</p>`;
+  h += `<div id="blog">${b.log.slice(-40).reverse().map(l => `<div>${esc(l)}</div>`).join('')}</div>`;
+  $('bside').innerHTML = h;
+  $('bvEnd').onclick = () => { if (b.active !== me) return; BV.sel = null; S.endSide(b); bvRender(); if (!b.over) bvAiTurn(); };
+  $('bvInsp').onclick = () => { S.inspire(b, me); bvRender(); };
+  $('bvRet').onclick = () => { if (confirm('Отступить с поля боя? Бой будет проигран.')) { S.retreat(b, me); bvRender(); } };
+  $('bvAuto').onclick = () => { BV.busy = false; BV.result = Battle.finishAuto(b); bvRender(); };
+  if ($('bvDone')) $('bvDone').onclick = () => { $('battle').classList.add('hidden'); const r = BV.result || S.result(b); BV.result = null; BV.b = null; BV.resolve(r); };
+  if ($('bvDef')) $('bvDef').onclick = () => { S.defend(b, u); BV.sel = null; bvRender(); };
+  if ($('bvWait')) $('bvWait').onclick = () => { S.wait(b, u); BV.sel = null; bvRender(); };
+}
+function bvClick(e) {
+  const b = BV.b; if (!b || b.over || b.active !== BV.pk || BV.busy) { if (b) { const r = e.target.getBoundingClientRect(); const x = Math.floor((e.clientX - r.left) / r.width * 18), y = Math.floor((e.clientY - r.top) / r.height * 12); const u = Battle.Sim.unitAt(b, x, y); if (u) { BV.sel = u.id; bvRender(); } } return; }
+  const S = Battle.Sim, r = e.target.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * 18), y = Math.floor((e.clientY - r.top) / r.height * 12);
+  const t = S.unitAt(b, x, y), u = BV.sel && b.units.find(q => q.id === BV.sel && !q.out);
+  BV.fx = null;
+  if (t && t.side === BV.pk) { BV.sel = t.id; bvRender(); return; }
+  if (u && u.side === BV.pk) {
+    if (t && t.side !== BV.pk) {
+      if (S.canAttack(b, u, t)) { S.attack(b, u, t); BV.fx = b.lastFx; BV.sel = u.out ? null : u.id; bvRender(); return; }
+      // подойти и ударить
+      if (!u.moved && u.type !== 'arch') {
+        let best = null, bc = 1e9;
+        for (const [k, c] of S.reachable(b, u)) { const [X, Y] = k.split(',').map(Number); if (Math.max(Math.abs(X - t.x), Math.abs(Y - t.y)) === 1 && c < bc) { bc = c; best = [X, Y]; } }
+        if (best) { S.move(b, u, best[0], best[1]); S.attack(b, u, t); BV.fx = b.lastFx; bvRender(); return; }
+      }
+      toast('Не достать: подойдите ближе.'); BV.sel = t.id; bvRender(); return;
+    }
+    if (!t && S.move(b, u, x, y)) { bvRender(); return; }
+  }
+  BV.sel = t ? t.id : null; bvRender();
+}
+function bvAiTurn() {
+  const b = BV.b, side = b.active, S = Battle.Sim;
+  BV.busy = true; bvRender();
+  const step = () => {
+    if (!BV.b || b.over || b.active !== side || !BV.busy) { BV.busy = false; if (BV.b) bvRender(); return; }
+    const act = Battle.AI.next(b, side);
+    if (!act) { S.endSide(b); BV.busy = false; BV.fx = null; bvRender(); if (!b.over && b.active !== BV.pk) bvAiTurn(); return; }
+    Battle.AI.apply(b, side, act);
+    BV.fx = (act.kind === 'attack' || act.kind === 'moveAttack') ? b.lastFx : null;
+    bvRender();
+    setTimeout(step, act.kind === 'wait' || act.kind === 'defend' ? 60 : 280);
+  };
+  setTimeout(step, 300);
+}
+
+/* ---------- 6. СОХРАНЕНИЕ И ЗАПУСК ---------- */
+const SAVE_KEY = 'polychronion_save_v2';
+function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) { } }
+function load() { try { const s = localStorage.getItem(SAVE_KEY); if (!s) return false; G = JSON.parse(s); return true; } catch (e) { return false; } }
+function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
+function enterGame() { $('title').classList.add('hidden'); $('app').classList.remove('hidden'); if (!regionGrid) initMap(); else fitMap(); UI.sel = null; UI.selArmy = null; UI.tab = 'map'; ['map', 'court', 'state', 'log'].forEach(k => $('view-' + k).classList.toggle('hidden', k !== 'map')); renderAll(); if (G.over) showFinale(); }
+function startNew() { newGame(); save(); enterGame(); setTimeout(() => showHelp(), 300); }
+function boot() {
+  $('titlebtns').innerHTML = `<button class="main" id="tNew">Новая игра</button>${hasSave() ? '<button id="tCont">Продолжить</button>' : ''}`;
+  $('tNew').onclick = startNew;
+  if ($('tCont')) $('tCont').onclick = () => { if (load()) enterGame(); };
+  document.addEventListener('keydown', e => {
+    if (!G || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden') || $('app').classList.contains('hidden')) return;
+    if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); doEndTurn(1); }
+    if (e.key === 'Escape') { UI.sel = null; UI.selArmy = null; renderAll(); }
+  });
+}
+if (!HEADLESS) boot();
