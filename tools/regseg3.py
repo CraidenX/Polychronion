@@ -51,6 +51,16 @@ for ids in bycol.values():
     for a in ids:
         for b in ids:
             if a < b and gap(comps[a], comps[b]) < 220: reg_d.u(a, b)
+# явные объединения регионов (merge.json): одноцветные куски у заданных точек — один регион
+_fit = json.load(open(SP + 'umap/fit.json')); _k = W / _fit.get('W', 2000)
+def _px(lon, lat): return int((lon - _fit['p'][0]) * _fit['p'][1] * _k), int((_fit['p'][2] - lat) * _fit['p'][3] * _k)
+if os.path.exists(SP + 'merge.json'):
+    for m in json.load(open(SP + 'merge.json')):
+        cs = []
+        for lon, lat in m['points']:
+            x, y = _px(lon, lat); win = lab[max(0, y - 40):y + 41, max(0, x - 40):x + 41]; v = win[win >= 0]
+            if len(v): cs.append(int(np.bincount(v).argmax()))
+        for a2 in cs[1:]: reg_d.u(cs[0], a2)
 groups = {}
 for i in range(N): groups.setdefault(reg_d.f(i), []).append(i)
 regs = []; c2r = -np.ones(N, np.int32)

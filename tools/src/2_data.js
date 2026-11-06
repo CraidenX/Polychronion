@@ -44,6 +44,7 @@ const FACTIONS = {
   candar:   { name: 'Бейлик Чобаногуллары', short: 'Чобаногуллары', color: '#d9b860', rel: -20, aggr: .5, mix: [2, 5, 3, 0] },
   kefalonia:{ name: 'Пфальцграфство Кефалония (Орсини)', short: 'Кефалония', color: '#d3acb9', rel: 0, aggr: .1, mix: [3, 2, 1, 2] },
   naxos:    { name: 'Герцогство Архипелаг (Санудо)', short: 'Архипелаг', color: '#18327b', rel: -10, aggr: .1, mix: [3, 1, 2, 2] },
+  tinos:    { name: 'Сеньория Тинос и Андрос (Гизи)', short: 'Тинос', color: '#728cd5', rel: -10, aggr: .05, mix: [2, 1, 2, 2] },
   salona:   { name: 'Сеньория Салона', short: 'Салона', color: '#4cff00', rel: -10, aggr: .05, mix: [2, 3, 1, 1] },
   bodonitsa:{ name: 'Маркграфство Бодоница', short: 'Бодоница', color: '#fc70d6', rel: -10, aggr: .05, mix: [2, 3, 1, 1] },
   papal:    { name: 'Папская область (Беневенто)', short: 'Папство', color: '#fff8d6', rel: 0, aggr: 0, mix: [3, 2, 1, 1] },

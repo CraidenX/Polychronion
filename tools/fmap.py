@@ -3,7 +3,7 @@ FMAP = {
  (37,112,104): 'trebizond', (188,174,50): 'achaea', (255,216,0): 'genoa',  # точный цвет на карте держав -> держава игры
  (114,6,80): 'byz', (144,182,161): 'seljuk', (86,76,163): 'sicily', (103,97,122): 'bulgaria', (165,39,62): 'serbia',
  (40,164,157): 'trebizond', (157,111,186): 'epirus', (128,153,104): 'thessaly', (255,213,51): 'achaea', (255,215,124): 'candar',
- (58,150,178): 'karaman', (56,101,153): 'georgia', (54,100,153): 'venice', (24,50,123): 'naxos', (114,140,213): 'venice', (248,195,36): 'genoa', (54,167,156): 'venice',
+ (58,150,178): 'karaman', (56,101,153): 'georgia', (54,100,153): 'venice', (24,50,123): 'naxos', (114,140,213): 'tinos', (248,195,36): 'genoa', (54,167,156): 'venice',
  (247,123,0): 'cyprus', (113,112,96): 'athens', (76,255,0): 'salona', (252,112,214): 'bodonitsa', (211,172,185): 'kefalonia',
  (56,181,110): 'menteshe', (232,48,2): 'ilkhan', (36,132,247): 'georgia', (28,141,255): 'georgia', (127,71,77): 'hungary', (81,45,49): 'hungary',
  (240,167,130): 'bosnia', (168,113,87): 'vlachs', (188,166,93): 'mamluk', (214,140,190): 'armenia', (0,181,135): 'shirvan', (38,127,0): 'makri', (160,82,128): 'venice', (247,249,253): 'outremer', (249,250,251): 'outremer', (249,249,249): 'outremer', (236,236,236): 'outremer', (248,250,254): 'outremer', (237,237,237): 'outremer', (246,248,252): 'outremer', (163,191,243): 'antioch', (249,163,79): 'antioch', (50,100,0): 'mamluk', (186,109,85): 'mamluk', (87,105,150): 'mamluk', (127,106,0): 'mamluk', (254,199,50): 'mamluk', (127,183,14): 'mamluk', (255,248,214): 'papal',
@@ -12,5 +12,5 @@ FMAP = {
 def faction_of(col, lon, lat):
     f = FMAP.get(tuple(col))
     if f is None: return None
-    if tuple(col) == (54, 167, 156) and lat > 42: f = 'trebizond'   # тот же бирюзовый в Крыму — Трапезунд (Перати́я)
+    if tuple(col) == (54, 167, 156) and lat > 42 and lon > 30: f = 'trebizond'   # тот же бирюзовый в Крыму — Трапезунд (Перати́я)
     return f
