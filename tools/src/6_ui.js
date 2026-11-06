@@ -125,6 +125,7 @@ function initMap() {
   cv.style.width = M.W + 'px'; cv.style.height = M.H + 'px';
   const sv = $('selsvg'); sv.setAttribute('viewBox', `0 0 ${M.W} ${M.H}`); sv.setAttribute('width', M.W); sv.setAttribute('height', M.H);
   $('mapinner').style.width = M.W + 'px'; $('mapinner').style.height = M.H + 'px';
+  $('mapover').style.width = M.W + 'px'; $('mapover').style.height = M.H + 'px';
   $('mapimg').width = M.W; $('mapimg').height = M.H;
   $('mapimg').onerror = () => { $('mapimg').style.display = 'none'; $('mapinner').style.background = '#808080'; };
   if (M.provs) {
@@ -165,11 +166,13 @@ function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clie
 function applyView() {
   const z = UI.view.z, k = MAPINFO.W / 4000; // подписи держат читаемый размер при отдалении
   $('mapinner').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${z})`;
+  $('mapover').style.transform = $('mapinner').style.transform;
   $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.3, 2.2).toFixed(3));
   $('markers').classList.toggle('far', z * k < 0.5 && REGION_DEFS.length > 40);
   $('markers').classList.toggle('near', z * k >= 1.5);
   $('mapinner').classList.toggle('far', z * k < 0.55);
   const tp = $('ptip'); if (tp) tp.classList.add('hidden');
+  if (typeof scheduleVector === 'function') scheduleVector();
 }
 function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), MAXZ); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
 function setupPanZoom() {
@@ -335,32 +338,60 @@ function regionOutline(ri) {
   if (x1 < 0) return '';
   return SEL_CACHE[key] = traceOutline(x => x > 0 && pr[x] === ri, x0, y0, x1, y1);
 }
-/* --- векторные границы (borders.js): берег, провинции, регионы, державы --- */
-const VEC = { segs: null, key: '' };
+/* --- векторные границы (borders.js): рисуются на холсте размером с экран, только видимая часть ---
+   (раньше это был один огромный SVG — при сильном приближении браузер его не тянул) */
+const VEC = { segs: null, key: '', cls: null, raf: 0 };
 function vecInit() {
   if (typeof BORDERS === 'undefined' || VEC.segs) return;
   VEC.segs = BORDERS.map(b => {
-    let x = 0, y = 0, d = '';
-    for (let i = 2; i < b.length; i += 2) { x += b[i]; y += b[i + 1]; d += (i === 2 ? 'M' : 'L') + (x / 2) + ' ' + (y / 2); }
-    return [b[0], b[1], d];
+    const n = (b.length - 2) / 2, pts = new Float32Array(n * 2); let x = 0, y = 0, x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (let i = 0; i < n; i++) { x += b[2 + i * 2]; y += b[3 + i * 2]; const X = x / 2, Y = y / 2; pts[i * 2] = X; pts[i * 2 + 1] = Y; if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y; }
+    return { a: b[0], b: b[1], pts, x0, y0, x1, y1 };
   });
-  const sv = $('vecsvg'); sv.setAttribute('viewBox', `0 0 ${MAPINFO.W} ${MAPINFO.H}`); sv.setAttribute('width', MAPINFO.W); sv.setAttribute('height', MAPINFO.H);
 }
-function drawVector() {
-  vecInit(); if (!VEC.segs) return;
+function vecClassify() {
   const P = MAPINFO.provs, own = k => (G.prov && G.prov[k]) || (P[k][0] >= 0 ? R(ID_BY_IDX[P[k][0]]).owner : null);
   const key = (G.prov || []).join(',');
-  if (key === VEC.key) return; VEC.key = key;
-  let c = '', p = '', r = '', s = '';
-  for (const [a, b, d] of VEC.segs) {
-    if (a === -1 || b === -1) { c += d; if (a >= 0 && b >= 0) s += d; continue; }
-    if (a < 0 || b < 0) { r += d; continue; }
-    if (own(a) !== own(b)) s += d;
-    else if (P[a][0] !== P[b][0]) r += d;
-    else p += d;
+  if (key === VEC.key && VEC.cls) return; VEC.key = key;
+  const c = [], p = [], r = [], s = [];
+  for (const g of VEC.segs) {
+    const a = g.a, b = g.b;
+    if (a === -1 || b === -1) { c.push(g); continue; }
+    if (a < 0 || b < 0) { r.push(g); continue; }
+    if (own(a) !== own(b)) s.push(g); else if (P[a][0] !== P[b][0]) r.push(g); else p.push(g);
   }
-  $('vecsvg').innerHTML = `<path class="vc" d="${c}"/><path class="vp" d="${p}"/><path class="vr" d="${r}"/><path class="vs2" d="${s}"/><path class="vs" d="${s}"/>`;
+  VEC.cls = { c, p, r, s };
 }
+function drawVector() { vecInit(); if (!VEC.segs || !G) return; vecClassify(); paintVector(); }
+function paintVector() {
+  if (!VEC.cls) return;
+  const cv = $('veccv'), wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
+  const ctx = cv.getContext('2d'), v = UI.view, z = v.z;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+  // видимая область в координатах карты
+  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + W / z, vy1 = vy0 + H / z;
+  const far = z * MAPINFO.W / 4000 < 0.55;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const stroke = (list, color, px) => {
+    ctx.beginPath();
+    for (const g of list) {
+      if (g.x1 < vx0 || g.x0 > vx1 || g.y1 < vy0 || g.y0 > vy1) continue;
+      const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]);
+    }
+    ctx.strokeStyle = color; ctx.lineWidth = px / z; ctx.stroke();
+  };
+  const C = VEC.cls;
+  stroke(C.c, 'rgba(150,170,190,.28)', 3.2);   // мягкий прибой
+  stroke(C.c, 'rgba(14,22,38,1)', 1.9);
+  if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
+  stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
+  stroke(C.s, 'rgba(255,236,190,.35)', 5);
+  stroke(C.s, 'rgba(12,4,12,.95)', 2.8);
+}
+function scheduleVector() { if (VEC.raf) return; VEC.raf = requestAnimationFrame(() => { VEC.raf = 0; paintVector(); }); }
 function drawSelection() {
   const svg = $('selsvg'); if (!svg) return;
   const ri = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
