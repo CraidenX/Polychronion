@@ -90,26 +90,32 @@ ANCH = json.load(open(SP + 'islands.json')) if os.path.exists(SP + 'islands.json
 # каждая точка острова — ровно к одному, ближайшему куску суши
 anchor_comp = {}
 for an in ANCH:
-    ax, ay = int((an['lon'] - l0) * fsx), int((p0 - an['lat']) * fsy)
-    y0, y1, x0, x1 = max(0, ay - 30), min(H, ay + 31), max(0, ax - 30), min(W, ax + 31)
-    win = lab[y0:y1, x0:x1]; ys, xs = np.nonzero(win >= 0)
-    if not len(ys): continue
-    d = (ys + y0 - ay) ** 2 + (xs + x0 - ax) ** 2; j = int(np.argmin(d))
-    anchor_comp[int(win[ys[j], xs[j]])] = an['name']
+    for lon_, lat_ in (an.get('points') or [[an['lon'], an['lat']]]):   # группа островов = несколько точек одной провинции
+        ax, ay = int((lon_ - l0) * fsx), int((p0 - lat_) * fsy)
+        y0, y1, x0, x1 = max(0, ay - 30), min(H, ay + 31), max(0, ax - 30), min(W, ax + 31)
+        win = lab[y0:y1, x0:x1]; ys, xs = np.nonzero(win >= 0)
+        if not len(ys): continue
+        d = (ys + y0 - ay) ** 2 + (xs + x0 - ax) ** 2; j = int(np.argmin(d))
+        anchor_comp[int(win[ys[j], xs[j]])] = an['name']
 def piece_has_anchor(ids):
     for i in ids:
         if i in anchor_comp: return anchor_comp[i]
     return None
+anchor_prov = {}
 attach = []   # мелкие острова: присоединяются к ближайшей провинции своего региона
 for root, ids in pieces.items():
     area = sum(comps[i]['n'] for i in ids); r = int(c2r[ids[0]])
     anc = piece_has_anchor(ids) if area < BIG_ISLAND else None
+    if anc and area < BIG_ISLAND and anc in anchor_prov:      # ещё один остров той же группы
+        for i in ids: c2p[i] = anchor_prov[anc]; provs[anchor_prov[anc]]['comps'].append(i)
+        continue
     if area >= BIG_ISLAND or anc:
         made = []
         for i in ids:
             if comps[i]['n'] >= CRUMB or anc:
                 if anc and made: c2p[i] = made[0]; provs[made[0]]['comps'].append(i); continue
                 c2p[i] = len(provs); provs.append({'region': r, 'comps': [i], 'anchor': anc}); made.append(c2p[i])
+                if anc: anchor_prov[anc] = c2p[i]
         if not made:
             c2p[ids[0]] = len(provs); provs.append({'region': r, 'comps': [ids[0]], 'anchor': anc}); made = [c2p[ids[0]]]
         for i in ids:
