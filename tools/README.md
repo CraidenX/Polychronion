@@ -12,7 +12,6 @@
 3. `python3 mkgen2.py` — игровые области, владельцы (таблица `FMAP`), связи, названия регионов из `names.json` → `gen.json`, `mapinfo3.json`.
 4. `python3 mkprov.py ..` — `../ids.png` (номер провинции в цвете пикселя, вполовину разрешения) и список провинций.
 5. `python3 mkmap3.py ..` — фон `../map.jpg` (текстуры: зерно суши, глубина моря, объём гор); затем `python3 mkvec.py ..` — векторные границы `../borders.js`.
-   (бывш.) `python3 mkmap3.py ..` — фон `../map.png` в исходном размере (заливки держав убраны, линии сохранены).
 6. `python3 build.py ../index.html mapinfo3.json gen.json` — сборка игры.
 7. `node sim.js 4 smart` — автоматические партии для проверки.
 
