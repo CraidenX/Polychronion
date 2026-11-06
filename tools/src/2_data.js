@@ -72,9 +72,9 @@ const FACTIONS = {
   kerak:    { name: 'Эмират Керак (Айюбиды)', short: 'Керак', color: '#167c7b', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
   theodoro: { name: 'Готия (Феодоро)', short: 'Феодоро', color: '#4f7c6b', rel: 20, aggr: .05, mix: [3, 2, 2, 0], greek: true },
   kacic:    { name: 'Омиш (Качичи)', short: 'Омиш', color: '#009652', rel: 0, aggr: .1, mix: [3, 1, 2, 1] },
-  nizari:   { name: 'Низариты Сирии', short: 'Низариты', color: '#326400', rel: 0, aggr: .05, mix: [3, 1, 2, 1] },
-  shuf:     { name: 'Друзы Шуфа', short: 'Шуф', color: '#dddd87', rel: 0, aggr: .05, mix: [2, 3, 1, 2] },
-  sidon:    { name: 'Сидон (тамплиеры)', short: 'Сидон', color: '#2b440f', rel: 0, aggr: .05, mix: [2, 3, 1, 2] },
+  nizari:   { name: 'Низариты', short: 'Низариты', color: '#326400', rel: 0, aggr: .05, mix: [3, 1, 2, 1] },
+  gibelet:  { name: 'Сеньория Джебейль', short: 'Джебейль', house: 'Эмбриако', color: '#dddd87', rel: 0, aggr: .05, mix: [2, 3, 1, 2] },
+  shuf:     { name: 'Друзы Шуфа', short: 'Шуф', color: '#2b440f', rel: 0, aggr: .05, mix: [2, 3, 1, 2] },
   frankopan:{ name: 'Графство Крк', short: 'Крк', house: 'Франкопаны', color: '#0063be', rel: 0, aggr: .05, mix: [3, 2, 1, 1] },
   ragusa:   { name: 'Рагузская республика', short: 'Рагуза', color: '#c4669e', rel: 10, aggr: .02, mix: [3, 1, 2, 2], trade: true },
   split:    { name: 'Община Полица', short: 'Полица', lord: 'kacic', color: '#4800ff', rel: 0, aggr: .02, mix: [3, 1, 2, 1] },
@@ -90,7 +90,7 @@ const FACTIONS = {
   homs:     { name: 'Эмират Хомс', short: 'Хомс', house: 'Айюбиды', lord: 'mamluk', color: '#00f2d1', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
   hama:     { name: 'Эмират Хама', short: 'Хама', house: 'Айюбиды', lord: 'mamluk', color: '#ba6d55', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
   kilis:    { name: 'Эмират Килис', short: 'Килис', color: '#ba6900', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
-  hisnkayfa:{ name: 'Эмират Хисн-Кайфа', short: 'Хисн-Кайфа', house: 'Айюбиды', color: '#7fb70e', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
+  hisnkayfa:{ name: 'Эмират Хасанкейф', short: 'Хасанкейф', house: 'Айюбиды', color: '#7fb70e', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
   rebel:    { name: 'Мятежники', short: 'Мятежники', color: '#555055', rel: -80, aggr: .55, mix: [5, 2, 3, 1], greek: true },
 };
 // [ид, имя, владелец, доход, население(тыс.), укрепления, гарнизон, настроение, местность]
