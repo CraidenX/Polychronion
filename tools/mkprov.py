@@ -24,7 +24,7 @@ for i, p in enumerate(provs):
     gi = rid2gi.get(p['region'])
     plist.append({'gi': gi, 'n': p['n'], 'cx': p['cx'], 'cy': p['cy']})
 # запасные регионы — по одной провинции на регион
-S = 2; H2, W2 = (H0 + 1) // S, (W0 + 1) // S
+S = 1; H2, W2 = H0, W0   # карта провинций в полном разрешении
 ids = np.zeros((H2, W2), np.int32)
 small = pl[::S, ::S]
 ids[small >= 0] = small[small >= 0] + 1

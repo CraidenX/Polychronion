@@ -164,7 +164,7 @@ function minZoom() { const w = $('mapwrap').clientWidth || 800, h = $('mapwrap')
 function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clientHeight, v = UI.view; const mw = MAPINFO.W * v.z, mh = MAPINFO.H * v.z; v.x = mw < w ? (w - mw) / 2 : clamp(v.x, w - mw, 0); v.y = mh < h ? (h - mh) / 2 : clamp(v.y, h - mh, 0); }
 function applyView() {
   const z = UI.view.z, k = MAPINFO.W / 4000; // подписи держат читаемый размер при отдалении
-  $('mapover').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${z})`;
+
   $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.3, 2.2).toFixed(3));
   $('markers').classList.toggle('far', z * k < 0.5 && REGION_DEFS.length > 40);
   $('markers').classList.toggle('near', z * k >= 1.5);
@@ -255,24 +255,19 @@ function drawOverlay() {
   const NP = (MAPINFO.provs || []).length;
   const pOwn = new Int16Array(NP + 1).fill(-1), pCol = new Array(NP + 1);
   for (let k = 0; k < NP; k++) { const o = (G.prov && G.prov[k]) || (MAPINFO.provs[k][0] >= 0 ? R(ID_BY_IDX[MAPINFO.provs[k][0]]).owner : null); if (!o) continue; pOwn[k + 1] = oi(o); pCol[k + 1] = hex(o); }
+  PIX.pCol = pCol; PIX.pOwn = pOwn; PIX.vtKey = '';
   if (PIX.ids) {
-    // попиксельно: заливка владельца, толстые границы между державами, выделение региона и провинции
-    const w = PIX.w, h = PIX.h, ids = PIX.ids, pr = PIX.provReg;
-    if (!PIX.buf) PIX.buf = ctx.createImageData(w, h);
+    // раскраска для отдалённого вида: вполовину разрешения (выборка каждого второго пикселя карты провинций)
+    const tw = cv.width, th = cv.height, W = PIX.w, ids = PIX.ids, pr = PIX.provReg, st = W / tw;
+    if (!PIX.buf || PIX.buf.width !== tw) PIX.buf = ctx.createImageData(tw, th);
     const d = PIX.buf.data; d.fill(0);
-    const sp = UI.selProv != null ? UI.selProv + 1 : -1;
-    for (let y = 0; y < h; y++) {
-      const row = y * w;
-      for (let x = 0; x < w; x++) {
-        const i = row + x, v = ids[i]; if (!v) continue;
-        const g = pr[v]; if (g < 0 || pOwn[v] < 0) continue;
-        const c = pCol[v], o = i * 4;
-        const al = PIX.mtn && PIX.mtn[i] ? 55 : 125;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = al;
-        // соседи справа и снизу
-        const vr = x + 1 < w ? ids[i + 1] : 0, vd = y + 1 < h ? ids[i + w] : 0;
-        const orr = -1, od = -1;
-        if (false) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
+    for (let y = 0; y < th; y++) {
+      const sy = Math.min(PIX.h - 1, Math.floor(y * st)) * W;
+      for (let x = 0; x < tw; x++) {
+        const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
+        if (pr[v] < 0 || pOwn[v] < 0) continue;
+        const c = pCol[v], o = (y * tw + x) * 4;
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = PIX.mtn && PIX.mtn[i] ? 55 : 125;
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -380,13 +375,14 @@ function paintVector() {
   if (!W || !H) return;
   if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
   const ctx = cv.getContext('2d'), v = UI.view, z = v.z, M = MAPINFO;
+  $('mapover').style.transform = `translate(${v.x}px,${v.y}px) scale(${z})`;   // подписи — в том же кадре, что и карта
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#011f49'; ctx.fillRect(0, 0, cv.width, cv.height);
   // видимая область в координатах карты
   const vx0 = Math.max(0, -v.x / z), vy0 = Math.max(0, -v.y / z), vx1 = Math.min(M.W, (W - v.x) / z), vy1 = Math.min(M.H, (H - v.y) / z);
   if (vx1 <= vx0 || vy1 <= vy0) return;
   const toS = (x, y) => [(v.x + x * z) * dpr, (v.y + y * z) * dpr];
   const [dx0, dy0] = toS(vx0, vy0), [dx1, dy1] = toS(vx1, vy1);
-  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = z > 1.5 ? 'medium' : 'high';
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = z < 1 ? 'high' : 'low';   // при увеличении качество фильтра не видно, а время стоит
   // фон: только видимый кусок картинки
   let img = $('mapimg');
   if (img && img.complete && img.naturalWidth && !PIX.noImg) {
@@ -397,13 +393,25 @@ function paintVector() {
     const k = (img.naturalWidth || img.width) / M.W;
     ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
-  // раскраска держав (внеэкранный холст вполовину разрешения)
-  if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
+  // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
+  if (PIX.ids && PIX.pCol && z >= 1.1) {
+    const X0 = Math.floor(vx0), Y0 = Math.floor(vy0), X1 = Math.min(PIX.w, Math.ceil(vx1)), Y1 = Math.min(PIX.h, Math.ceil(vy1));
+    const vw = X1 - X0, vh = Y1 - Y0, key = X0 + ',' + Y0 + ',' + vw + ',' + vh;
+    if (!PIX.vt) PIX.vt = document.createElement('canvas');
+    if (PIX.vtKey !== key) {
+      const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
+      const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = mt && mt[i] ? 55 : 125; } }
+      vc.putImageData(im, 0, 0); PIX.vtKey = key;
+    }
+    const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
+    ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
+  } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   // границы
   const moving = performance.now() - (UI.lastMove || 0) < 140;
-  if (VEC.cls && (moving || z < 0.6) && vecCache()) {
+  if (VEC.cls && (z < 0.6 || (moving && z < 1.1)) && vecCache()) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const t = VEC.cache, k = t.width / M.W;
     ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
