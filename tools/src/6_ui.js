@@ -270,7 +270,7 @@ function drawOverlay() {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
         if (pr[v] < 0 || pOwn[v] < 0) continue;
         const c = pCol[v], o = (y * tw + x) * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (PIX.mtn && PIX.mtn[i] ? 55 : 125);
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (PIX.mtn && PIX.mtn[i] ? 90 : 190);
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -349,14 +349,14 @@ function vecClassify() {
   const P = MAPINFO.provs, own = k => (G.prov && G.prov[k]) || (P[k][0] >= 0 ? R(ID_BY_IDX[P[k][0]]).owner : null);
   const key = (G.prov || []).join(',');
   if (key === VEC.key && VEC.cls) return; VEC.key = key;
-  const c = [], p = [], r = [], s = [];
+  const c = [], p = [], r = [], s = [], e = [];
   for (const g of VEC.segs) {
     const a = g.a, b = g.b;
     if (a === -1 || b === -1) { c.push(g); continue; }
-    if (a < 0 || b < 0) { r.push(g); continue; }
+    if (a < 0 || b < 0) { e.push(g); continue; }
     if (own(a) !== own(b)) s.push(g); else if (P[a][0] !== P[b][0]) r.push(g); else p.push(g);
   }
-  VEC.cls = { c, p, r, s };
+  VEC.cls = { c, p, r, s, e };
   VEC.cache = null;   // картинку границ пересоберём при следующей отрисовке
 }
 // готовая картинка всех границ (вполовину разрешения): ею карта рисуется, пока её двигают, и на отдалении
@@ -368,7 +368,7 @@ function vecCache() {
   const st = (list, color, px) => { ctx.beginPath(); for (const g of list) { const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]); } ctx.strokeStyle = color; ctx.lineWidth = px / s; ctx.stroke(); };
   const C = VEC.cls;
   st(C.c, 'rgba(14,22,38,1)', 1.2); st(C.p, 'rgba(255,255,255,.35)', 0.6); st(C.r, 'rgba(40,28,40,.75)', 0.9);
-  st(C.s, 'rgba(12,4,12,.95)', 1.4);
+  st(C.e, 'rgba(18,12,18,.95)', 1.4); st(C.s, 'rgba(12,4,12,.95)', 1.4);
   return VEC.cache = cv;
 }
 function drawVector() { vecInit(); if (VEC.segs && G) vecClassify(); paintVector(); }
@@ -404,7 +404,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (mt && mt[i] ? 55 : 125); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (mt && mt[i] ? 90 : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
@@ -435,6 +435,7 @@ function paintVector() {
     stroke(C.c, 'rgba(14,22,38,1)', 1.9);
     if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
     stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
+    stroke(C.e, 'rgba(18,12,18,.95)', 2.2);
     stroke(C.s, 'rgba(12,4,12,.95)', 2.6);
   }
   if (G) paintSelection(ctx, z);

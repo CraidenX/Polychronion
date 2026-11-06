@@ -11,11 +11,20 @@ pl = np.load(SP + 'umap/pl.npy').astype(np.int32)
 H, W = pl.shape
 POL = sorted(glob.glob(SP + '../source/*political*.png'))[0]
 P = np.asarray(Image.open(POL).convert('RGB')).astype(np.int32)
-sea = ((P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]) == 0x001F48
+KK = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
+sea = KK == 0x001F48
+LINE = np.isin(KK, [0xDFDFDF, 0x262626, 0x000020, 0x404040, 0xFFFFFF])   # только линии и игровые горы, не серый фон за краем зоны
 # реки и прочие незакрашенные пиксели суши — к соседней провинции (чтобы не было «берегов» по рекам)
 L = pl.copy()
+lab0 = pl >= 0
+def near(dy, dx):
+    r = np.zeros_like(lab0)
+    for d in range(1, 4): r |= np.roll(np.roll(lab0, dy * d, 0), dx * d, 1)
+    return r
+ENCL = (near(0, 1) & near(0, -1)) | (near(1, 0) & near(-1, 0))   # линия зажата провинциями с двух сторон
+LINE &= ENCL
 for _ in range(10):
-    hole = (L < 0) & ~sea
+    hole = (L < 0) & ~sea & LINE
     if not hole.any(): break
     for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
         nb = np.roll(np.roll(L, dy, 0), dx, 1)
