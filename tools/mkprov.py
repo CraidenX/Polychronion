@@ -76,7 +76,7 @@ mt = np.load(SP + 'umap/mt.npy')
 # владелец каждой провинции — цвет державы, занимающий большую часть её площади
 exec(open(SP + 'fmap.py').read())
 kP = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
-OVERC = [0x808080, 0x001F48, 0x000020, 0x262626, 0x000000, 0xDFDFDF, 0x81817F, 0x5E5E5E, 0x404040, 0xFFFFFF]
+OVERC = [0x808080, 0x001F48, 0x000020, 0x262626, 0x000000, 0xDFDFDF, 0x81817F, 0x5E5E5E, 0x404040, 0xFFFFFF, 0x5D5D60, 0x82827C, 0x828280, 0x80807E, 0x82827D, 0x81817F, 0x82827F, 0x82827E, 0x9F9F9F, 0x6C6C6C, 0x070707, 0x88888C]
 selp = (pl >= 0) & ~np.isin(kP, OVERC)
 keyp = pl[selp].astype(np.int64) * (1 << 24) + kP[selp]
 uu, cc = np.unique(keyp, return_counts=True)
@@ -110,5 +110,13 @@ json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
 cntr = Counter(p['gi'] for p in plist if not p.get('fallback'))
 rep = {'out_of_range': [[gen['regions'][g][1], n] for g, n in sorted(cntr.items(), key=lambda t: t[1]) if n < 4 or n > 10], 'mixed': report_mixed}
 json.dump(rep, open(SP + 'report.json', 'w'), ensure_ascii=False, indent=1)
+# список для аудита
+with open(SP + 'provinces.md', 'w') as f:
+    f.write('# Регионы и провинции\n\nСписок для проверки. Формат: регион (держава, число провинций): провинции.\n\n')
+    regs_order = sorted(set(p['gi'] for p in plist if p['gi'] is not None), key=lambda g: gen['regions'][g][1])
+    for g in regs_order:
+        ps = [p for p in plist if p['gi'] == g]
+        d = gen['regions'][g]; flag = '' if 4 <= len(ps) <= 10 else ' ⚠'
+        f.write(f"- **{d[1]}** ({d[2]}, {len(ps)}){flag}: " + ', '.join(p['name'] + (f" [{p['own']}]" if p.get('own') and p['own'] != d[2] else '') for p in ps) + '\n')
 print('регионы вне 4–10:', rep['out_of_range']); print('спорные провинции:', report_mixed)
 print('provinces', len(plist), 'ids.png', W2, H2, os.path.getsize(OUT + '/ids.png'))

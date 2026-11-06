@@ -55,6 +55,7 @@ const FACTIONS = {
   outremer: { name: 'Иерусалимское королевство (Акра)', short: 'Крестоносцы', color: '#f7f9fd', rel: 0, aggr: .05, mix: [2, 3, 1, 3] },
   antioch:  { name: 'Антиохия и Триполи', short: 'Антиохия', color: '#a3bff3', rel: 0, aggr: .05, mix: [2, 3, 1, 3] },
   ilkhan:   { name: 'Ильханат', short: 'Ильханы', color: '#e83002', rel: 0, aggr: .1, mix: [1, 6, 4, 0] },
+  shirvan:  { name: 'Ширваншахи', short: 'Ширван', color: '#00b587', rel: 0, aggr: .05, mix: [3, 4, 2, 0] },
   karaman:  { name: 'Караманиды', short: 'Караман', color: '#3a96b2', rel: -10, aggr: .3, mix: [2, 5, 3, 0] },
   sicily:   { name: 'Сицилийское королевство', short: 'Сицилия', color: '#5a4fb0', rel: 0, aggr: .05, mix: [3, 3, 2, 2] },
   cyprus:   { name: 'Кипрское королевство', short: 'Кипр', color: '#e88a20', rel: 0, aggr: .05, mix: [3, 3, 2, 2] },
