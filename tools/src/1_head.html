@@ -56,6 +56,20 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
   padding:1px 5px;border-radius:5px;border:2px solid #1a1010;color:#fff;text-shadow:0 0 2px #000;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,.5)}
 .ar.mine{border-color:#f3dc95}
 .ar.sela{outline:3px solid #fff}
+#maploading{position:absolute;inset:0;z-index:8;background:#0e0a14;display:flex;align-items:center;justify-content:center}
+#maploading.done{display:none}
+.lbox{width:min(320px,80%);text-align:center;color:var(--gold)}
+.lbar{height:8px;border:1px solid var(--gold);border-radius:4px;margin:10px 0 6px;overflow:hidden}
+.lfill{height:100%;width:0;background:var(--gold);transition:width .15s}
+.ltxt{font-size:12px;opacity:.8}
+#tload{margin-top:14px;width:min(280px,80vw);margin-left:auto;margin-right:auto;font-size:12px;opacity:.85;text-align:center}
+#tload.done{display:none}
+#msearchbox{position:absolute;left:10px;top:10px;z-index:6;width:min(260px,60%)}
+#msearch{width:100%;box-sizing:border-box;padding:6px 9px;border-radius:6px;border:1px solid var(--gold);background:rgba(20,12,24,.92);color:#eee;font:inherit;font-size:14px}
+#msres{margin-top:3px;background:rgba(20,12,24,.96);border:1px solid var(--gold);border-radius:6px;max-height:320px;overflow:auto}
+#msres div{padding:5px 9px;cursor:pointer;font-size:13px}
+#msres div:hover,#msres div.on{background:rgba(212,175,55,.2)}
+#msres .k{opacity:.6;font-size:11px}
 #zoombtns{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:5}
 #zoombtns button{width:36px;height:36px;padding:0;font-size:20px}
 #side{width:340px;max-width:45%;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:10px}
@@ -111,6 +125,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
     <div class="muted">1261 — 1347. От возвращения Константинополя до Чёрной смерти</div>
     <p>Вы — василевс ромеев. Город снова ваш, но вокруг — латиняне, болгары, сербы, сельджуки, а за горизонтом ждёт Карл Анжуйский. Через восемьдесят шесть лет придёт чума. Что останется от державы к тому дню?</p>
     <div id="titlebtns"></div>
+    <div id="tload"><div class="lbar"><div class="lfill" id="tfill"></div></div><span id="ttxt">Загрузка карты…</span></div>
     <p class="small muted">Один ход — один сезон. Карта: перетаскивайте мышью, колесо — масштаб. Сохранение — в браузере.</p>
   </div>
 </div>
@@ -120,8 +135,8 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
   <div id="main">
     <div id="view-map" class="view">
       <div id="mapwrap">
-        <div id="mapinner" class="hidden"><img id="mapimg" src="map.jpg" alt="Карта"></div>
-        <canvas id="veccv"></canvas><div id="mapover"><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
+        <div id="mapinner" class="hidden"><img id="mapimg" alt="Карта"></div>
+        <canvas id="veccv"></canvas><div id="mapover"><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="maploading"><div class="lbox"><div>Загрузка карты…</div><div class="lbar"><div class="lfill"></div></div><div class="ltxt"></div></div></div><div id="msearchbox"><input id="msearch" type="search" placeholder="Найти регион, провинцию…" autocomplete="off"><div id="msres" class="hidden"></div></div><div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
       </div>
       <div id="side"></div>
     </div>

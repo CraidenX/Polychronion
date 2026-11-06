@@ -2,15 +2,17 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 90 };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 205, sborder: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
-try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; } catch (e) { }
+try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; } catch (e) { }
+// граница держав: чёрная, красная или без неё (настройка в меню)
+const SBORDER = { black: 'rgba(12,4,12,.95)', red: 'rgba(205,22,22,.95)', none: null };
 function toast(t) { const d = document.createElement('div'); d.textContent = t; $('toast').appendChild(d); setTimeout(() => d.remove(), 4200); while ($('toast').children.length > 4) $('toast').firstChild.remove(); }
 function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${clamp(v / max * 100, 0, 100)}%;${col ? 'background:' + col : ''}"></i></div>`; }
 function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
 function moodCol(m) { return m > 60 ? 'var(--good)' : m > 35 ? 'var(--warn)' : 'var(--bad)'; }
 
-function renderAll() { if (!G) return; syncProv(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); SELP.key = ''; drawVector(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
+function renderAll() { if (!G) return; syncProv(); applyNames(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); SELP.key = ''; drawVector(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
 
 function renderTop() {
   const I = computeIncome();
@@ -104,6 +106,90 @@ const SFX = (() => {
 })();
 if (!HEADLESS) document.addEventListener('click', e => { if (e.target.closest && e.target.closest('button') && !e.target.closest('.nosfx')) SFX.play('click'); }, true);
 
+/* --- заранее загружаем карту (с самого титульного экрана), со шкалой загрузки --- */
+const PRE = { got: {}, total: { img: 1600000, ids: 450000 }, p: null, ready: false, imgOk: false };
+function prefetch(url, key) {
+  if (typeof fetch === 'undefined' || location.protocol === 'file:') return Promise.resolve(url);
+  return fetch(url).then(r => {
+    if (!r.ok || !r.body) return url;
+    const len = +r.headers.get('content-length'); if (len) PRE.total[key] = len;
+    const rd = r.body.getReader(), parts = []; let got = 0;
+    const pump = () => rd.read().then(({ done, value }) => {
+      if (done) { PRE.got[key] = PRE.total[key] = got; loadProgress(); return URL.createObjectURL(new Blob(parts)); }
+      parts.push(value); got += value.length; PRE.got[key] = got; loadProgress(); return pump();
+    });
+    return pump();
+  }).catch(() => url);
+}
+function loadProgress() {
+  if (HEADLESS) return;
+  const got = (PRE.got.img || 0) + (PRE.got.ids || 0), tot = PRE.total.img + PRE.total.ids;
+  const pct = Math.min(100, Math.round(got / tot * 100)), done = PRE.ready && PRE.imgOk;
+  const txt = got >= tot ? 'Подготовка карты…' : `Загрузка карты: ${pct}%`;
+  const tf = document.getElementById('tfill'); if (tf) tf.style.width = pct + '%';
+  const tt = document.getElementById('ttxt'); if (tt) tt.textContent = got >= tot ? 'Карта загружена' : txt;
+  if (got >= tot && document.getElementById('tload')) document.getElementById('tload').classList.add('done');
+  const ml = document.getElementById('maploading');
+  if (ml) { ml.querySelector('.lfill').style.width = pct + '%'; ml.querySelector('.ltxt').textContent = txt; ml.classList.toggle('done', done); }
+}
+if (!HEADLESS) PRE.p = { img: prefetch('map.jpg', 'img'), ids: prefetch('ids.png', 'ids') };
+
+/* --- названия: базовые, свои (переименованные игроком) и динамические (зависят от хозяина) --- */
+let BASE_RNAME = null, BASE_PNAME = null;
+// группа державы для динамических названий: '*greek', '*turk', '*latin' и т. п. (см. DYN_NAMES в данных)
+function nameGroup(f) { const F = FACTIONS[f] || {}; return F.greek ? 'greek' : (['seljuk', 'rum_east', 'osman', 'germiyan', 'menteshe', 'denizli', 'aydin', 'karasi', 'candar', 'karaman', 'mengujek'].includes(f) ? 'turk' : ''); }
+function dynName(e, owner) { return e ? (e[owner] || e['*' + nameGroup(owner)] || null) : null; }
+function applyNames() {
+  if (!BASE_RNAME) { BASE_RNAME = Object.assign({}, RNAME); BASE_PNAME = (MAPINFO.provs || []).map(p => p[4]); }
+  if (!G.names) G.names = { r: {}, p: {} };
+  const DN = typeof DYN_NAMES !== 'undefined' ? DYN_NAMES : { regions: {}, provs: {} };
+  for (const id in G.regions) RNAME[id] = G.names.r[id] || dynName(DN.regions[id], G.regions[id].owner) || BASE_RNAME[id];
+  for (const k in ALIAS) RNAME[k] = RNAME[ALIAS[k]];
+  if (MAPINFO.provs) MAPINFO.provs.forEach((p, k) => { p[4] = G.names.p[k] || dynName(DN.provs[k] || DN.provs[BASE_PNAME[k]], G.prov && G.prov[k]) || BASE_PNAME[k]; });
+}
+function renameAsk(kind, key) {
+  if (key == null) return;
+  const cur = kind === 'r' ? RNAME[key] : MAPINFO.provs[key][4], base = kind === 'r' ? BASE_RNAME[key] : BASE_PNAME[key];
+  const v = prompt(`Новое название ${kind === 'r' ? 'региона' : 'провинции'} (пусто — вернуть «${base}»):`, cur);
+  if (v === null) return;
+  const t = v.trim().slice(0, 60);
+  if (t && t !== base) G.names[kind][key] = t; else delete G.names[kind][key];
+  renderAll(); toast(t && t !== base ? `Переименовано: «${t}».` : `Возвращено название «${base}».`);
+}
+// свои названия — в файл (его можно прислать автору карты, чтобы названия вошли в игру)
+function exportNames() {
+  applyNames();
+  const out = { regions: Object.keys(G.names.r).map(id => ({ id, base: BASE_RNAME[id], name: G.names.r[id] })), provinces: Object.keys(G.names.p).map(k => ({ i: +k, base: BASE_PNAME[k], name: G.names.p[k] })) };
+  if (!out.regions.length && !out.provinces.length) { toast('Вы ещё ничего не переименовали.'); return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' })); a.download = 'polychronion-names.json'; a.click();
+}
+
+/* --- поиск по карте: регионы, провинции, земли за краем карты --- */
+function searchMap(q) {
+  q = q.trim().toLowerCase(); if (q.length < 2) return [];
+  const res = [], M = MAPINFO;
+  (ID_BY_IDX || []).forEach(id => { if (RNAME[id] && RNAME[id].toLowerCase().includes(q)) res.push({ t: 'Регион', n: RNAME[id], go: () => focusOn(M.pos[id], () => { UI.selOuter = -1; UI.selProv = null; clickRegion(id); }) }); });
+  (M.provs || []).forEach((p, k) => { if (p[0] >= 0 && p[4].toLowerCase().includes(q)) res.push({ t: 'Провинция · ' + RNAME[ID_BY_IDX[p[0]]], n: p[4], go: () => focusOn([p[1], p[2]], () => { UI.selOuter = -1; UI.selProv = k; clickRegion(ID_BY_IDX[p[0]]); }) }); });
+  (M.outer || []).forEach((o, i) => { if (o[0].toLowerCase().includes(q)) res.push({ t: 'За пределами карты', n: o[0], go: () => focusOn([o[1], o[2]], () => { UI.sel = null; UI.selArmy = null; UI.selOuter = i; renderAll(); }) }); });
+  const starts = r => r.n.toLowerCase().startsWith(q) ? 0 : 1;
+  return res.sort((a, b) => starts(a) - starts(b) || (a.t[0] === 'Р' ? -1 : 1) - (b.t[0] === 'Р' ? -1 : 1)).slice(0, 14);
+}
+function focusOn(pt, then) {
+  if (!pt) { then(); return; }
+  const w = $('mapwrap').clientWidth, h = $('mapwrap').clientHeight, z = Math.max(UI.view.z, 1.4);
+  UI.view.z = z; UI.view.x = w / 2 - pt[0] * z; UI.view.y = h / 2 - pt[1] * z; clampView(); applyView(); then();
+}
+function setupSearch() {
+  const inp = $('msearch'), box = $('msres'); let list = [], on = 0;
+  const show = () => { box.innerHTML = list.map((r, i) => `<div data-i="${i}" class="${i === on ? 'on' : ''}">${esc(r.n)} <span class="k">${esc(r.t)}</span></div>`).join('') || '<div class="k">Ничего не найдено</div>'; box.classList.toggle('hidden', inp.value.trim().length < 2); };
+  const pickI = i => { const r = list[i]; if (!r) return; box.classList.add('hidden'); inp.blur(); SFX.play('select'); r.go(); };
+  inp.addEventListener('input', () => { list = searchMap(inp.value); on = 0; show(); });
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'ArrowDown') { on = Math.min(list.length - 1, on + 1); show(); e.preventDefault(); } else if (e.key === 'ArrowUp') { on = Math.max(0, on - 1); show(); e.preventDefault(); } else if (e.key === 'Enter') pickI(on); else if (e.key === 'Escape') { box.classList.add('hidden'); inp.blur(); } });
+  box.addEventListener('pointerdown', e => { const d = e.target.closest('[data-i]'); if (d) { e.preventDefault(); pickI(+d.dataset.i); } });
+  ['pointerdown', 'wheel'].forEach(ev => $('msearchbox').addEventListener(ev, e => e.stopPropagation()));
+  inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 150));
+}
+
 /* --- карта --- */
 let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
 // Попиксельная карта провинций: ids.png (номер провинции в цвете пикселя). Если браузер не даёт прочитать
@@ -127,8 +213,9 @@ function initMap() {
   $('mapinner').style.width = M.W + 'px'; $('mapinner').style.height = M.H + 'px';
   $('mapover').style.width = M.W + 'px'; $('mapover').style.height = M.H + 'px';
   $('mapimg').width = M.W; $('mapimg').height = M.H;
-  $('mapimg').onload = () => { PIX.bgHalf = null; scheduleVector(); };
-  $('mapimg').onerror = () => { PIX.noImg = true; scheduleVector(); };
+  $('mapimg').onload = () => { PIX.bgHalf = null; PRE.imgOk = true; loadProgress(); scheduleVector(); };
+  $('mapimg').onerror = () => { PIX.noImg = true; PRE.imgOk = true; loadProgress(); scheduleVector(); };
+  PRE.p.img.then(u => { $('mapimg').src = u; });
   if (M.provs) {
     PIX.provReg = new Int16Array(M.provs.length + 1).fill(-1);
     M.provs.forEach((p, k) => PIX.provReg[k + 1] = p[0]);
@@ -148,13 +235,14 @@ function initMap() {
         for (let y = 0; y < im.height; y++) for (let x = 0; x < im.width; x++) { const v = ids[y * im.width + x]; if (!v) continue; const o = v * 4; if (x < bb[o]) bb[o] = x; if (y < bb[o + 1]) bb[o + 1] = y; if (x > bb[o + 2]) bb[o + 2] = x; if (y > bb[o + 3]) bb[o + 3] = y; }
         PIX.bb = bb;
         cv.width = PIX.w; cv.height = PIX.h; PIX.buf = null;
+        PRE.ready = true; loadProgress();
         if (G) renderAll();
       } catch (e) { PIX.idsFailed = true; if (G) renderAll(); /* файл открыт с диска: работает запасная сетка */ }
     };
     im.onerror = () => { PIX.idsFailed = true; if (G) renderAll(); };
-    im.src = 'ids.png';
+    PRE.p.ids.then(u => { im.src = u; });
   }
-  setupPanZoom();
+  setupPanZoom(); setupSearch(); loadProgress();
   fitMap();
 }
 function fitMap() {
@@ -284,6 +372,7 @@ function drawOverlay() {
   for (let k = 0; k < NP; k++) { const o = (G.prov && G.prov[k]) || (MAPINFO.provs[k][0] >= 0 ? R(ID_BY_IDX[MAPINFO.provs[k][0]]).owner : null); if (!o) continue; pOwn[k + 1] = oi(o); pCol[k + 1] = hex(o); }
   const pFree = new Uint8Array(NP + 1);
   for (let k = 0; k < NP; k++) if (G.prov && G.prov[k] === 'free') { pFree[k + 1] = 1; pCol[k + 1] = [40, 40, 40]; }
+  PIX.pColD = pCol.map(c => c && [c[0] * 0.5 | 0, c[1] * 0.5 | 0, c[2] * 0.5 | 0]);
   PIX.pCol = pCol; PIX.pOwn = pOwn; PIX.pFree = pFree; PIX.vtKey = '';
   if (PIX.ids) {
     // раскраска для отдалённого вида: вполовину разрешения (выборка каждого второго пикселя карты провинций)
@@ -295,8 +384,8 @@ function drawOverlay() {
       for (let x = 0; x < tw; x++) {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
         if (pr[v] < 0 || pOwn[v] < 0) continue;
-        const c = pCol[v], o = (y * tw + x) * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (PIX.mtn && PIX.mtn[i] ? UI.ridgeA : 190);
+        const m = PIX.mtn && PIX.mtn[i] && !pFree[v], c = m ? PIX.pColD[v] : pCol[v], o = (y * tw + x) * 4;
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? UI.ridgeA : 190);
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -394,7 +483,7 @@ function vecCache() {
   const st = (list, color, px) => { ctx.beginPath(); for (const g of list) { const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]); } ctx.strokeStyle = color; ctx.lineWidth = px / s; ctx.stroke(); };
   const C = VEC.cls;
   st(C.c, 'rgba(14,22,38,1)', 1.2); st(C.p, 'rgba(255,255,255,.35)', 0.6); st(C.r, 'rgba(40,28,40,.75)', 0.9);
-  st(C.e, 'rgba(18,12,18,.95)', 1.4); st(C.s, 'rgba(12,4,12,.95)', 1.4);
+  st(C.e, 'rgba(18,12,18,.95)', 1.4); if (SBORDER[UI.sborder]) st(C.s, SBORDER[UI.sborder], 1.4);
   return VEC.cache = cv;
 }
 function drawVector() { vecInit(); if (VEC.segs && G) vecClassify(); paintVector(); }
@@ -430,7 +519,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (mt && mt[i] ? UI.ridgeA : 190); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = m ? PIX.pColD[v] : pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? UI.ridgeA : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
@@ -462,7 +551,7 @@ function paintVector() {
     if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
     stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
     stroke(C.e, 'rgba(18,12,18,.95)', 2.2);
-    stroke(C.s, 'rgba(12,4,12,.95)', 2.6);
+    if (SBORDER[UI.sborder]) stroke(C.s, SBORDER[UI.sborder], 2.6);
   }
   if (G) paintSelection(ctx, z);
 }
@@ -560,11 +649,11 @@ function regionPanel(r) {
   if (UI.selProv != null && M.provs && M.provs[UI.selProv] && M.provs[UI.selProv][0] === ri) {
     const p = M.provs[UI.selProv], sh = p[3] / area;
     const po = G.prov && G.prov[UI.selProv];
-    ph = `<div class="card" style="margin:0 0 8px;padding:8px"><div class="small muted">Провинция</div><b>${esc(p[4])}</b>
+    ph = `<div class="card" style="margin:0 0 8px;padding:8px"><div class="small muted">Провинция</div><b>${esc(p[4])}</b> <button class="small" id="rnP" title="Переименовать провинцию">✎</button>
       ${po ? `<div style="margin:3px 0"><span style="color:${FACTIONS[po].color};font-size:18px">■</span> <b>${esc(fname(po))}</b>${po !== r.owner ? ' <span class="small warn">(не хозяин региона)</span>' : ''}</div>` : ''}
-      <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}% — непроходимы для войск<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
+      <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}%<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
   }
-  let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
+  let h = ph + `<h3>${esc(RNAME[r.id])} <button class="small" id="rnR" title="Переименовать регион">✎</button></h3>
   <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}${FACTIONS[r.owner].house ? ` <span class="muted">· дом: ${esc(FACTIONS[r.owner].house)}</span>` : ''}</div>
   <table class="small">
   <tr><td>Местность</td><td>${TERRAIN_NAMES[r.ter]}</td></tr>
@@ -594,6 +683,8 @@ function regionPanel(r) {
 }
 function bindRegionPanel(r) {
   const S = $('side');
+  if ($('rnR')) $('rnR').onclick = () => renameAsk('r', r.id);
+  if ($('rnP')) $('rnP').onclick = () => renameAsk('p', UI.selProv);
   S.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
     if (b.dataset.b === 'army') { const a = newArmyAt(r.id); if (!a) toast('Нельзя: не хватает денег или полководцев (войск не больше, чем полководцев + 2).'); else { UI.selArmy = a.id; toast('Войско создано. Наймите в него отряды.'); } }
     else if (!manualBuild(r, b.dataset.b)) { toast('Не хватает денег.'); SFX.play('error'); } else SFX.play('coin');
@@ -777,13 +868,17 @@ function showMenu() {
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA ? 'Хребты: в цвет владельца (сделать своего цвета)' : 'Хребты: своего цвета (красить в цвет владельца)'}</button>
+   <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
+   <button id="mNames">Скачать мои названия (файл)</button>
    <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
   $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
   $('mLoad').onclick = () => { if (load()) { closeModal(); renderAll(); toast('Загружено.'); } else toast('Сохранения нет.'); };
   $('mAuto').onclick = () => { G.autoBattle = !G.autoBattle; closeModal(); renderAll(); };
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 90; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
+  $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
+  $('mNames').onclick = exportNames;
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 205; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;

@@ -67,7 +67,7 @@ function newGame() {
     regions: {}, factions: {}, armies: [], heroes: [], candidates: [], captives: [],
     aiwars: [], nextId: 1, log: [], flags: {}, fired: {}, anjou: 0,
     stats: { won: 0, lost: 0, gained: 0, lostR: 0, peakRegions: 0 },
-    lastIncome: {}, autoBattle: false, over: false, fnames: {}, fshort: {},
+    lastIncome: {}, autoBattle: false, over: false, fnames: {}, fshort: {}, names: { r: {}, p: {} },
   };
   REGION_DEFS.forEach(([id, nm, owner, w, pop, fort, gar, mood, ter]) => {
     G.regions[id] = { id, owner, wealth: w, pop, fort, garrison: gar, mood, ter, dev: 0, siege: 0, devast: 0 };
