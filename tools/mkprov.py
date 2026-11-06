@@ -62,15 +62,20 @@ for i, p in enumerate(plist):
     yy2, xx2 = deep(np.pad(sub, 1)) - 1
     p['x'], p['y'] = int((x0 + xx2) * S), int((y0 + yy2) * S)
 # названия провинций: ближайший город из справочника (в пределах 0,2°), иначе «Регион, часть N»
+RENAME = json.load(open(SP + 'rename.json')); OLDN = {}
 used = set(); cnt = {}
 for i, p in enumerate(plist):
-    if i < len(provs) and provs[i].get('anchor'): p['name'] = provs[i]['anchor']; used.add(p['name']); continue
+    if i < len(provs) and provs[i].get('anchor'):
+        an = provs[i]['anchor']
+        if an in RENAME['provinces']: OLDN[RENAME['provinces'][an]] = an; an = RENAME['provinces'][an]
+        p['name'] = an; used.add(an); continue
     lon, lat = l0 + p['x'] / sx, p0 - p['y'] / sy
     rn = gen['regions'][p['gi']][1] if p['gi'] is not None else '—'
     best = sorted(GAZ, key=lambda g: (g[1] - lon) ** 2 + (g[2] - lat) ** 2)
     nm = next((g[0] for g in best[:3] if (g[1] - lon) ** 2 + (g[2] - lat) ** 2 < 0.2 ** 2 and g[0] not in used), None)
     if nm is None:
         cnt[rn] = cnt.get(rn, 0) + 1; nm = f'{rn}, земля {cnt[rn]}'
+    if nm in RENAME['provinces']: OLDN[RENAME['provinces'][nm]] = nm; nm = RENAME['provinces'][nm]
     used.add(nm); p['name'] = nm
 mt = np.load(SP + 'umap/mt.npy')
 # владелец каждой провинции — цвет державы, занимающий большую часть её площади
@@ -118,7 +123,7 @@ olines = (KP_ == 0) | (np.isin(KP_, [0x262626, 0x404040]) & ~mt_out)
 oland = (ids == 0) & ~sea & (KP_ != 0x000020)
 seg, _ = nd.label(oland & ~olines)
 lab_by_seg = {}
-for i, (n, x, y, d) in enumerate(OUTER): lab_by_seg.setdefault(int(seg[y, x]), []).append(i)
+for i, o in enumerate(OUTER): lab_by_seg.setdefault(int(seg[o[2], o[1]]), []).append(i)
 oid = np.full(ids.shape, -1, np.int32)
 yy_, xx_ = np.nonzero(oland)
 segv = seg[yy_, xx_]
@@ -135,7 +140,7 @@ if miss.any():
     _, (iy, ix) = nd.distance_transform_edt(oid < 0, return_indices=True)
     oid[miss] = oid[iy[miss], ix[miss]]
 img[..., 2][oland] = (100 + np.clip(oid[oland], 0, 55)).astype(np.uint8)
-mi['outer'] = [[n, x, y, d] for n, x, y, d in OUTER]
+mi['outer'] = [o[:4] for o in OUTER]
 # доля гор в каждой провинции
 plf = pl.ravel(); mtf = mt.ravel(); sel = plf >= 0
 mcount = np.bincount(plf[sel], weights=mtf[sel].astype(np.float64), minlength=len(provs))
@@ -144,6 +149,15 @@ for i, p in enumerate(plist):
 Image.fromarray(img).save(OUT + '/ids.png', optimize=True)
 mi['provs'] = [[p['gi'] if p['gi'] is not None else -1, p['x'], p['y'], p['n'], p['name'], p.get('mt', 0), p.get('own')] for p in plist]
 mi['idsScale'] = S
+# старые названия (для поиска): новое -> старое
+for e in json.load(open(SP + 'names.json')):
+    if e.get('old'): OLDN[e['name']] = e['old']
+for e in json.load(open(SP + 'islands.json')):
+    if e.get('old'): OLDN[e['name']] = e['old']
+for o in OUTER:
+    if len(o) > 4: OLDN[o[0]] = o[4]
+mi['oldnames'] = OLDN
+mi['passes'] = [[q[0], q[1], q[4], q[5], q[6], q[7]] for q in json.load(open(SP + 'umap/passes.json'))] if os.path.exists(SP + 'umap/passes.json') else []
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
 cntr = Counter(p['gi'] for p in plist if not p.get('fallback') and p['gi'] is not None)
 rep = {'out_of_range': [[gen['regions'][g][1], n] for g, n in sorted(cntr.items(), key=lambda t: t[1]) if n < 4 or n > 10], 'mixed': report_mixed}

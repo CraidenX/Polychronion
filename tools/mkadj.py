@@ -55,13 +55,16 @@ for i, sl in enumerate(nd.find_objects(glab), 1):
     two = [p for p, _ in ps.most_common(2)]
     if len(two) < 2: print('перевал без двух концов:', x0, y0); continue
     a, b = two; ys, xs = np.nonzero(g)
-    passes.append([int(a), int(b), int(x0 + xs.mean()), int(y0 + ys.mean())])
+    # концы пунктира: две самые далёкие точки вдоль главной оси
+    P = np.stack([xs, ys], 1).astype(float); c = P.mean(0); u, sv, vt = np.linalg.svd(P - c, full_matrices=False); t = (P - c) @ vt[0]
+    e1, e2 = P[t.argmin()], P[t.argmax()]
+    passes.append([int(a), int(b), int(x0 + xs.mean()), int(y0 + ys.mean()), int(x0 + e1[0]), int(y0 + e1[1]), int(x0 + e2[0]), int(y0 + e2[1])])
 json.dump(passes, open(SP + 'umap/passes.json', 'w'))
 rp = Counter()
 ys, xs = np.nonzero(pl >= 0)
 first = {}
 for p, r in zip(pl[ys, xs][::97].tolist(), rl[ys, xs][::97].tolist()): first.setdefault(p, r)
-for a, b, x, y in passes:
+for a, b, x, y, *_ in passes:
     ra, rb = first.get(a), first.get(b)
     if ra is None or rb is None or ra == rb: continue
     rp[(min(ra, rb), max(ra, rb))] += 1

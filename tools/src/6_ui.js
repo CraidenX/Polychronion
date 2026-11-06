@@ -2,10 +2,12 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 205, sborder: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 205, sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
-try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; } catch (e) { }
+try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
+// перевал: [цвет пунктира, цвет подложки]
+const PASSCOL = { black: ['#140c10', 'rgba(240,226,190,.75)'], red: ['#d21c1c', 'rgba(255,240,215,.7)'], brown: ['#4a2408', 'rgba(240,214,160,.8)'] };
 const SBORDER = { black: 'rgba(12,4,12,.95)', red: 'rgba(205,22,22,.95)', none: null };
 function toast(t) { const d = document.createElement('div'); d.textContent = t; $('toast').appendChild(d); setTimeout(() => d.remove(), 4200); while ($('toast').children.length > 4) $('toast').firstChild.remove(); }
 function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${clamp(v / max * 100, 0, 100)}%;${col ? 'background:' + col : ''}"></i></div>`; }
@@ -167,10 +169,12 @@ function exportNames() {
 /* --- поиск по карте: регионы, провинции, земли за краем карты --- */
 function searchMap(q) {
   q = q.trim().toLowerCase(); if (q.length < 2) return [];
-  const res = [], M = MAPINFO;
-  (ID_BY_IDX || []).forEach(id => { if (RNAME[id] && RNAME[id].toLowerCase().includes(q)) res.push({ t: 'Регион', n: RNAME[id], go: () => focusOn(M.pos[id], () => { UI.selOuter = -1; UI.selProv = null; clickRegion(id); }) }); });
-  (M.provs || []).forEach((p, k) => { if (p[0] >= 0 && p[4].toLowerCase().includes(q)) res.push({ t: 'Провинция · ' + RNAME[ID_BY_IDX[p[0]]], n: p[4], go: () => focusOn([p[1], p[2]], () => { UI.selOuter = -1; UI.selProv = k; clickRegion(ID_BY_IDX[p[0]]); }) }); });
-  (M.outer || []).forEach((o, i) => { if (o[0].toLowerCase().includes(q)) res.push({ t: 'За пределами карты', n: o[0], go: () => focusOn([o[1], o[2]], () => { UI.sel = null; UI.selArmy = null; UI.selOuter = i; renderAll(); }) }); });
+  const res = [], M = MAPINFO, OLD = M.oldnames || {};
+  const hit = n => n && (n.toLowerCase().includes(q) || (OLD[n] && OLD[n].toLowerCase().includes(q)));
+  const was = n => OLD[n] && !n.toLowerCase().includes(q) ? ` (прежде: ${OLD[n]})` : '';
+  (ID_BY_IDX || []).forEach(id => { if (hit(RNAME[id])) res.push({ t: 'Регион' + was(RNAME[id]), n: RNAME[id], go: () => focusOn(M.pos[id], () => { UI.selOuter = -1; UI.selProv = null; clickRegion(id); }) }); });
+  (M.provs || []).forEach((p, k) => { if (p[0] >= 0 && hit(p[4])) res.push({ t: 'Провинция · ' + RNAME[ID_BY_IDX[p[0]]] + was(p[4]), n: p[4], go: () => focusOn([p[1], p[2]], () => { UI.selOuter = -1; UI.selProv = k; clickRegion(ID_BY_IDX[p[0]]); }) }); });
+  (M.outer || []).forEach((o, i) => { if (hit(o[0])) res.push({ t: 'За пределами карты' + was(o[0]), n: o[0], go: () => focusOn([o[1], o[2]], () => { UI.sel = null; UI.selArmy = null; UI.selOuter = i; renderAll(); }) }); });
   const starts = r => r.n.toLowerCase().startsWith(q) ? 0 : 1;
   return res.sort((a, b) => starts(a) - starts(b) || (a.t[0] === 'Р' ? -1 : 1) - (b.t[0] === 'Р' ? -1 : 1)).slice(0, 14);
 }
@@ -182,12 +186,15 @@ function focusOn(pt, then) {
 function setupSearch() {
   const inp = $('msearch'), box = $('msres'); let list = [], on = 0;
   const show = () => { box.innerHTML = list.map((r, i) => `<div data-i="${i}" class="${i === on ? 'on' : ''}">${esc(r.n)} <span class="k">${esc(r.t)}</span></div>`).join('') || '<div class="k">Ничего не найдено</div>'; box.classList.toggle('hidden', inp.value.trim().length < 2); };
-  const pickI = i => { const r = list[i]; if (!r) return; box.classList.add('hidden'); inp.blur(); SFX.play('select'); r.go(); };
+  const sb = $('msearchbox'), open = v => { sb.classList.toggle('hidden', !v); if (v) { inp.value = ''; list = []; box.classList.add('hidden'); setTimeout(() => inp.focus(), 0); } };
+  $('zsearch').onclick = e => { e.stopPropagation(); open(sb.classList.contains('hidden')); };
+  document.addEventListener('keydown', e => { if (e.key === '/' && UI.tab === 'map' && document.activeElement !== inp && !$('app').classList.contains('hidden')) { e.preventDefault(); open(true); } });
+  const pickI = i => { const r = list[i]; if (!r) return; open(false); inp.blur(); SFX.play('select'); r.go(); };
   inp.addEventListener('input', () => { list = searchMap(inp.value); on = 0; show(); });
-  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'ArrowDown') { on = Math.min(list.length - 1, on + 1); show(); e.preventDefault(); } else if (e.key === 'ArrowUp') { on = Math.max(0, on - 1); show(); e.preventDefault(); } else if (e.key === 'Enter') pickI(on); else if (e.key === 'Escape') { box.classList.add('hidden'); inp.blur(); } });
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'ArrowDown') { on = Math.min(list.length - 1, on + 1); show(); e.preventDefault(); } else if (e.key === 'ArrowUp') { on = Math.max(0, on - 1); show(); e.preventDefault(); } else if (e.key === 'Enter') pickI(on); else if (e.key === 'Escape') { open(false); inp.blur(); } });
   box.addEventListener('pointerdown', e => { const d = e.target.closest('[data-i]'); if (d) { e.preventDefault(); pickI(+d.dataset.i); } });
   ['pointerdown', 'wheel'].forEach(ev => $('msearchbox').addEventListener(ev, e => e.stopPropagation()));
-  inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 150));
+  inp.addEventListener('blur', () => setTimeout(() => { if (!inp.value.trim()) open(false); else box.classList.add('hidden'); }, 150));
 }
 
 /* --- карта --- */
@@ -195,7 +202,7 @@ let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
 // Попиксельная карта провинций: ids.png (номер провинции в цвете пикселя). Если браузер не даёт прочитать
 // пиксели (файл открыт с диска), остаётся запасная грубая сетка регионов.
 const PIX = { ids: null, w: 0, h: 0, s: 2, buf: null, provReg: null };
-const MAXZ = 4;
+const MAXZ = 6;   // запас приближения — под будущие объекты на карте
 function initMap() {
   const M = MAPINFO;
   ID_BY_IDX = M.ids;
@@ -287,7 +294,7 @@ function setupPanZoom() {
   $('zin').onclick = e => { e.stopPropagation(); zoomAt(1.3, w.clientWidth / 2, w.clientHeight / 2); };
   $('zout').onclick = e => { e.stopPropagation(); zoomAt(1 / 1.3, w.clientWidth / 2, w.clientHeight / 2); };
   $('zfit').onclick = e => { e.stopPropagation(); fitMap(); };
-  ['zin', 'zout', 'zfit'].forEach(id => $(id).addEventListener('pointerdown', e => e.stopPropagation()));
+  ['zin', 'zout', 'zfit', 'zsearch'].forEach(id => $(id).addEventListener('pointerdown', e => e.stopPropagation()));
   window.addEventListener('resize', () => { clampView(); applyView(); });
 }
 function provAt(clientX, clientY) {
@@ -552,6 +559,19 @@ function paintVector() {
     stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
     stroke(C.e, 'rgba(18,12,18,.95)', 2.2);
     if (SBORDER[UI.sborder]) stroke(C.s, SBORDER[UI.sborder], 2.6);
+    // перевалы: пунктир поперёк хребта
+    if (M.passes && M.passes.length && !far) {
+      const pc = PASSCOL[UI.passcol] || PASSCOL.black;
+      ctx.lineCap = 'round';
+      for (const q of M.passes) {
+        if (Math.max(q[2], q[4]) < vx0 - 20 || Math.min(q[2], q[4]) > vx1 + 20 || Math.max(q[3], q[5]) < vy0 - 20 || Math.min(q[3], q[5]) > vy1 + 20) continue;
+        const dx = q[4] - q[2], dy = q[5] - q[3], L = Math.hypot(dx, dy) || 1, ext = Math.max(7, (26 - L) / 2), ex = dx / L * ext, ey = dy / L * ext;   // тропа выходит за края хребта (не короче 26 px)
+        ctx.beginPath(); ctx.moveTo(q[2] - ex, q[3] - ey); ctx.lineTo(q[4] + ex, q[5] + ey);
+        ctx.setLineDash([]); ctx.strokeStyle = pc[1]; ctx.lineWidth = Math.max(5.5 / z, 2.2); ctx.stroke();
+        ctx.setLineDash([Math.max(5 / z, 2.2), Math.max(3.5 / z, 1.5)]); ctx.strokeStyle = pc[0]; ctx.lineWidth = Math.max(3 / z, 1.2); ctx.stroke();
+      }
+      ctx.setLineDash([]); ctx.lineCap = 'butt';
+    }
   }
   if (G) paintSelection(ctx, z);
 }
@@ -869,6 +889,7 @@ function showMenu() {
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA ? 'Хребты: в цвет владельца (сделать своего цвета)' : 'Хребты: своего цвета (красить в цвет владельца)'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
+   <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
    <button id="mNames">Скачать мои названия (файл)</button>
    <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
@@ -878,6 +899,7 @@ function showMenu() {
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
   $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
+  $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
   $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 205; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
