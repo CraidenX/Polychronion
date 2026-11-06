@@ -72,7 +72,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #msres div:hover,#msres div.on{background:rgba(212,175,55,.2)}
 #msres .k{opacity:.6;font-size:11px}
 .clock{display:inline-flex;gap:2px;margin-right:6px}
-.clock .spd{min-width:38px;padding:5px 6px;font-size:13px;letter-spacing:-2px}
+.clock .spd{min-width:30px;padding:5px 6px;font-size:13px}
 .clock .spd.on{background:var(--purple);border-color:var(--gold);color:#fff}
 .ar.moving{opacity:.92;border-style:dashed}
 #zoombtns{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:5}
@@ -417,6 +417,7 @@ const BUILD_PRIO = { forts: 'Укрепления на границе', econ: '�
 
 /* ---------- 2. ЯДРО СТРАТЕГИИ ---------- */
 let G = null; // всё состояние партии (сохраняется целиком)
+const TEST_ARMY = true;   // тестовый отряд у перевалов (для проверки гор)
 const rnd = () => Math.random();
 const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -456,18 +457,20 @@ function dayDate() {   // «14 июля 1261»: день сезона -> нас�
   const dt = new Date(st + Math.floor(Math.min(SEASON_DAYS - 1, G.day || 0) * len / SEASON_DAYS) * 864e5);
   return dt.getUTCDate() + ' ' + MONTHS[dt.getUTCMonth()] + ' ' + dt.getUTCFullYear();
 }
-// длительность перехода между соседними областями (дней): по расстоянию, в среднем — сезон; перевал — ещё сезон
-let AVG_LEG = 0;
+// длительность перехода между соседними областями (дней): по расстоянию между центрами, ~20 км в день,
+// по морю ~45 км в день; перевал — ещё PASS_DAYS. Масштаб карты: 1 px ≈ 0,63 км по долготе, 0,82 км по широте
+const MARCH_KM = 20, SAIL_KM = 45, PASS_DAYS = 15;
+function legKm(from, to) {
+  const P = typeof MAPINFO !== 'undefined' && MAPINFO.pos, a = P && P[RID(from)], b = P && P[RID(to)];
+  if (!a || !b) return 150;
+  const k = MAPINFO.W / 5298;
+  return Math.hypot((a[0] - b[0]) * 0.63 / k, (a[1] - b[1]) * 0.82 / k);
+}
 function legDays(from, to) {
-  const P = typeof MAPINFO !== 'undefined' && MAPINFO.pos;
   const lk = (NEIGH[from] || []).find(n => n.to === to);
-  let d = SEASON_DAYS;
-  if (P && P[RID(from)] && P[RID(to)]) {
-    if (!AVG_LEG) { let s = 0, n = 0; for (const id in NEIGH) for (const l of NEIGH[id]) if (l.t !== 'sea' && P[RID(id)] && P[RID(l.to)]) { s += Math.hypot(P[RID(id)][0] - P[RID(l.to)][0], P[RID(id)][1] - P[RID(l.to)][1]); n++; } AVG_LEG = n ? s / n : 1; }
-    const dist = Math.hypot(P[RID(from)][0] - P[RID(to)][0], P[RID(from)][1] - P[RID(to)][1]);
-    d = clamp(Math.round(SEASON_DAYS * dist / AVG_LEG), 30, lk && lk.t === 'sea' ? 110 : 150);
-  }
-  if (lk && lk.t === 'pass') d += SEASON_DAYS;
+  const sea = lk && (lk.t === 'sea' || lk.t === 'strait');
+  let d = Math.max(2, Math.round(legKm(from, to) / (sea ? SAIL_KM : MARCH_KM)));
+  if (lk && lk.t === 'pass') d += PASS_DAYS;
   return d;
 }
 // войско в пути: a.leg = {from, to, t, dur}; позиция на карте — между центрами областей
@@ -478,10 +481,11 @@ function startLeg(a) {
   if (!NEIGH[a.region].some(n => n.to === to && linkOk(a.owner, n.t)) || (a.owner === 'byz' && !canEnter('byz', to))) { a.path = []; return; }
   a.leg = { from: a.region, to, t: 0, dur: legDays(a.region, to) }; a.siege = 0;
   const lk = NEIGH[a.region].find(n => n.to === to);
-  if (lk && lk.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт ещё сезон.`);
+  if (lk && lk.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт на ${PASS_DAYS} дн. дольше.`);
 }
 async function dayTick() {
   G.day = (G.day || 0) + 1;
+  if (G.day % AI_EVERY === 0) { await aiMoves(); if (G.over) return; }
   for (const a of G.armies.slice()) {
     if (!G.armies.includes(a) || !a.units.length) continue;
     if (a.leg) {
@@ -549,6 +553,8 @@ function newGame() {
   // стартовые армии
   addArmy('byz', 'konst', [['inf', 3], ['cav', 2], ['arch', 2]], 'Армия Города');
   addArmy('byz', 'thessal', [['inf', 3], ['cav', 2], ['arch', 1]], 'Западная армия');
+  // ТЕСТ: отряд для проверки перевалов (Стримон → перевал → Эматия → перевал → Фессалия). Убрать: TEST_ARMY = false
+  if (TEST_ARMY && !HEADLESS) addArmy('byz', 'serres', [['inf', 2], ['arch', 1]], 'Горный отряд (тест)');
   addArmy('epirus', 'epirus', [['inf', 3], ['cav', 1], ['arch', 2]]);
   addArmy('achaea', 'achaea', [['inf', 2], ['cav', 3], ['merc', 1]]);
   addArmy('bulgaria', 'tarnovo', [['inf', 3], ['cav', 3], ['arch', 1]]);
@@ -1123,6 +1129,15 @@ async function aiTurn() {
       for (let i = 0; i < 4; i++) { x -= mix[i]; if (x <= 0) { t = UTYPES[i]; break; } }
       F.treasury -= UNIT[t].cost; a.units.push(mkUnit(t));
     }
+  }
+}
+// походы ИИ: раз в неделю каждое свободное войско выбирает цель (дорога займёт дни)
+const AI_EVERY = 7;
+async function aiMoves() {
+  for (const f of Object.keys(FACTIONS)) {
+    if (f === 'byz' || !factionAlive(f) || !aiWars(f).length) continue;
+    const F = G.factions[f], D = FACTIONS[f];
+    const myArm = G.armies.filter(a => a.owner === f);
     // движение
     for (const a of myArm.slice()) {
       if (!G.armies.includes(a) || !a.units.length) { if (!a.units.length) G.armies = G.armies.filter(x => x !== a); continue; }
@@ -1132,10 +1147,10 @@ async function aiTurn() {
       if (atWar(f, here.owner)) {
         // осада: штурм или ждём
         const gp = garPower(here) * (1 + here.fort * 0.35);
-        if (pow > gp * 2.0 && rnd() < 0.6 + (D.aggr || 0) * 0.3) await stormBattle(a, here);
+        if (pow > gp * 2.0 && rnd() < 1 - Math.pow(1 - (0.6 + (D.aggr || 0) * 0.3), AI_EVERY / SEASON_DAYS)) await stormBattle(a, here);
         continue;
       }
-      if (a.units.length < 3 && rnd() < 0.7) continue;
+      if (a.units.length < 3 && rnd() < Math.pow(0.7, AI_EVERY / SEASON_DAYS)) continue;   // малые отряды выходят редко (как раньше — раз в сезон с вероятностью 0,3)
       let best = null, bs = 0;
       for (const n of NEIGH[a.region]) {
         if (!linkOk(f, n.t)) continue;
@@ -2142,7 +2157,7 @@ function renderTop() {
    <span class="stat" title="Престиж императора">✦ Престиж ${Math.round(G.prestige)}</span>
    <span class="stat" title="Областей у ромеев">▦ ${myRegions().length}</span>
    <span class="sp"></span>
-   <span class="clock">${[['0', '❚❚', 'Пауза (пробел)'], ['1', '▶', 'Обычная скорость (1)'], ['2', '▶▶', 'Быстро (2)'], ['3', '▶▶▶', 'Очень быстро (3)']].map(([v, t, ti]) => `<button class="spd ${UI.speed === +v ? 'on' : ''}" data-spd="${v}" title="${ti}">${t}</button>`).join('')}</span>
+   <span class="clock">${[['0', '❚❚', 'Пауза (пробел)'], ['1', '1', 'Скорость 1: день за 2 секунды (клавиша 1)'], ['2', '2', 'Скорость 2: день за секунду (2)'], ['3', '3', 'Скорость 3: день за полсекунды (3)'], ['4', '4', 'Скорость 4: 5 дней в секунду (4)'], ['5', '5', 'Скорость 5: 10 дней в секунду (5)']].map(([v, t, ti]) => `<button class="spd ${UI.speed === +v ? 'on' : ''}" data-spd="${v}" title="${ti}">${t}</button>`).join('')}</span>
    <button id="bMenu">Меню</button>`;
   $('top').querySelectorAll('[data-spd]').forEach(b => b.onclick = () => setSpeed(+b.dataset.spd));
   $('bMenu').onclick = showMenu;
@@ -2761,7 +2776,8 @@ function renderArmies() {
 }
 
 /* --- часы: реальное время с паузой и тремя скоростями --- */
-const DAYS_PER_SEC = [0, 4, 9, 20];
+// скорости как в Europa Universalis: день за 2 с, 1 с, 0,5 с, 0,2 с, 0,1 с
+const DAYS_PER_SEC = [0, 0.5, 1, 2, 5, 10];
 UI.speed = 0; UI.autoPause = true;
 try { UI.autoPause = localStorage.getItem('poly_autopause') !== 'off'; } catch (e) { }
 function setSpeed(v) { UI.speed = v; if (v) { UI.lastSpeed = v; SFX.play('turn'); } document.querySelectorAll('[data-spd]').forEach(b => b.classList.toggle('on', +b.dataset.spd === v)); }
@@ -2771,7 +2787,7 @@ function clockFrame(now) {
   const dt = clockLast ? Math.min(0.25, (now - clockLast) / 1000) : 0; clockLast = now;
   if (!G || G.over || !UI.speed || busy || $('app').classList.contains('hidden') || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden')) return;
   clockAcc += dt * DAYS_PER_SEC[UI.speed];
-  if (clockAcc >= 1) { clockAcc = Math.min(clockAcc - 1, 2); runDay(); }
+  if (clockAcc >= 1) { clockAcc = Math.min(clockAcc - 1, 3); runDay(); }
 }
 async function runDay() {
   const before = G.log.length ? G.log[0] : null, season = G.season;
@@ -3063,12 +3079,12 @@ function showMenu() {
 function showHelp() {
   modal(`<h2>Как играть</h2>
   <p><b>Цель.</b> Пройти от лета 1261 до 1347 года и встретить Чёрную смерть сильной державой. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
-  <p><b>Время</b> идёт само, по дням. Кнопки вверху: ❚❚ пауза, ▶ ▶▶ ▶▶▶ — скорость (клавиши: пробел, 1, 2, 3). Приказы можно отдавать и на паузе. Налоги, стройки, двор и события считаются раз в сезон (3 месяца). При важных событиях и вторжении врага игра сама встаёт на паузу (это можно выключить в меню).</p>
-  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда; переход в соседнюю область занимает от месяца до полугода, в среднем — сезон. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
+  <p><b>Время</b> идёт само, по дням. Кнопки вверху: ❚❚ пауза, 1–5 — скорость: от дня за 2 секунды до 10 дней в секунду (клавиши: пробел, 1–5, + и −). Приказы можно отдавать и на паузе. Налоги, стройки, двор и события считаются раз в сезон (3 месяца). При важных событиях и вторжении врага игра сама встаёт на паузу (это можно выключить в меню).</p>
+  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда; войско проходит около 20 км в день, по морю — около 45, перевал добавляет ещё 15 дней. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
   <p><b>Осады.</b> Войско во вражеской области осаждает её: через несколько сезонов (зависит от укреплений) гарнизон сдаётся. Можно штурмовать сразу — откроется экран боя.</p>
   <p><b>Бой.</b> Выберите свой отряд, нажмите светлую клетку, чтобы пойти, или врага с красной рамкой, чтобы атаковать. Лучники стреляют на 3 клетки. Конница с разгона (2+ клетки) бьёт в полтора раза сильнее, но вязнет в лесу и против пехоты в обороне. Холмы и леса защищают. Отряд с низким духом бежит. Можно «Рассчитать автоматически».</p>
   <p><b>Двор</b> — до 7 героев с поручениями. <b>Государство</b> — налоги, монета, законы, уния, флот, стройки, наследник, войны.</p>
-  <p class="small muted">Клавиши: пробел — пауза, 1/2/3 — скорость, / — поиск, Esc — снять выбор.</p>
+  <p class="small muted">Клавиши: пробел — пауза, 1–5 — скорость, / — поиск, Esc — снять выбор.</p>
   <button class="main" onclick="closeModal()">Понятно</button>`);
 }
 function toggleLaw(k) {
@@ -3251,7 +3267,7 @@ function showIntro() {
     SFX.play('event');
     modal(`<div class="small muted">Пролог · Лето 1261</div><h2>Город снова ромейский</h2>
     <p>${esc(INTRO_TEXT)}</p>
-    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ ▶ ▶▶ ▶▶▶ вверху (или пробел и клавиши 1–3). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на регион — войско пойдёт туда. Пунктир — морские пути (нужен флот). Коричневые хребты — горы: через них не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает ещё сезон. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
+    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ и 1–5 вверху (или пробел, клавиши 1–5, + и −). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на регион — войско пойдёт туда. Пунктир — морские пути (нужен флот). Коричневые хребты — горы: через них не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает на 15 дней дольше. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
     <p class="small muted">Цель — дожить до 1347 года и встретить Чёрную смерть сильной державой. Потеря Константинополя — конец игры.</p>
     <button class="main" id="introNext">Далее: кто будет править?</button>`);
     $('introNext').onclick = () => { closeModal(); res(); };
@@ -3266,7 +3282,9 @@ function boot() {
     if (!G || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden') || $('app').classList.contains('hidden')) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     if (e.key === ' ') { e.preventDefault(); setSpeed(UI.speed ? 0 : (UI.lastSpeed || 1)); }
-    if (['1', '2', '3'].includes(e.key)) { UI.lastSpeed = +e.key; setSpeed(+e.key); }
+    if (['1', '2', '3', '4', '5'].includes(e.key)) setSpeed(+e.key);
+    if (e.key === '+' || e.key === '=') setSpeed(Math.min(5, (UI.speed || UI.lastSpeed || 0) + 1));
+    if (e.key === '-') setSpeed(Math.max(0, UI.speed - 1));
     if (e.key === 'Escape') { UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
   });
 }

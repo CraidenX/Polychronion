@@ -1,6 +1,7 @@
 
 /* ---------- 2. ЯДРО СТРАТЕГИИ ---------- */
 let G = null; // всё состояние партии (сохраняется целиком)
+const TEST_ARMY = true;   // тестовый отряд у перевалов (для проверки гор)
 const rnd = () => Math.random();
 const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -40,18 +41,20 @@ function dayDate() {   // «14 июля 1261»: день сезона -> нас�
   const dt = new Date(st + Math.floor(Math.min(SEASON_DAYS - 1, G.day || 0) * len / SEASON_DAYS) * 864e5);
   return dt.getUTCDate() + ' ' + MONTHS[dt.getUTCMonth()] + ' ' + dt.getUTCFullYear();
 }
-// длительность перехода между соседними областями (дней): по расстоянию, в среднем — сезон; перевал — ещё сезон
-let AVG_LEG = 0;
+// длительность перехода между соседними областями (дней): по расстоянию между центрами, ~20 км в день,
+// по морю ~45 км в день; перевал — ещё PASS_DAYS. Масштаб карты: 1 px ≈ 0,63 км по долготе, 0,82 км по широте
+const MARCH_KM = 20, SAIL_KM = 45, PASS_DAYS = 15;
+function legKm(from, to) {
+  const P = typeof MAPINFO !== 'undefined' && MAPINFO.pos, a = P && P[RID(from)], b = P && P[RID(to)];
+  if (!a || !b) return 150;
+  const k = MAPINFO.W / 5298;
+  return Math.hypot((a[0] - b[0]) * 0.63 / k, (a[1] - b[1]) * 0.82 / k);
+}
 function legDays(from, to) {
-  const P = typeof MAPINFO !== 'undefined' && MAPINFO.pos;
   const lk = (NEIGH[from] || []).find(n => n.to === to);
-  let d = SEASON_DAYS;
-  if (P && P[RID(from)] && P[RID(to)]) {
-    if (!AVG_LEG) { let s = 0, n = 0; for (const id in NEIGH) for (const l of NEIGH[id]) if (l.t !== 'sea' && P[RID(id)] && P[RID(l.to)]) { s += Math.hypot(P[RID(id)][0] - P[RID(l.to)][0], P[RID(id)][1] - P[RID(l.to)][1]); n++; } AVG_LEG = n ? s / n : 1; }
-    const dist = Math.hypot(P[RID(from)][0] - P[RID(to)][0], P[RID(from)][1] - P[RID(to)][1]);
-    d = clamp(Math.round(SEASON_DAYS * dist / AVG_LEG), 30, lk && lk.t === 'sea' ? 110 : 150);
-  }
-  if (lk && lk.t === 'pass') d += SEASON_DAYS;
+  const sea = lk && (lk.t === 'sea' || lk.t === 'strait');
+  let d = Math.max(2, Math.round(legKm(from, to) / (sea ? SAIL_KM : MARCH_KM)));
+  if (lk && lk.t === 'pass') d += PASS_DAYS;
   return d;
 }
 // войско в пути: a.leg = {from, to, t, dur}; позиция на карте — между центрами областей
@@ -62,10 +65,11 @@ function startLeg(a) {
   if (!NEIGH[a.region].some(n => n.to === to && linkOk(a.owner, n.t)) || (a.owner === 'byz' && !canEnter('byz', to))) { a.path = []; return; }
   a.leg = { from: a.region, to, t: 0, dur: legDays(a.region, to) }; a.siege = 0;
   const lk = NEIGH[a.region].find(n => n.to === to);
-  if (lk && lk.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт ещё сезон.`);
+  if (lk && lk.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт на ${PASS_DAYS} дн. дольше.`);
 }
 async function dayTick() {
   G.day = (G.day || 0) + 1;
+  if (G.day % AI_EVERY === 0) { await aiMoves(); if (G.over) return; }
   for (const a of G.armies.slice()) {
     if (!G.armies.includes(a) || !a.units.length) continue;
     if (a.leg) {
@@ -133,6 +137,8 @@ function newGame() {
   // стартовые армии
   addArmy('byz', 'konst', [['inf', 3], ['cav', 2], ['arch', 2]], 'Армия Города');
   addArmy('byz', 'thessal', [['inf', 3], ['cav', 2], ['arch', 1]], 'Западная армия');
+  // ТЕСТ: отряд для проверки перевалов (Стримон → перевал → Эматия → перевал → Фессалия). Убрать: TEST_ARMY = false
+  if (TEST_ARMY && !HEADLESS) addArmy('byz', 'serres', [['inf', 2], ['arch', 1]], 'Горный отряд (тест)');
   addArmy('epirus', 'epirus', [['inf', 3], ['cav', 1], ['arch', 2]]);
   addArmy('achaea', 'achaea', [['inf', 2], ['cav', 3], ['merc', 1]]);
   addArmy('bulgaria', 'tarnovo', [['inf', 3], ['cav', 3], ['arch', 1]]);
@@ -707,6 +713,15 @@ async function aiTurn() {
       for (let i = 0; i < 4; i++) { x -= mix[i]; if (x <= 0) { t = UTYPES[i]; break; } }
       F.treasury -= UNIT[t].cost; a.units.push(mkUnit(t));
     }
+  }
+}
+// походы ИИ: раз в неделю каждое свободное войско выбирает цель (дорога займёт дни)
+const AI_EVERY = 7;
+async function aiMoves() {
+  for (const f of Object.keys(FACTIONS)) {
+    if (f === 'byz' || !factionAlive(f) || !aiWars(f).length) continue;
+    const F = G.factions[f], D = FACTIONS[f];
+    const myArm = G.armies.filter(a => a.owner === f);
     // движение
     for (const a of myArm.slice()) {
       if (!G.armies.includes(a) || !a.units.length) { if (!a.units.length) G.armies = G.armies.filter(x => x !== a); continue; }
@@ -716,10 +731,10 @@ async function aiTurn() {
       if (atWar(f, here.owner)) {
         // осада: штурм или ждём
         const gp = garPower(here) * (1 + here.fort * 0.35);
-        if (pow > gp * 2.0 && rnd() < 0.6 + (D.aggr || 0) * 0.3) await stormBattle(a, here);
+        if (pow > gp * 2.0 && rnd() < 1 - Math.pow(1 - (0.6 + (D.aggr || 0) * 0.3), AI_EVERY / SEASON_DAYS)) await stormBattle(a, here);
         continue;
       }
-      if (a.units.length < 3 && rnd() < 0.7) continue;
+      if (a.units.length < 3 && rnd() < Math.pow(0.7, AI_EVERY / SEASON_DAYS)) continue;   // малые отряды выходят редко (как раньше — раз в сезон с вероятностью 0,3)
       let best = null, bs = 0;
       for (const n of NEIGH[a.region]) {
         if (!linkOk(f, n.t)) continue;
