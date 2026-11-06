@@ -352,8 +352,9 @@ function mapClick(e) {
 }
 function clickRegion(id) {
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
-  if (a && a.owner === 'byz' && id !== a.region) {
-    if (setArmyPath(a, id)) { const d = a.path.reduce((s, x, i) => s + legDays(i ? a.path[i - 1] : a.region, x), 0); toast(`${a.name}: поход на ${RNAME[id]} — около ${d} дн.${UI.speed ? '' : ' Время на паузе: нажмите ▶.'}`); renderAll(); return; }
+  const tp = UI.selProv != null && provReg(UI.selProv) === RID(id) ? UI.selProv : null;
+  if (a && a.owner === 'byz' && (RID(id) !== RID(a.region) || (tp != null && tp !== armyProv(a)))) {
+    if (setArmyPath(a, id, tp)) { const last = a.path[a.path.length - 1]; toast(`${a.name}: поход в «${MAPINFO.provs[last][4]}» (${RNAME[provReg(last)]}) — около ${pathDays(a)} дн.${UI.speed ? '' : ' Время на паузе: нажмите 1–5.'}`); UI.selProv = null; renderAll(); return; }
     else toast(canEnter('byz', id) ? 'Туда не пройти (нужен флот или путь через чужие земли).' : `С державой «${fshort(R(id).owner)}» нет войны — войти нельзя.`);
   }
   UI.sel = id; UI.selArmy = null; renderAll();
@@ -600,12 +601,11 @@ function paintSelection(ctx, z) {
     ctx.strokeStyle = t === 'sea' ? 'rgba(200,225,255,.75)' : 'rgba(255,214,130,.9)'; ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); });
   ctx.setLineDash([]);
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
-  if (a && a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to];
-    ctx.beginPath(); ctx.arc(p[0], p[1], 26, 0, 7); ctx.fillStyle = 'rgba(255,240,180,.35)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,240,180,.9)'; ctx.lineWidth = w(1.5); ctx.stroke(); });
+  // приказ: щелчок по любой провинции — войско идёт туда по провинциям (через хребты — только по перевалам)
   myArmies().forEach(x => {
     if (!x.path.length && !x.leg) return; const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)';
     ctx.setLineDash(x === a ? [] : [w(10), w(6)]); ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 3.5 : 2.5);
-    ctx.beginPath(); let p = x.leg ? armyXY(x) : M.pos[x.region]; ctx.moveTo(p[0], p[1]); (x.leg && x.leg.back ? [x.region] : []).concat(x.path).forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]);
+    const PP = M.provs; ctx.beginPath(); let p = armyXY(x); p = [p[0], p[1] + 4]; ctx.moveTo(p[0], p[1]); (x.leg && x.leg.back ? [x.prov] : []).concat(x.path).forEach(k => { if (typeof k !== 'number') return; p = [PP[k][1], PP[k][2]]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]);
     ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fillStyle = col; ctx.fill();
   });
 }
@@ -628,13 +628,13 @@ function renderMarkers() {
 
 // флажки войск (обновляются каждый игровой день, отдельно от остальных подписей)
 function armyXY(a) {
-  const M = MAPINFO, slot = G.armies.filter(x => x.region === a.region && !x.leg).indexOf(a);
-  if (a.leg) {
-    const p = M.pos[a.leg.from], q = M.pos[a.leg.to], t = legPos(a);
-    return [p[0] + (q[0] - p[0]) * t + 10, p[1] + (q[1] - p[1]) * t - 6];
+  const P = MAPINFO.provs;
+  if (a.leg && typeof a.leg.from === 'number') {
+    const p = P[a.leg.from], q = P[a.leg.to], t = legPos(a);
+    return [p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t - 4];
   }
-  const p = M.pos[a.region], i = Math.max(0, slot);
-  return [p[0] + 26 + i * 6, p[1] - 8 - i * 24];
+  const k = armyProv(a), i = Math.max(0, G.armies.filter(x => !x.leg && x.prov === k).indexOf(a));
+  return [P[k][1] + i * 6, P[k][2] - 4 - i * 24];
 }
 function renderArmies() {
   const box = $('armymk'); if (!box || !G) return;
@@ -768,8 +768,10 @@ function armyPanel(a) {
   <p class="small">Всего ${fmt(armyMen(a))} чел., сила ≈ ${Math.round(armyPower(a))}, содержание ${upkeepOf(a).toFixed(1)} за сезон.</p>`;
   if (canRecruit(a)) h += `<div class="small">Нанять отряд:</div><div class="btnrow">${UTYPES.map(t => `<button class="small" data-rec="${t}" ${G.treasury < recruitCost(t) ? 'disabled' : ''} title="Атака ${UNIT[t].atk}, защита ${UNIT[t].def}, ход ${UNIT[t].spd}${UNIT[t].rng > 1 ? ', стреляет на ' + UNIT[t].rng : ''}; содержание ${UNIT[t].up} за 100 чел.">${UNIT[t].icon} ${UNIT[t].name} (${recruitCost(t)})</button>`).join('')}</div>`;
   else h += `<p class="small muted">Нанимать можно только в своей области без врагов (не больше 12 отрядов).</p>`;
-  if (a.leg) h += `<p class="small">${a.leg.back ? 'Возвращается в' : 'В пути в'} «${esc(RNAME[a.leg.to])}»: ещё ${a.leg.dur - a.leg.t} дн.</p>`;
-  h += `<p class="small">${a.path.length ? 'Поход: ' + a.path.map(x => RNAME[x]).join(' → ') : a.leg ? '' : 'Стоит на месте. Нажмите на область на карте, чтобы отдать приказ идти.'}</p>
+  const PN = k => typeof k === 'number' && MAPINFO.provs[k] ? MAPINFO.provs[k][4] : '?';
+  h += `<div class="small muted">Провинция: ${esc(PN(armyProv(a)))}</div>`;
+  if (a.leg) h += `<p class="small">${a.leg.back ? 'Возвращается в' : 'В пути в'} «${esc(PN(a.leg.to))}»: ещё ${a.leg.dur - a.leg.t} дн.</p>`;
+  h += `<p class="small">${a.path.length ? `Поход в «${esc(PN(a.path[a.path.length - 1]))}» (${esc(RNAME[provReg(a.path[a.path.length - 1])] || '')}): ${a.path.length} пров., ≈ ${pathDays(a)} дн.` : a.leg ? '' : 'Стоит на месте. Нажмите на провинцию на карте, чтобы отдать приказ идти.'}</p>
   <div class="btnrow">${a.path.length ? `<button id="bStop">${a.leg && !a.leg.back ? 'Повернуть назад' : 'Стоять'}</button>` : ''}
   ${atWar('byz', R(a.region).owner) && !a.stormed ? `<button class="main" id="bStorm">⚔ Штурмовать (${RNAME[a.region]})</button>` : ''}
   ${myArmies().filter(x => x !== a && x.region === a.region).map(x => `<button data-merge="${x.id}">Влить «${esc(x.name)}»</button>`).join('')}
@@ -949,7 +951,7 @@ function showHelp() {
   modal(`<h2>Как играть</h2>
   <p><b>Цель.</b> Пройти от лета 1261 до 1347 года и встретить Чёрную смерть сильной державой. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
   <p><b>Время</b> идёт само, по дням. Кнопки вверху: ❚❚ пауза, 1–5 — скорость: от дня за 2 секунды до 10 дней в секунду (клавиши: пробел, 1–5, + и −). Приказы можно отдавать и на паузе. Налоги, стройки, двор и события считаются раз в сезон (3 месяца). При важных событиях и вторжении врага игра сама встаёт на паузу (это можно выключить в меню).</p>
-  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда; войско проходит около 20 км в день, по морю — около 45, перевал добавляет ещё 15 дней. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
+  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на любую провинцию: войско пойдёт туда по провинциям; войско проходит около 20 км в день, по морю — около 45, перевал добавляет ещё 15 дней. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
   <p><b>Осады.</b> Войско во вражеской области осаждает её: через несколько сезонов (зависит от укреплений) гарнизон сдаётся. Можно штурмовать сразу — откроется экран боя.</p>
   <p><b>Бой.</b> Выберите свой отряд, нажмите светлую клетку, чтобы пойти, или врага с красной рамкой, чтобы атаковать. Лучники стреляют на 3 клетки. Конница с разгона (2+ клетки) бьёт в полтора раза сильнее, но вязнет в лесу и против пехоты в обороне. Холмы и леса защищают. Отряд с низким духом бежит. Можно «Рассчитать автоматически».</p>
   <p><b>Двор</b> — до 7 героев с поручениями. <b>Государство</b> — налоги, монета, законы, уния, флот, стройки, наследник, войны.</p>
@@ -1136,7 +1138,7 @@ function showIntro() {
     SFX.play('event');
     modal(`<div class="small muted">Пролог · Лето 1261</div><h2>Город снова ромейский</h2>
     <p>${esc(INTRO_TEXT)}</p>
-    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ и 1–5 вверху (или пробел, клавиши 1–5, + и −). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на регион — войско пойдёт туда. Пунктир — морские пути (нужен флот). Коричневые хребты — горы: через них не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает на 15 дней дольше. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
+    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ и 1–5 вверху (или пробел, клавиши 1–5, + и −). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на любую провинцию — войско пойдёт туда по провинциям. Пунктир — морские пути (нужен флот). Коричневые хребты — горы: через них не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает на 15 дней дольше. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
     <p class="small muted">Цель — дожить до 1347 года и встретить Чёрную смерть сильной державой. Потеря Константинополя — конец игры.</p>
     <button class="main" id="introNext">Далее: кто будет править?</button>`);
     $('introNext').onclick = () => { closeModal(); res(); };

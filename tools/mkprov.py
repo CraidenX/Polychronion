@@ -157,6 +157,8 @@ for e in json.load(open(SP + 'islands.json')):
 for o in OUTER:
     if len(o) > 4: OLDN[o[0]] = o[4]
 mi['oldnames'] = OLDN
+PADJ = json.load(open(SP + 'umap/padj.json')) if os.path.exists(SP + 'umap/padj.json') else {'edges': [], 'coast': []}
+mi['padj'] = PADJ['edges']; mi['coast'] = PADJ['coast']
 mi['passes'] = [[q[0], q[1], q[4], q[5], q[6], q[7]] for q in json.load(open(SP + 'umap/passes.json'))] if os.path.exists(SP + 'umap/passes.json') else []
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
 cntr = Counter(p['gi'] for p in plist if not p.get('fallback') and p['gi'] is not None)

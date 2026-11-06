@@ -61,27 +61,35 @@ function legDays(from, to) {
 function legPos(a) { return a.leg ? a.leg.t / a.leg.dur : 0; }
 function startLeg(a) {
   if (a.leg || !a.path.length) return;
-  const to = a.path[0];
-  if (!NEIGH[a.region].some(n => n.to === to && linkOk(a.owner, n.t)) || (a.owner === 'byz' && !canEnter('byz', to))) { a.path = []; return; }
-  a.leg = { from: a.region, to, t: 0, dur: legDays(a.region, to) }; a.siege = 0;
-  const lk = NEIGH[a.region].find(n => n.to === to);
-  if (lk && lk.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт на ${PASS_DAYS} дн. дольше.`);
+  const g = provGraph(), from = armyProv(a), to = a.path[0];
+  const e = g.adj[from].find(x => x.to === to), rt = g.reg[to];
+  if (!e || !linkOk(a.owner, e.t) || (rt !== RID(a.region) && a.owner === 'byz' && !canEnter('byz', rt))) { a.path = []; return; }
+  a.leg = { from, to, t: 0, dur: e.d }; a.siege = 0;
+  if (e.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь займёт на ${PASS_DAYS} дн. дольше.`);
 }
 async function dayTick() {
   G.day = (G.day || 0) + 1;
   if (G.day % AI_EVERY === 0) { await aiMoves(); if (G.over) return; }
   for (const a of G.armies.slice()) {
     if (!G.armies.includes(a) || !a.units.length) continue;
+    if (a.path.length && typeof a.path[0] === 'string') a.path = [];        // старое сохранение: путь по регионам
+    if (a.leg && typeof a.leg.from === 'string') a.leg = null;
+    armyProv(a);
     if (a.leg) {
       // приказ изменился (или «стоять»): войско поворачивает назад
-      if (a.leg.to !== a.region && a.path[0] !== a.leg.to) a.leg = { from: a.leg.to, to: a.region, t: a.leg.dur - a.leg.t, dur: a.leg.dur, back: true };
+      if (a.leg.to !== a.prov && a.path[0] !== a.leg.to) a.leg = { from: a.leg.to, to: a.prov, t: a.leg.dur - a.leg.t, dur: a.leg.dur, back: true };
       a.leg.t++;
       if (a.leg.t >= a.leg.dur) {
         const to = a.leg.to; a.leg = null;
-        if (to === a.region) continue;   // вернулось
+        if (to === a.prov) continue;   // вернулось
         a.path.shift();
-        await stepArmy(a, to);
-        if (G.over) return;
+        const rt = provReg(to);
+        if (rt !== RID(a.region)) {
+          await stepArmy(a, rt);       // вход в другой регион: бой, захват
+          if (G.over) return;
+          if (!G.armies.includes(a) || RID(a.region) !== rt) { a.path = []; continue; }
+        }
+        a.prov = to;
       }
     }
     if (!a.leg && a.path.length && G.armies.includes(a)) startLeg(a);
@@ -214,25 +222,59 @@ function canEnter(owner, rid) {
   if (owner === 'byz' && G.factions[o] && G.factions[o].ally) return true;
   return atWar(owner, o);
 }
-function findPath(a, to) {
-  const prev = { [a.region]: null }, q = [a.region];
-  while (q.length) {
-    const c = q.shift(); if (c === to) break;
-    for (const n of NEIGH[c]) {
-      if (n.to in prev || !linkOk(a.owner, n.t)) continue;
-      if (n.to !== to && !canEnter(a.owner, n.to)) continue;
-      if (n.to !== to && R(n.to).owner !== a.owner && n.to !== to) continue; // идём через свои земли
-      prev[n.to] = c; q.push(n.to);
+/* --- движение по провинциям: граф соседства (суша, перевалы, проливы, море) --- */
+let PG = null;
+function provGraph() {
+  if (PG) return PG;
+  const M = MAPINFO, P = M.provs, k = M.W / 5298;
+  const km = (a, b) => Math.hypot((P[a][1] - P[b][1]) * 0.63 / k, (P[a][2] - P[b][2]) * 0.82 / k);
+  const adj = P.map(() => []), reg = P.map(p => p[0] >= 0 ? M.ids[p[0]] : null), byReg = {};
+  for (const [a, b, t] of M.padj || []) {
+    const sea = t === 'sea' || t === 'strait';
+    const d = Math.max(1, Math.round(km(a, b) / (sea ? SAIL_KM : MARCH_KM))) + (t === 'pass' ? PASS_DAYS : 0);
+    adj[a].push({ to: b, t, d }); adj[b].push({ to: a, t, d });
+  }
+  reg.forEach((r, i) => { if (r) (byReg[r] = byReg[r] || []).push(i); });
+  const main = {};
+  for (const r in byReg) { const c = M.pos[r]; main[r] = c ? byReg[r].reduce((b, i) => ((P[i][1] - c[0]) ** 2 + (P[i][2] - c[1]) ** 2 < (P[b][1] - c[0]) ** 2 + (P[b][2] - c[1]) ** 2 ? i : b), byReg[r][0]) : byReg[r][0]; }
+  return PG = { adj, reg, byReg, main, km };
+}
+const provReg = k => provGraph().reg[k];
+// провинция, где стоит войско (если не задана или не совпадает с регионом — главная провинция региона)
+function armyProv(a) {
+  const g = provGraph(), r = RID(a.region);
+  if (a.prov == null || g.reg[a.prov] !== r) a.prov = g.main[r] != null ? g.main[r] : (g.byReg[r] || [0])[0];
+  return a.prov;
+}
+// путь по провинциям (Дейкстра по дням): транзит — только через свои регионы, текущий и целевой
+function findProvPath(a, toReg, toProv) {
+  const g = provGraph(), from = armyProv(a), cur = RID(a.region); toReg = RID(toReg);
+  const dist = new Map([[from, 0]]), prev = new Map(), done = new Set(), heap = [[0, from]];
+  const push = (d, v) => { heap.push([d, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  let goal = -1;
+  while (heap.length) {
+    const [d, v] = pop(); if (done.has(v)) continue; done.add(v);
+    if (toProv != null ? v === toProv : (g.reg[v] === toReg && v !== from)) { goal = v; break; }
+    for (const e of g.adj[v]) {
+      if (done.has(e.to) || !linkOk(a.owner, e.t)) continue;
+      const rr = g.reg[e.to];
+      if (rr !== cur && rr !== toReg) { if (!canEnter(a.owner, rr) || R(rr).owner !== a.owner) continue; }
+      else if (rr === toReg && rr !== cur && !canEnter(a.owner, rr)) continue;
+      const nd = d + e.d; if (nd < (dist.has(e.to) ? dist.get(e.to) : 1e9)) { dist.set(e.to, nd); prev.set(e.to, v); push(nd, e.to); }
     }
   }
-  if (!(to in prev)) return null;
-  const path = []; let c = to; while (c !== a.region) { path.unshift(c); c = prev[c]; }
+  if (goal < 0) return null;
+  const path = []; let v = goal; while (v !== from) { path.unshift(v); v = prev.get(v); }
   return path;
 }
-function setArmyPath(a, to) {
-  if (to === a.region) { a.path = []; return true; }
-  if (!canEnter(a.owner, to)) return false;
-  const p = findPath(a, to); if (!p) return false;
+function pathDays(a) { const g = provGraph(); let s = 0, v = armyProv(a); for (const w of a.path) { const e = g.adj[v].find(x => x.to === w); s += e ? e.d : 0; v = w; } return s; }
+function findPath(a, to) { const p = findProvPath(a, to); return p; }
+function setArmyPath(a, to, prov) {
+  to = RID(to);
+  if (to === RID(a.region) && (prov == null || prov === armyProv(a))) { a.path = []; return true; }
+  if (to !== RID(a.region) && !canEnter(a.owner, to)) return false;
+  const p = findProvPath(a, to, prov); if (!p) return false;
   a.path = p; return true;
 }
 function recruitCost(t) { let c = UNIT[t].cost; if (t === 'inf' && G.laws.pronoia) c *= 1.2; return Math.round(c); }
@@ -753,7 +795,7 @@ async function aiMoves() {
       let need = (1.75 - (D.aggr || 0.3) * 0.7) * (1 + extra * (f === 'osman' ? 0.12 : 0.4));
       if (extra >= (f === 'osman' ? 7 : 4) && best && R(best).owner !== f) best = null;
       if (best && D.trade && !SEA_PORTS.includes(best)) best = null;
-      if (best && bs > need) a.path = [best];
+      if (best && bs > need) setArmyPath(a, best);
       if (G.over) return;
     }
   }
