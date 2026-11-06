@@ -147,8 +147,9 @@ function initMap() {
         PIX.bb = bb;
         cv.width = PIX.w; cv.height = PIX.h; PIX.buf = null;
         if (G) renderAll();
-      } catch (e) { /* файл открыт с диска: браузер запрещает читать пиксели — работает запасная сетка */ }
+      } catch (e) { PIX.idsFailed = true; if (G) renderAll(); /* файл открыт с диска: работает запасная сетка */ }
     };
+    im.onerror = () => { PIX.idsFailed = true; if (G) renderAll(); };
     im.src = 'ids.png';
   }
   setupPanZoom();
@@ -273,8 +274,8 @@ function drawOverlay() {
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
-  } else {
-    // запасной режим: грубая сетка регионов
+  } else if (PIX.idsFailed || !M.provs) {
+    // запасной режим: грубая сетка регионов (только если точная карта провинций недоступна)
     const off = document.createElement('canvas'); off.width = M.GW; off.height = M.GH;
     const oc = off.getContext('2d'); const img = oc.createImageData(M.GW, M.GH);
     for (let i = 0; i < regionGrid.length; i++) { const v = regionGrid[i]; if (v < 0) continue; const c = regCol[v]; img.data.set([c[0], c[1], c[2], v === selIdx ? 160 : 112], i * 4); }
@@ -282,7 +283,7 @@ function drawOverlay() {
     ctx.imageSmoothingEnabled = true; ctx.drawImage(off, 0, 0, cv.width, cv.height);
     ctx.setTransform(cv.width / M.W, 0, 0, cv.height / M.H, 0, 0);
     const thick = new Path2D();
-    for (const [a, b, x1, y1, x2, y2] of borderSegs) if (regOwn[a] !== regOwn[b]) { thick.moveTo(x1, y1); thick.lineTo(x2, y2); }
+    if (typeof BORDERS === 'undefined') for (const [a, b, x1, y1, x2, y2] of borderSegs) if (regOwn[a] !== regOwn[b]) { thick.moveTo(x1, y1); thick.lineTo(x2, y2); }
     ctx.strokeStyle = 'rgba(15,5,15,.85)'; ctx.lineWidth = 3; ctx.stroke(thick);
   }
 }
@@ -363,11 +364,11 @@ function vecCache() {
   if (VEC.cache || !VEC.cls) return VEC.cache;
   const M = MAPINFO, s = 0.5, cv = document.createElement('canvas');
   cv.width = Math.ceil(M.W * s); cv.height = Math.ceil(M.H * s);
-  const ctx = cv.getContext('2d'); ctx.setTransform(s, 0, 0, s, 0, 0); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const ctx = cv.getContext('2d'); ctx.setTransform(s, 0, 0, s, 0, 0); ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   const st = (list, color, px) => { ctx.beginPath(); for (const g of list) { const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]); } ctx.strokeStyle = color; ctx.lineWidth = px / s; ctx.stroke(); };
   const C = VEC.cls;
   st(C.c, 'rgba(14,22,38,1)', 1.2); st(C.p, 'rgba(255,255,255,.35)', 0.6); st(C.r, 'rgba(40,28,40,.75)', 0.9);
-  st(C.s, 'rgba(255,236,190,.35)', 2.6); st(C.s, 'rgba(12,4,12,.95)', 1.5);
+  st(C.s, 'rgba(12,4,12,.95)', 1.4);
   return VEC.cache = cv;
 }
 function drawVector() { vecInit(); if (VEC.segs && G) vecClassify(); paintVector(); }
@@ -410,7 +411,7 @@ function paintVector() {
     ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   // границы
   const moving = performance.now() - (UI.lastMove || 0) < 140;
   if (VEC.cls && (z < 0.6 || (moving && z < 1.1)) && vecCache()) {
@@ -434,8 +435,7 @@ function paintVector() {
     stroke(C.c, 'rgba(14,22,38,1)', 1.9);
     if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
     stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
-    stroke(C.s, 'rgba(255,236,190,.35)', 5);
-    stroke(C.s, 'rgba(12,4,12,.95)', 2.8);
+    stroke(C.s, 'rgba(12,4,12,.95)', 2.6);
   }
   if (G) paintSelection(ctx, z);
 }

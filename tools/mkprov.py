@@ -76,26 +76,37 @@ mt = np.load(SP + 'umap/mt.npy')
 # владелец каждой провинции — цвет державы, занимающий большую часть её площади
 exec(open(SP + 'fmap.py').read())
 kP = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
-OVERC = [0x808080, 0x001F48, 0x000020, 0x262626, 0x000000, 0xDFDFDF, 0x81817F, 0x5E5E5E, 0x404040, 0xFFFFFF, 0x5D5D60, 0x82827C, 0x828280, 0x80807E, 0x82827D, 0x81817F, 0x82827F, 0x82827E, 0x9F9F9F, 0x6C6C6C, 0x070707, 0x88888C]
-selp = (pl >= 0) & ~np.isin(kP, OVERC)
+selp = (pl >= 0) & ~np.isin(kP, list(NOT_STATE))
 keyp = pl[selp].astype(np.int64) * (1 << 24) + kP[selp]
 uu, cc = np.unique(keyp, return_counts=True)
 from collections import defaultdict
 byp = defaultdict(list)
 for kk, nn in zip(uu.tolist(), cc.tolist()): byp[kk >> 24].append((nn, kk & 0xFFFFFF))
 report_mixed = []
+colstat = defaultdict(lambda: {'provs': 0, 'px': 0, 'x': 0.0, 'y': 0.0})
 for i, p in enumerate(plist):
     if p.get('fallback'): p['own'] = gen['regions'][p['gi']][2]; continue
     lst = sorted(byp.get(i, []), reverse=True)
-    lon, lat = l0 + p['cx'] / sx, p0 - p['cy'] / sy
-    p['own'] = None
-    for nn, col in lst:
-        f = faction_of(((col >> 16) & 255, (col >> 8) & 255, col & 255), lon, lat)
-        if f: p['own'] = f; break
-    if p['own'] is None: p['own'] = 'free'   # серая на политической карте — ничейная земля
+    if not lst: p['own'] = 'free'; continue
+    v = lst[0][1]; p['own'] = faction_of_k(v)
+    st = colstat[v]; st['provs'] += 1; st['px'] += p['n']; st['x'] += p['cx'] * p['n']; st['y'] += p['cy'] * p['n']
     tot = sum(n for n, _ in lst)
     if len(lst) > 1 and tot and lst[0][0] / tot < 0.75 and lst[1][0] > 200:
         report_mixed.append(f"{p['name']} — {round(lst[0][0] / tot * 100)}% #{lst[0][1]:06x}, {round(lst[1][0] / tot * 100)}% #{lst[1][1]:06x}")
+# неопознанные цвета — временные державы «#цвет (уточнить)»
+xf = sorted({p['own'] for p in plist if p.get('own', '').startswith('x_')} | {d[2] for d in gen['regions'] if d[2].startswith('x_')})
+gen['xfactions'] = [{'id': f, 'name': f'Держава #{f[2:]} (уточнить)', 'short': f'#{f[2:]}', 'color': '#' + f[2:]} for f in xf]
+json.dump(gen, open(SP + 'gen.json', 'w'), ensure_ascii=False)
+# отчёт по всем цветам держав
+rown = Counter(d[2] for d in gen['regions'])
+import re as _re
+FN = dict(_re.findall(r"^  (\w+):\s*\{ name: '([^']+)'", open(SP + 'src/2_data.js').read(), _re.M))
+with open(SP + 'states.md', 'w') as f:
+    f.write('# Державы на политической карте\n\nКаждый цвет — отдельная держава. «уточнить» — цвет, которого нет в таблице `fmap.py`.\n\n| Цвет | Держава | Провинций | Регионов (хозяин) | Где (долгота, широта) |\n|---|---|---|---|---|\n')
+    for v, st in sorted(colstat.items(), key=lambda t: -t[1]['provs']):
+        fid = faction_of_k(v); lon = l0 + st['x'] / st['px'] / sx; lat = p0 - st['y'] / st['px'] / sy
+        nm = 'Ничейные земли' if fid == 'free' else FN.get(fid, 'Держава #%06x (уточнить)' % v)
+        f.write(f"| #{v:06x} | {nm} | {st['provs']} | {rown.get(fid, 0)} | {lon:.1f}, {lat:.1f} |\n")
 img = np.zeros((H2, W2, 3), np.uint8); img[..., 0] = (ids >> 8) & 255; img[..., 1] = ids & 255
 img[..., 2] = np.where(mt[::S, ::S][:H2, :W2] & (ids > 0), 255, 0)
 # доля гор в каждой провинции

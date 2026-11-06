@@ -34,23 +34,16 @@ for m in re.finditer(r"\['(\w+)', '([^']+)', '(\w+)', (\d+), (\d+), (\d+), (\d+)
     LEG[m.group(1)] = [m.group(1), m.group(2), m.group(3)] + [int(m.group(i)) for i in range(4, 9)] + [m.group(9)]
 # --- палитра держав по карте 1261 года ---
 exec(open(SP + 'fmap.py').read())
-MAIN = {'venice': (54, 100, 153)}
-FCOLORS = {}
-for col, f in FMAP.items():
-    if f not in FCOLORS: FCOLORS[f] = '#%02x%02x%02x' % MAIN.get(f, col)
+FCOLORS = {f: '#%02x%02x%02x' % col for col, f in CORE.items()}
 OVER = {0x808080, 0x001F48, 0x000020, 0x262626, 0x000000, 0xDFDFDF, 0x81817F, 0x5E5E5E, 0x404040}
 unknown = Counter()
 def owner_of(rid, lon, lat):
+    # хозяин региона — цвет, занимающий большую часть его площади (серый — ничейная земля)
     m = rl == rid
-    ks = kP[m]; ks = ks[~np.isin(ks, list(OVER))]
+    ks = kP[m]; ks = ks[~np.isin(ks, list(NOT_STATE))]
     if len(ks) < 20: return None, None
-    cnt = Counter(ks.tolist())
-    for k, n in cnt.most_common():
-        col = ((k >> 16) & 255, (k >> 8) & 255, k & 255)
-        f = faction_of(col, lon, lat)
-        if f: return f, list(col)
-        unknown[col] += n
-    return None, None
+    v = Counter(ks.tolist()).most_common(1)[0][0]
+    return faction_of_k(v), [(v >> 16) & 255, (v >> 8) & 255, v & 255]
 # --- точки подписей: самая «глубокая» клетка региона ---
 def label_point(mask):
     dist = np.zeros(mask.shape, int); q = deque()
@@ -71,7 +64,7 @@ info = []
 for r in regs:
     m = rl == r['id']; x, y = label_point(m); lon, lat = tolonlat(x, y)
     f, col = owner_of(r['id'], lon, lat)
-    if f is None: f, col = 'free', None   # серая на политической карте — ничейная земля
+    if f is None: f, col = 'free', None
     info.append({'rid': r['id'], 'x': x, 'y': y, 'lon': lon, 'lat': lat, 'owner': f, 'col': col, 'n': r['n'], 'parts': r['parts'], 'id': None})
 byrid = {i['rid']: i for i in info}
 regs_by = {r['id']: r for r in regs}

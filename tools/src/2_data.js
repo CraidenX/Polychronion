@@ -153,6 +153,8 @@ const ANATOLIA = GEN ? GEN.anatolia : LEGACY_ANATOLIA;
 const SEA_PORTS = GEN ? GEN.ports : LEGACY_PORTS;
 // цвета держав — с карты автора
 if (GEN && GEN.fcolors) for (const f in GEN.fcolors) if (FACTIONS[f]) FACTIONS[f].color = GEN.fcolors[f];
+// державы, чьих цветов ещё нет в таблице, — временные «#цвет (уточнить)»
+if (GEN && GEN.xfactions) for (const x of GEN.xfactions) if (!FACTIONS[x.id]) FACTIONS[x.id] = { name: x.name, short: x.short, color: x.color, rel: 0, aggr: .05, mix: [3, 3, 2, 0] };
 const TERRAIN_NAMES = { plain: 'равнина', hills: 'холмы', mountains: 'горы', forest: 'леса', river: 'река', coast: 'побережье', walls: 'стены' };
 
 const UNIT = { // тип: имя, людей в отряде, атака, защита, скорость, дальность, цена найма, содержание за 100 чел./сезон

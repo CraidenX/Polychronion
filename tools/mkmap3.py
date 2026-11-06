@@ -10,6 +10,12 @@ k = (a[..., 0] << 16) | (a[..., 1] << 8) | a[..., 2]
 L = a.max(2)
 keep = ((sat <= 10) & (L < 232)) | (k == 0x001F48) | (k == 0x000020)
 out = a.copy(); out[~keep] = (128, 128, 128)
+# подписи (чёрный текст) убираем с фона, но сохраняем отдельным слоем — потом вернём в другом виде
+text = (k == 0x000000) | (k == 0x070707)
+os.makedirs(SP + 'assets', exist_ok=True)
+lab = np.zeros(a.shape[:2] + (4,), np.uint8); lab[text] = (0, 0, 0, 255)
+Image.fromarray(lab, 'RGBA').save(SP + 'assets/labels.png', optimize=True)
+out[text] = (128, 128, 128)
 # внутри закрашенной зоны линии берём с карты регионов (новые провинции), снаружи — с политической
 REG = sorted(glob.glob(SP + '../source/*regions*.png'))[0]
 g = np.asarray(Image.open(REG).convert('RGB')).astype(np.int32)
@@ -17,6 +23,7 @@ gs = g.max(2) - g.min(2); gk = (g[..., 0] << 16) | (g[..., 1] << 8) | g[..., 2]
 rl = np.load(SP + 'umap/rl.npy').astype(np.int32)
 zone = rl >= 0
 inner = g.copy(); inner[(gs > 10) & (gk != 0x001F48) & (gk != 0x000020)] = (128, 128, 128)
+inner[(gk == 0x000000) | (gk == 0x070707)] = (128, 128, 128)   # подписи и внутри зоны
 inner[(gk == 0x262626) | (gk == 0x404040)] = (128, 128, 128)       # старые тёмные границы внутри зоны убираем
 out[zone] = inner[zone]
 # линии провинций внутри зоны убираем — их рисует векторный слой игры (ровные при любом приближении)
