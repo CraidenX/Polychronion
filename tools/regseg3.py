@@ -106,8 +106,8 @@ attach = []   # мелкие острова: присоединяются к б�
 for root, ids in pieces.items():
     area = sum(comps[i]['n'] for i in ids); r = int(c2r[ids[0]])
     anc = piece_has_anchor(ids) if area < BIG_ISLAND else None
-    if anc and area < BIG_ISLAND and anc in anchor_prov:      # ещё один остров той же группы
-        for i in ids: c2p[i] = anchor_prov[anc]; provs[anchor_prov[anc]]['comps'].append(i)
+    if anc and area < BIG_ISLAND and (anc, r) in anchor_prov:      # ещё один остров той же группы (в том же регионе)
+        for i in ids: c2p[i] = anchor_prov[(anc, r)]; provs[anchor_prov[(anc, r)]]['comps'].append(i)
         continue
     if area >= BIG_ISLAND or anc:
         made = []
@@ -115,7 +115,7 @@ for root, ids in pieces.items():
             if comps[i]['n'] >= CRUMB or anc:
                 if anc and made: c2p[i] = made[0]; provs[made[0]]['comps'].append(i); continue
                 c2p[i] = len(provs); provs.append({'region': r, 'comps': [i], 'anchor': anc}); made.append(c2p[i])
-                if anc: anchor_prov[anc] = c2p[i]
+                if anc: anchor_prov[(anc, r)] = c2p[i]
         if not made:
             c2p[ids[0]] = len(provs); provs.append({'region': r, 'comps': [ids[0]], 'anchor': anc}); made = [c2p[ids[0]]]
         for i in ids:

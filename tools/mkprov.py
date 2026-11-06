@@ -107,7 +107,7 @@ Image.fromarray(img).save(OUT + '/ids.png', optimize=True)
 mi['provs'] = [[p['gi'] if p['gi'] is not None else -1, p['x'], p['y'], p['n'], p['name'], p.get('mt', 0), p.get('own')] for p in plist]
 mi['idsScale'] = S
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
-cntr = Counter(p['gi'] for p in plist if not p.get('fallback'))
+cntr = Counter(p['gi'] for p in plist if not p.get('fallback') and p['gi'] is not None)
 rep = {'out_of_range': [[gen['regions'][g][1], n] for g, n in sorted(cntr.items(), key=lambda t: t[1]) if n < 4 or n > 10], 'mixed': report_mixed}
 json.dump(rep, open(SP + 'report.json', 'w'), ensure_ascii=False, indent=1)
 # список для аудита
