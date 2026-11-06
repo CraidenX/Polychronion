@@ -13,7 +13,7 @@ POL = sorted(glob.glob(SP + '../source/*political*.png'))[0]
 P = np.asarray(Image.open(POL).convert('RGB')).astype(np.int32)
 KK = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
 sea = KK == 0x001F48
-LINE = np.isin(KK, [0xDFDFDF, 0x262626, 0x000020, 0x404040, 0xFFFFFF])   # только линии и игровые горы, не серый фон за краем зоны
+LINE = np.isin(KK, [0xDFDFDF, 0x262626, 0x000020, 0x404040, 0x8B5A2B, 0x4A2F1A, 0xFF00FF])   # только линии и игровые горы, не серый фон за краем зоны
 # реки и прочие незакрашенные пиксели суши — к соседней провинции (чтобы не было «берегов» по рекам)
 L = pl.copy()
 lab0 = pl >= 0

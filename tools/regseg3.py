@@ -17,7 +17,9 @@ H, W, _ = G.shape
 kG = (G[..., 0] << 16) | (G[..., 1] << 8) | G[..., 2]
 SEA, WATER, PLINE = 0x001F48, 0x000020, 0xDFDFDF
 sat = G.max(2) - G.min(2)
-fill = (sat > 10) & (kG != SEA) & (kG != WATER)
+MTC = [0x8B5A2B, 0x4A2F1A, 0xFF00FF]   # горы, их контур, перевалы — не регионы
+fill = (sat > 10) & (kG != SEA) & (kG != WATER) & ~np.isin(kG, MTC)
+ATT = (sat <= 10) | np.isin(kG, MTC)
 pline = kG == PLINE
 # 1) одноцветные связные куски
 lab = -np.ones((H, W), np.int32); comps = []
@@ -170,7 +172,7 @@ if len(provs_keep) != len(provs):
 rl = np.where(lab >= 0, c2r[np.maximum(lab, 0)], -1).astype(np.int32)
 pl = np.where(lab >= 0, c2p[np.maximum(lab, 0)], -1).astype(np.int32)
 # линии и подписи внутри зоны — ближайшей провинции (не дальше 6 px), но не серый фон
-MOUNT = kG == 0xFFFFFF
+MOUNT = np.isin(kG, [0x8B5A2B, 0xFF00FF])
 np.save(SP + 'umap/mt.npy', MOUNT)
 land = kG != SEA
 dist = np.where(pl >= 0, 0, 99).astype(np.int32)
@@ -179,7 +181,7 @@ while q:
     y, x = q.popleft(); dd = dist[y, x]
     if dd >= (14 if MOUNT[y, x] else 6): continue
     for Y, X in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
-        if 0 <= Y < H and 0 <= X < W and land[Y, X] and pl[Y, X] < 0 and not fill[Y, X] and sat[Y, X] <= 10 and kG[Y, X] != 0x808080:
+        if 0 <= Y < H and 0 <= X < W and land[Y, X] and pl[Y, X] < 0 and not fill[Y, X] and ATT[Y, X] and kG[Y, X] != 0x808080:
             pl[Y, X] = pl[y, x]; rl[Y, X] = rl[y, x]; dist[Y, X] = dd + 1; q.append((Y, X))
 # сводка по провинциям
 cnt = np.bincount(pl[pl >= 0], minlength=len(provs))

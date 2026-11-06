@@ -11,7 +11,7 @@ L = a.max(2)
 keep = ((sat <= 10) & (L < 232)) | (k == 0x001F48) | (k == 0x000020)
 out = a.copy(); out[~keep] = (128, 128, 128)
 # подписи (чёрный текст) убираем с фона, но сохраняем отдельным слоем — потом вернём в другом виде
-text = (k == 0x000000) | (k == 0x070707)
+text = (k == 0x070707)   # чёрный #000000 — это границы внешних земель, их не трогаем
 os.makedirs(SP + 'assets', exist_ok=True)
 lab = np.zeros(a.shape[:2] + (4,), np.uint8); lab[text] = (0, 0, 0, 255)
 Image.fromarray(lab, 'RGBA').save(SP + 'assets/labels.png', optimize=True)
@@ -22,8 +22,8 @@ g = np.asarray(Image.open(REG).convert('RGB')).astype(np.int32)
 gs = g.max(2) - g.min(2); gk = (g[..., 0] << 16) | (g[..., 1] << 8) | g[..., 2]
 rl = np.load(SP + 'umap/rl.npy').astype(np.int32)
 zone = rl >= 0
-inner = g.copy(); inner[(gs > 10) & (gk != 0x001F48) & (gk != 0x000020)] = (128, 128, 128)
-inner[(gk == 0x000000) | (gk == 0x070707)] = (128, 128, 128)   # подписи и внутри зоны
+inner = g.copy(); inner[(gs > 10) & (gk != 0x001F48) & (gk != 0x000020) & ~np.isin(gk, [0x8B5A2B, 0x4A2F1A, 0xFF00FF])] = (128, 128, 128)
+inner[gk == 0x070707] = (128, 128, 128)   # подписи и внутри зоны
 inner[(gk == 0x262626) | (gk == 0x404040)] = (128, 128, 128)       # старые тёмные границы внутри зоны убираем
 out[zone] = inner[zone]
 # линии провинций внутри зоны убираем — их рисует векторный слой игры (ровные при любом приближении)
@@ -50,12 +50,17 @@ deep, shallow = np.array([0, 20, 54], np.float32), np.array([20, 56, 96], np.flo
 seacol = deep[None, None, :] * (1 - t[..., None]) + shallow[None, None, :] * t[..., None]
 out[sea] = np.clip(seacol[sea], 0, 255).astype(np.int32)
 # горы: светлые хребты с тенью справа-снизу — объём
-mtn = gk == 0xFFFFFF
-sh = np.zeros_like(mtn); sh[1:, 1:] = mtn[:-1, :-1]; sh &= ~mtn & landm
-hl = np.zeros_like(mtn); hl[:-1, :-1] = mtn[1:, 1:]; hl &= ~mtn & landm
-out[sh] = (out[sh] * 0.55).astype(np.int32)
-out[mtn] = (228, 222, 204)
-out[hl] = np.minimum(out[hl] + 40, 255)
+# горы: коричневые хребты с объёмом (свет сверху-слева, тень справа-снизу), контур — тёмно-коричневый
+mtn = np.isin(gk, [0x8B5A2B, 0xFF00FF]) & zone
+edge = (gk == 0x4A2F1A) & zone
+sh = np.zeros_like(mtn); sh[1:, 1:] = mtn[:-1, :-1]; sh &= ~mtn & ~edge & landm
+out[sh] = (out[sh] * 0.6).astype(np.int32)
+up = np.zeros_like(mtn); up[1:, 1:] = mtn[:-1, :-1]
+base_b = np.array([139, 90, 43], np.float32) + (noise(5)[..., None] * 26)
+out[mtn] = np.clip(base_b[mtn] + np.where(up[mtn], -14, 18)[:, None], 0, 255).astype(np.int32)
+out[edge] = (74, 47, 26)
+pas = (gk == 0xFF00FF) & zone
+out[pas] = (236, 214, 160)   # перевал — светлая тропа
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]
 # исходный размер — без пересжатия

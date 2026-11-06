@@ -2,7 +2,9 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 } };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 90 };
+// хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
+try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; } catch (e) { }
 function toast(t) { const d = document.createElement('div'); d.textContent = t; $('toast').appendChild(d); setTimeout(() => d.remove(), 4200); while ($('toast').children.length > 4) $('toast').firstChild.remove(); }
 function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${clamp(v / max * 100, 0, 100)}%;${col ? 'background:' + col : ''}"></i></div>`; }
 function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
@@ -138,7 +140,7 @@ function initMap() {
         const d = cx.getImageData(0, 0, im.width, im.height).data;
         const ids = new Uint16Array(im.width * im.height);
         const mtn = new Uint8Array(ids.length), outer = new Uint8Array(ids.length);
-        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : 0; if (b > 100 && b < 160) outer[k] = 1; }
+        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : 0; if (b >= 100 && b < 160) outer[k] = b - 99; }
         PIX.mtn = mtn; PIX.outer = outer;
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
         const np = M.provs.length + 1, bb = new Int32Array(np * 4);
@@ -208,12 +210,10 @@ function provAt(clientX, clientY) {
   if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
   return idsNear(px, py) - 1;
 }
-// земля за краем игровой карты под точкой: индекс в MAPINFO.outer (ближайшая опорная точка) или -1
+// земля за краем игровой карты под точкой: индекс в MAPINFO.outer или -1
 function outerAt(px, py) {
-  if (!PIX.outer || !MAPINFO.outer || !PIX.outer[py * PIX.w + px]) return -1;
-  const mx = px * PIX.s, my = py * PIX.s; let best = -1, bd = 1e18;
-  MAPINFO.outer.forEach((o, i) => { const d = (o[1] - mx) ** 2 + (o[2] - my) ** 2; if (d < bd) { bd = d; best = i; } });
-  return best;
+  if (!PIX.outer || !MAPINFO.outer) return -1;
+  return PIX.outer[py * PIX.w + px] - 1;   // номер земли записан в карте провинций (синий канал)
 }
 // номер провинции под точкой; если там море — ближайший клочок суши в радиусе ~9 экранных пикселей (мелкие острова)
 function idsNear(px, py) {
@@ -296,7 +296,7 @@ function drawOverlay() {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
         if (pr[v] < 0 || pOwn[v] < 0) continue;
         const c = pCol[v], o = (y * tw + x) * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (PIX.mtn && PIX.mtn[i] ? 90 : 190);
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (PIX.mtn && PIX.mtn[i] ? UI.ridgeA : 190);
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -430,7 +430,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (mt && mt[i] ? 90 : 190); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (mt && mt[i] ? UI.ridgeA : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
@@ -776,12 +776,14 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
+   <button id="mRidge">${UI.ridgeA ? 'Хребты: в цвет владельца (сделать своего цвета)' : 'Хребты: своего цвета (красить в цвет владельца)'}</button>
    <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
   $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
   $('mLoad').onclick = () => { if (load()) { closeModal(); renderAll(); toast('Загружено.'); } else toast('Сохранения нет.'); };
   $('mAuto').onclick = () => { G.autoBattle = !G.autoBattle; closeModal(); renderAll(); };
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 90; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
@@ -790,7 +792,7 @@ function showHelp() {
   modal(`<h2>Как играть</h2>
   <p><b>Цель.</b> Пройти от лета 1261 до 1347 года и встретить Чёрную смерть сильной державой. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
   <p><b>Ход</b> — один сезон. Отдайте приказы и нажмите «Конец хода». «Год ▶▶» проматывает до четырёх сезонов, но останавливается при опасности.</p>
-  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда по одной области за сезон. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы.</p>
+  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда по одной области за сезон. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
   <p><b>Осады.</b> Войско во вражеской области осаждает её: через несколько сезонов (зависит от укреплений) гарнизон сдаётся. Можно штурмовать сразу — откроется экран боя.</p>
   <p><b>Бой.</b> Выберите свой отряд, нажмите светлую клетку, чтобы пойти, или врага с красной рамкой, чтобы атаковать. Лучники стреляют на 3 клетки. Конница с разгона (2+ клетки) бьёт в полтора раза сильнее, но вязнет в лесу и против пехоты в обороне. Холмы и леса защищают. Отряд с низким духом бежит. Можно «Рассчитать автоматически».</p>
   <p><b>Двор</b> — до 7 героев с поручениями. <b>Государство</b> — налоги, монета, законы, уния, флот, стройки, наследник, войны.</p>

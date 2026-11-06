@@ -109,11 +109,33 @@ with open(SP + 'states.md', 'w') as f:
         f.write(f"| #{v:06x} | {nm} | {st['provs']} | {rown.get(fid, 0)} | {lon:.1f}, {lat:.1f} |\n")
 img = np.zeros((H2, W2, 3), np.uint8); img[..., 0] = (ids >> 8) & 255; img[..., 1] = ids & 255
 img[..., 2] = np.where(mt[::S, ::S][:H2, :W2] & (ids > 0), 255, 0)
-# земли за краем игровой зоны (суша без провинции) — B=128; названия — ближайшая точка из outer.json
-outer_land = (ids == 0) & ~sea & ~np.isin((P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2], [0x000020])
-img[..., 2][outer_land] = 128
+# земли за краем игровой зоны: участки, разделённые чёрными линиями автора; имя — подпись внутри участка
+import scipy.ndimage as nd
+KP_ = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
 OUTER = json.load(open(SP + 'outer.json'))
-mi['outer'] = [[n, round((lo - l0) * sx), round((p0 - la) * sy), d] for n, lo, la, d in OUTER]
+mt_out = nd.binary_dilation(KP_ == 0x5E5E5E, iterations=2)
+olines = (KP_ == 0) | (np.isin(KP_, [0x262626, 0x404040]) & ~mt_out)
+oland = (ids == 0) & ~sea & (KP_ != 0x000020)
+seg, _ = nd.label(oland & ~olines)
+lab_by_seg = {}
+for i, (n, x, y, d) in enumerate(OUTER): lab_by_seg.setdefault(int(seg[y, x]), []).append(i)
+oid = np.full(ids.shape, -1, np.int32)
+yy_, xx_ = np.nonzero(oland)
+segv = seg[yy_, xx_]
+for sg, li in lab_by_seg.items():
+    if sg == 0: continue
+    m = segv == sg
+    if len(li) == 1: oid[yy_[m], xx_[m]] = li[0]; continue
+    pts = np.array([[OUTER[i][1], OUTER[i][2]] for i in li])
+    d2 = (xx_[m][:, None] - pts[None, :, 0]) ** 2 + (yy_[m][:, None] - pts[None, :, 1]) ** 2
+    oid[yy_[m], xx_[m]] = np.array(li)[d2.argmin(1)]
+# участки без подписи и сами линии — к ближайшему подписанному
+miss = oland & (oid < 0)
+if miss.any():
+    _, (iy, ix) = nd.distance_transform_edt(oid < 0, return_indices=True)
+    oid[miss] = oid[iy[miss], ix[miss]]
+img[..., 2][oland] = (100 + np.clip(oid[oland], 0, 55)).astype(np.uint8)
+mi['outer'] = [[n, x, y, d] for n, x, y, d in OUTER]
 # доля гор в каждой провинции
 plf = pl.ravel(); mtf = mt.ravel(); sel = plf >= 0
 mcount = np.bincount(plf[sel], weights=mtf[sel].astype(np.float64), minlength=len(provs))
