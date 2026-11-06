@@ -109,6 +109,11 @@ with open(SP + 'states.md', 'w') as f:
         f.write(f"| #{v:06x} | {nm} | {st['provs']} | {rown.get(fid, 0)} | {lon:.1f}, {lat:.1f} |\n")
 img = np.zeros((H2, W2, 3), np.uint8); img[..., 0] = (ids >> 8) & 255; img[..., 1] = ids & 255
 img[..., 2] = np.where(mt[::S, ::S][:H2, :W2] & (ids > 0), 255, 0)
+# земли за краем игровой зоны (суша без провинции) — B=128; названия — ближайшая точка из outer.json
+outer_land = (ids == 0) & ~sea & ~np.isin((P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2], [0x000020])
+img[..., 2][outer_land] = 128
+OUTER = json.load(open(SP + 'outer.json'))
+mi['outer'] = [[n, round((lo - l0) * sx), round((p0 - la) * sy), d] for n, lo, la, d in OUTER]
 # доля гор в каждой провинции
 plf = pl.ravel(); mtf = mt.ravel(); sel = plf >= 0
 mcount = np.bincount(plf[sel], weights=mtf[sel].astype(np.float64), minlength=len(provs))

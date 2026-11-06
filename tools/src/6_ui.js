@@ -137,9 +137,9 @@ function initMap() {
         const cx = c.getContext('2d'); cx.drawImage(im, 0, 0);
         const d = cx.getImageData(0, 0, im.width, im.height).data;
         const ids = new Uint16Array(im.width * im.height);
-        const mtn = new Uint8Array(ids.length);
-        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; mtn[k] = d[k * 4 + 2] > 127 ? 1 : 0; }
-        PIX.mtn = mtn;
+        const mtn = new Uint8Array(ids.length), outer = new Uint8Array(ids.length);
+        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : 0; if (b > 100 && b < 160) outer[k] = 1; }
+        PIX.mtn = mtn; PIX.outer = outer;
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
         const np = M.provs.length + 1, bb = new Int32Array(np * 4);
         for (let k = 0; k < np; k++) { bb[k * 4] = 1e9; bb[k * 4 + 1] = 1e9; bb[k * 4 + 2] = -1; bb[k * 4 + 3] = -1; }
@@ -208,6 +208,13 @@ function provAt(clientX, clientY) {
   if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
   return idsNear(px, py) - 1;
 }
+// земля за краем игровой карты под точкой: индекс в MAPINFO.outer (ближайшая опорная точка) или -1
+function outerAt(px, py) {
+  if (!PIX.outer || !MAPINFO.outer || !PIX.outer[py * PIX.w + px]) return -1;
+  const mx = px * PIX.s, my = py * PIX.s; let best = -1, bd = 1e18;
+  MAPINFO.outer.forEach((o, i) => { const d = (o[1] - mx) ** 2 + (o[2] - my) ** 2; if (d < bd) { bd = d; best = i; } });
+  return best;
+}
 // номер провинции под точкой; если там море — ближайший клочок суши в радиусе ~9 экранных пикселей (мелкие острова)
 function idsNear(px, py) {
   const W = PIX.w, H = PIX.h, ids = PIX.ids, v = ids[py * W + px];
@@ -218,8 +225,16 @@ function idsNear(px, py) {
   }
   return best;
 }
+function outerAtClient(clientX, clientY) {
+  if (!PIX.ids) return -1;
+  const r = $('mapwrap').getBoundingClientRect();
+  const px = Math.floor((clientX - r.left - UI.view.x) / UI.view.z / PIX.s), py = Math.floor((clientY - r.top - UI.view.y) / UI.view.z / PIX.s);
+  if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
+  return outerAt(px, py);
+}
 function provTip(cx, cy) {
   const t = $('ptip'), k = provAt(cx, cy);
+  if (k < 0 && G) { const oi = outerAtClient(cx, cy); if (oi >= 0) { t.innerHTML = `<b>${esc(MAPINFO.outer[oi][0])}</b> <span class="muted">· за пределами карты</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; } }
   if (k < 0 || !G) { t.classList.add('hidden'); return; }
   const p = MAPINFO.provs[k], o = (G.prov && G.prov[k]) || null, reg = p[0] >= 0 ? R(ID_BY_IDX[p[0]]) : null;
   t.innerHTML = `<b>${esc(p[4])}</b> · <span style="color:${o && FACTIONS[o] ? FACTIONS[o].color : '#ccc'}">■</span> ${o ? esc(fshort(o)) : '—'}${reg ? ` <span class="muted">· ${esc(RNAME[reg.id])}</span>` : ''}`;
@@ -238,8 +253,9 @@ function mapClick(e) {
     const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
     if (gx >= 0 && gy >= 0 && gx < MAPINFO.GW && gy < MAPINFO.GH) idx = regionGrid[gy * MAPINFO.GW + gx];
   }
-  if (idx >= 0) { UI.selProv = prov; SFX.play('select'); clickRegion(ID_BY_IDX[idx]); }
-  else { UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
+  if (idx >= 0) { UI.selOuter = -1; UI.selProv = prov; SFX.play('select'); clickRegion(ID_BY_IDX[idx]); }
+  else if (outerAtClient(e.clientX, e.clientY) >= 0) { UI.selOuter = outerAtClient(e.clientX, e.clientY); UI.sel = null; UI.selArmy = null; UI.selProv = null; SFX.play('select'); renderAll(); }
+  else { UI.selOuter = -1; UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
 }
 function clickRegion(id) {
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
@@ -516,6 +532,7 @@ function renderSide() {
   const S = $('side');
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
   if (a) { S.innerHTML = armyPanel(a); bindArmyPanel(a); return; }
+  if (!UI.sel && UI.selOuter >= 0 && MAPINFO.outer) { const o = MAPINFO.outer[UI.selOuter]; S.innerHTML = `<h3>${esc(o[0])}</h3><p class="small">${esc(o[3])}</p><p class="small muted">Земли за пределами игровой карты. Войти туда пока нельзя; связи с этими землями появятся позже.</p><p><button class="small" id="outerBack">← К державе</button></p>`; $('outerBack').onclick = () => { UI.selOuter = -1; renderAll(); }; return; }
   if (!UI.sel) { S.innerHTML = introPanel(); bindIntro(); return; }
   const r = R(UI.sel); S.innerHTML = regionPanel(r); bindRegionPanel(r);
 }
