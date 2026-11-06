@@ -33,7 +33,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #main{flex:1;position:relative;overflow:hidden}
 .view{position:absolute;inset:0;overflow:auto;padding:12px}
 #view-map{padding:0;overflow:hidden;display:flex}
-#mapwrap{flex:1;position:relative;overflow:hidden;background:#011f49;cursor:grab;touch-action:none}
+#mapwrap{flex:1;position:relative;overflow:hidden;background:#011f49;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:grab;touch-action:none}
 #mapinner{position:absolute;left:0;top:0;transform-origin:0 0}
 #mapinner img,#mapinner canvas{position:absolute;left:0;top:0;user-select:none;-webkit-user-drag:none}
 #ovl{image-rendering:auto}
@@ -120,8 +120,8 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
   <div id="main">
     <div id="view-map" class="view">
       <div id="mapwrap">
-        <div id="mapinner"><img id="mapimg" src="map.jpg" alt="Карта"><canvas id="ovl"></canvas></div>
-        <canvas id="veccv"></canvas><div id="mapover"><svg id="selsvg" xmlns="http://www.w3.org/2000/svg"></svg><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
+        <div id="mapinner" class="hidden"><img id="mapimg" src="map.jpg" alt="Карта"></div>
+        <canvas id="veccv"></canvas><div id="mapover"><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
       </div>
       <div id="side"></div>
     </div>
@@ -1998,7 +1998,7 @@ function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${cla
 function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
 function moodCol(m) { return m > 60 ? 'var(--good)' : m > 35 ? 'var(--warn)' : 'var(--bad)'; }
 
-function renderAll() { if (!G) return; syncProv(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); drawVector(); drawSelection(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
+function renderAll() { if (!G) return; syncProv(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); SELP.key = ''; drawVector(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
 
 function renderTop() {
   const I = computeIncome();
@@ -2111,13 +2111,12 @@ function initMap() {
     if (x + 1 < M.GW) { const b = regionGrid[y * M.GW + x + 1]; if (a !== b && a >= 0 && b >= 0) borderSegs.push([a, b, (x + 1) * M.C, y * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
     if (y + 1 < M.GH) { const b = regionGrid[(y + 1) * M.GW + x]; if (a !== b && a >= 0 && b >= 0) borderSegs.push([a, b, x * M.C, (y + 1) * M.C, (x + 1) * M.C, (y + 1) * M.C]); }
   }
-  const cv = $('ovl'); cv.width = Math.ceil(M.W / 2); cv.height = Math.ceil(M.H / 2);
-  cv.style.width = M.W + 'px'; cv.style.height = M.H + 'px';
-  const sv = $('selsvg'); sv.setAttribute('viewBox', `0 0 ${M.W} ${M.H}`); sv.setAttribute('width', M.W); sv.setAttribute('height', M.H);
+  const cv = document.createElement('canvas'); PIX.tint = cv; cv.width = Math.ceil(M.W / 2); cv.height = Math.ceil(M.H / 2);
   $('mapinner').style.width = M.W + 'px'; $('mapinner').style.height = M.H + 'px';
   $('mapover').style.width = M.W + 'px'; $('mapover').style.height = M.H + 'px';
   $('mapimg').width = M.W; $('mapimg').height = M.H;
-  $('mapimg').onerror = () => { $('mapimg').style.display = 'none'; $('mapinner').style.background = '#808080'; };
+  $('mapimg').onload = () => { PIX.bgHalf = null; scheduleVector(); };
+  $('mapimg').onerror = () => { PIX.noImg = true; scheduleVector(); };
   if (M.provs) {
     PIX.provReg = new Int16Array(M.provs.length + 1).fill(-1);
     M.provs.forEach((p, k) => PIX.provReg[k + 1] = p[0]);
@@ -2136,7 +2135,7 @@ function initMap() {
         for (let k = 0; k < np; k++) { bb[k * 4] = 1e9; bb[k * 4 + 1] = 1e9; bb[k * 4 + 2] = -1; bb[k * 4 + 3] = -1; }
         for (let y = 0; y < im.height; y++) for (let x = 0; x < im.width; x++) { const v = ids[y * im.width + x]; if (!v) continue; const o = v * 4; if (x < bb[o]) bb[o] = x; if (y < bb[o + 1]) bb[o + 1] = y; if (x > bb[o + 2]) bb[o + 2] = x; if (y > bb[o + 3]) bb[o + 3] = y; }
         PIX.bb = bb;
-        cv.width = PIX.w; cv.height = PIX.h;
+        cv.width = PIX.w; cv.height = PIX.h; PIX.buf = null;
         if (G) renderAll();
       } catch (e) { /* файл открыт с диска: браузер запрещает читать пиксели — работает запасная сетка */ }
     };
@@ -2155,13 +2154,12 @@ function minZoom() { const w = $('mapwrap').clientWidth || 800, h = $('mapwrap')
 function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clientHeight, v = UI.view; const mw = MAPINFO.W * v.z, mh = MAPINFO.H * v.z; v.x = mw < w ? (w - mw) / 2 : clamp(v.x, w - mw, 0); v.y = mh < h ? (h - mh) / 2 : clamp(v.y, h - mh, 0); }
 function applyView() {
   const z = UI.view.z, k = MAPINFO.W / 4000; // подписи держат читаемый размер при отдалении
-  $('mapinner').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${z})`;
-  $('mapover').style.transform = $('mapinner').style.transform;
+  $('mapover').style.transform = `translate(${UI.view.x}px,${UI.view.y}px) scale(${z})`;
   $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.3, 2.2).toFixed(3));
   $('markers').classList.toggle('far', z * k < 0.5 && REGION_DEFS.length > 40);
   $('markers').classList.toggle('near', z * k >= 1.5);
-  $('mapinner').classList.toggle('far', z * k < 0.55);
   const tp = $('ptip'); if (tp) tp.classList.add('hidden');
+  UI.lastMove = performance.now();
   if (typeof scheduleVector === 'function') scheduleVector();
 }
 function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), MAXZ); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
@@ -2238,7 +2236,7 @@ function clickArmy(id) {
 }
 function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; }
 function drawOverlay() {
-  const M = MAPINFO, cv = $('ovl'), ctx = cv.getContext('2d');
+  const M = MAPINFO, cv = PIX.tint, ctx = cv.getContext('2d');
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
   const selIdx = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
   const ownIdx = {}; let on = 0; const oi = o => (o in ownIdx) ? ownIdx[o] : (ownIdx[o] = on++);
@@ -2351,58 +2349,114 @@ function vecClassify() {
     if (own(a) !== own(b)) s.push(g); else if (P[a][0] !== P[b][0]) r.push(g); else p.push(g);
   }
   VEC.cls = { c, p, r, s };
+  VEC.cache = null;   // картинку границ пересоберём при следующей отрисовке
 }
-function drawVector() { vecInit(); if (!VEC.segs || !G) return; vecClassify(); paintVector(); }
+// готовая картинка всех границ (вполовину разрешения): ею карта рисуется, пока её двигают, и на отдалении
+function vecCache() {
+  if (VEC.cache || !VEC.cls) return VEC.cache;
+  const M = MAPINFO, s = 0.5, cv = document.createElement('canvas');
+  cv.width = Math.ceil(M.W * s); cv.height = Math.ceil(M.H * s);
+  const ctx = cv.getContext('2d'); ctx.setTransform(s, 0, 0, s, 0, 0); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const st = (list, color, px) => { ctx.beginPath(); for (const g of list) { const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]); } ctx.strokeStyle = color; ctx.lineWidth = px / s; ctx.stroke(); };
+  const C = VEC.cls;
+  st(C.c, 'rgba(14,22,38,1)', 1.2); st(C.p, 'rgba(255,255,255,.35)', 0.6); st(C.r, 'rgba(40,28,40,.75)', 0.9);
+  st(C.s, 'rgba(255,236,190,.35)', 2.6); st(C.s, 'rgba(12,4,12,.95)', 1.5);
+  return VEC.cache = cv;
+}
+function drawVector() { vecInit(); if (VEC.segs && G) vecClassify(); paintVector(); }
 function paintVector() {
-  if (!VEC.cls) return;
   const cv = $('veccv'), wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1);
   const W = wrap.clientWidth, H = wrap.clientHeight;
+  if (!W || !H) return;
   if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
-  const ctx = cv.getContext('2d'), v = UI.view, z = v.z;
-  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+  const ctx = cv.getContext('2d'), v = UI.view, z = v.z, M = MAPINFO;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#011f49'; ctx.fillRect(0, 0, cv.width, cv.height);
   // видимая область в координатах карты
-  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + W / z, vy1 = vy0 + H / z;
-  const far = z * MAPINFO.W / 4000 < 0.55;
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  const stroke = (list, color, px) => {
-    ctx.beginPath();
-    for (const g of list) {
-      if (g.x1 < vx0 || g.x0 > vx1 || g.y1 < vy0 || g.y0 > vy1) continue;
-      const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]);
+  const vx0 = Math.max(0, -v.x / z), vy0 = Math.max(0, -v.y / z), vx1 = Math.min(M.W, (W - v.x) / z), vy1 = Math.min(M.H, (H - v.y) / z);
+  if (vx1 <= vx0 || vy1 <= vy0) return;
+  const toS = (x, y) => [(v.x + x * z) * dpr, (v.y + y * z) * dpr];
+  const [dx0, dy0] = toS(vx0, vy0), [dx1, dy1] = toS(vx1, vy1);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = z > 1.5 ? 'medium' : 'high';
+  // фон: только видимый кусок картинки
+  let img = $('mapimg');
+  if (img && img.complete && img.naturalWidth && !PIX.noImg) {
+    if (z < 0.55) {   // на отдалении — уменьшенная копия фона (в 4 раза меньше работы)
+      if (!PIX.bgHalf) { const h2 = document.createElement('canvas'); h2.width = Math.ceil(img.naturalWidth / 2); h2.height = Math.ceil(img.naturalHeight / 2); h2.getContext('2d').drawImage(img, 0, 0, h2.width, h2.height); PIX.bgHalf = h2; }
+      img = PIX.bgHalf;
     }
-    ctx.strokeStyle = color; ctx.lineWidth = px / z; ctx.stroke();
-  };
-  const C = VEC.cls;
-  stroke(C.c, 'rgba(150,170,190,.28)', 3.2);   // мягкий прибой
-  stroke(C.c, 'rgba(14,22,38,1)', 1.9);
-  if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
-  stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
-  stroke(C.s, 'rgba(255,236,190,.35)', 5);
-  stroke(C.s, 'rgba(12,4,12,.95)', 2.8);
+    const k = (img.naturalWidth || img.width) / M.W;
+    ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
+  } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
+  // раскраска держав (внеэкранный холст вполовину разрешения)
+  if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
+  ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  // границы
+  const moving = performance.now() - (UI.lastMove || 0) < 140;
+  if (VEC.cls && (moving || z < 0.6) && vecCache()) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const t = VEC.cache, k = t.width / M.W;
+    ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
+    ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+    if (moving) clearTimeout(VEC.settle), VEC.settle = setTimeout(scheduleVector, 160);
+  } else if (VEC.cls) {
+    const far = z * M.W / 4000 < 0.55;
+    const stroke = (list, color, px) => {
+      ctx.beginPath();
+      for (const g of list) {
+        if (g.x1 < vx0 || g.x0 > vx1 || g.y1 < vy0 || g.y0 > vy1) continue;
+        const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]);
+      }
+      ctx.strokeStyle = color; ctx.lineWidth = px / z; ctx.stroke();
+    };
+    const C = VEC.cls;
+    stroke(C.c, 'rgba(150,170,190,.28)', 3.2);
+    stroke(C.c, 'rgba(14,22,38,1)', 1.9);
+    if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
+    stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
+    stroke(C.s, 'rgba(255,236,190,.35)', 5);
+    stroke(C.s, 'rgba(12,4,12,.95)', 2.8);
+  }
+  if (G) paintSelection(ctx, z);
+}
+// выделение региона и провинции, морские пути, маршруты войск — тоже на камере
+const SELP = { key: '', reg: null, prov: null };
+function paintSelection(ctx, z) {
+  const M = MAPINFO;
+  const ri = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
+  const key = ri + '|' + UI.selProv;
+  if (key !== SELP.key && PIX.bb) {
+    SELP.key = key;
+    SELP.reg = ri >= 0 ? new Path2D(regionOutline(ri) || 'M0 0') : null;
+    SELP.prov = UI.selProv != null && M.provs[UI.selProv] ? new Path2D(provOutline(UI.selProv) || 'M0 0') : null;
+  }
+  const w = px => px / z;
+  if (SELP.reg && ri >= 0) {
+    ctx.fillStyle = 'rgba(255,225,140,.10)'; ctx.fill(SELP.reg);
+    ctx.setLineDash([w(6), w(4)]); ctx.strokeStyle = 'rgba(255,216,74,.9)'; ctx.lineWidth = w(1.6); ctx.stroke(SELP.reg); ctx.setLineDash([]);
+  }
+  if (SELP.prov && UI.selProv != null) {
+    ctx.fillStyle = 'rgba(255,235,160,.16)'; ctx.fill(SELP.prov);
+    ctx.strokeStyle = 'rgba(255,215,90,.35)'; ctx.lineWidth = w(9); ctx.stroke(SELP.prov);
+    ctx.strokeStyle = '#ffe37a'; ctx.lineWidth = w(2.2); ctx.stroke(SELP.prov);
+  }
+  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : (UI.sel && R(UI.sel) ? R(UI.sel).id : null);
+  ctx.setLineDash([w(7), w(6)]); ctx.lineWidth = w(1.6);
+  LINKS.forEach(([a, b, t]) => { if (t === 'land' || (a !== focusR && b !== focusR)) return; const pa = M.pos[a], pb = M.pos[b];
+    ctx.strokeStyle = t === 'sea' ? 'rgba(200,225,255,.75)' : 'rgba(255,214,130,.9)'; ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke(); });
+  ctx.setLineDash([]);
+  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
+  if (a && a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to];
+    ctx.beginPath(); ctx.arc(p[0], p[1], 26, 0, 7); ctx.fillStyle = 'rgba(255,240,180,.35)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,240,180,.9)'; ctx.lineWidth = w(1.5); ctx.stroke(); });
+  myArmies().forEach(x => {
+    if (!x.path.length) return; const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)';
+    ctx.setLineDash(x === a ? [] : [w(10), w(6)]); ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 3.5 : 2.5);
+    ctx.beginPath(); let p = M.pos[x.region]; ctx.moveTo(p[0], p[1]); x.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fillStyle = col; ctx.fill();
+  });
 }
 function scheduleVector() { if (VEC.raf) return; VEC.raf = requestAnimationFrame(() => { VEC.raf = 0; paintVector(); }); }
-function drawSelection() {
-  const svg = $('selsvg'); if (!svg) return;
-  const ri = UI.sel ? ID_BY_IDX.indexOf(R(UI.sel) ? R(UI.sel).id : UI.sel) : -1;
-  let h = '';
-  if (ri >= 0 && PIX.bb) { const d = regionOutline(ri); h += `<path d="${d}" fill="rgba(255,225,140,.10)" stroke="rgba(255,216,74,.9)" stroke-width="1.6" stroke-dasharray="6 4" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`; }
-  if (PIX.bb && UI.selProv != null && MAPINFO.provs[UI.selProv]) {
-    const d = provOutline(UI.selProv);
-    h += `<path d="${d}" fill="rgba(255,235,160,.16)" stroke="rgba(255,215,90,.35)" stroke-width="9" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
-    h += `<path d="${d}" fill="none" stroke="#ffe37a" stroke-width="2.2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
-  }
-  // морские пути и проливы у выбранного региона/войска, маршруты наших войск
-  const M = MAPINFO;
-  const focusR = UI.selArmy ? (G.armies.find(x => x.id === UI.selArmy) || {}).region : (UI.sel && R(UI.sel) ? R(UI.sel).id : null);
-  LINKS.forEach(([a, b, t]) => { if (t === 'land' || (a !== focusR && b !== focusR)) return; const pa = M.pos[a], pb = M.pos[b];
-    h += `<line x1="${pa[0]}" y1="${pa[1]}" x2="${pb[0]}" y2="${pb[1]}" stroke="${t === 'sea' ? 'rgba(200,225,255,.75)' : 'rgba(255,214,130,.9)'}" stroke-width="1.6" stroke-dasharray="7 6" vector-effect="non-scaling-stroke"/>`; });
-  const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
-  if (a && a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to]; h += `<circle cx="${p[0]}" cy="${p[1]}" r="26" fill="rgba(255,240,180,.35)" stroke="rgba(255,240,180,.9)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`; });
-  const route = (x, col, w, dash) => { if (!x.path.length) return; const pts = [x.region, ...x.path].map(id => M.pos[id].join(',')).join(' '); h += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="${w}" ${dash ? 'stroke-dasharray="10 6"' : ''} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`; const e = M.pos[x.path[x.path.length - 1]]; h += `<circle cx="${e[0]}" cy="${e[1]}" r="7" fill="${col}"/>`; };
-  myArmies().forEach(x => route(x, x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)', x === a ? 3.5 : 2.5, x !== a));
-  svg.innerHTML = h;
-}
+function drawSelection() { SELP.key = ''; scheduleVector(); }
 function scouted(f) { return courtHeroes().some(h => h.role === 'spy' && h.mission && h.mission.type === 'scout' && h.mission.target === f); }
 function armyLabel(a) { const n = armyMen(a); if (a.owner === 'byz' || scouted(a.owner)) return fmt(n); return '~' + fmt(Math.round(n / 500) * 500 || 500); }
 function renderMarkers() {

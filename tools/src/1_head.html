@@ -33,7 +33,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #main{flex:1;position:relative;overflow:hidden}
 .view{position:absolute;inset:0;overflow:auto;padding:12px}
 #view-map{padding:0;overflow:hidden;display:flex}
-#mapwrap{flex:1;position:relative;overflow:hidden;background:#011f49;cursor:grab;touch-action:none}
+#mapwrap{flex:1;position:relative;overflow:hidden;background:#011f49;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:grab;touch-action:none}
 #mapinner{position:absolute;left:0;top:0;transform-origin:0 0}
 #mapinner img,#mapinner canvas{position:absolute;left:0;top:0;user-select:none;-webkit-user-drag:none}
 #ovl{image-rendering:auto}
@@ -120,8 +120,8 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
   <div id="main">
     <div id="view-map" class="view">
       <div id="mapwrap">
-        <div id="mapinner"><img id="mapimg" src="map.jpg" alt="Карта"><canvas id="ovl"></canvas></div>
-        <canvas id="veccv"></canvas><div id="mapover"><svg id="selsvg" xmlns="http://www.w3.org/2000/svg"></svg><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
+        <div id="mapinner" class="hidden"><img id="mapimg" src="map.jpg" alt="Карта"></div>
+        <canvas id="veccv"></canvas><div id="mapover"><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="zoombtns"><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
       </div>
       <div id="side"></div>
     </div>
