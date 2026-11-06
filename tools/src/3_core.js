@@ -116,7 +116,7 @@ function addArmy(owner, region, comp, name) {
 }
 function aiGeneralName(f) {
   const pools = {
-    osman: ['Осман', 'Орхан', 'Конур Альп', 'Акче Коджа', 'Абдуррахман', 'Сулейман-паша'], seljuk: ['Кылыч-Арслан', 'Масуд', 'Караман-бей'],
+    osman: ['Осман', 'Орхан', 'Конур Альп', 'Акче Коджа', 'Абдуррахман', 'Сулейман-паша'], seljuk: ['Кей-Кавус II', 'Масуд', 'Караман-бей'], rum_east: ['Кылыч-Арслан IV', 'Перване Сулейман'],
     germiyan: ['Якуб-бей', 'Алишир'], menteshe: ['Ментеше-бей', 'Орхан-бей'], aydin: ['Мехмед Айдын', 'Умур-бей'], karasi: ['Караси-бей', 'Демирхан'],
     bulgaria: ['Константин Тих', 'Ивайло', 'Феодор Святослав', 'Михаил Шишман'], serbia: ['Стефан Урош', 'Милутин', 'Стефан Душан', 'Хреля'],
     epirus: ['Михаил II', 'Никифор I', 'Иоанн Дука'], achaea: ['Гильом де Виллардуэн', 'Жоффруа де Брюйер'], athens: ['Жан де ла Рош', 'Гоше де Бриенн'],
@@ -801,7 +801,7 @@ function worldTick() {
   // угроза Карла Анжуйского
   if (y >= 1267 && !G.flags.vespers) G.anjou = clamp(G.anjou + (G.union === 'accepted' ? 0.4 : 1.4) - (G.prestige > 60 ? 0.3 : 0), 0, 100);
   // турецкие набеги на анатолийские земли
-  const turkish = ['seljuk', 'osman', 'germiyan', 'menteshe', 'aydin', 'karasi', 'candar'];
+  const turkish = ['seljuk', 'rum_east', 'denizli', 'osman', 'germiyan', 'menteshe', 'aydin', 'karasi', 'candar'];
   const raid = BAL.raidBase + Math.max(0, y - 1275) * 0.0025;
   for (const r of myRegions().filter(r => ANATOLIA.includes(r.id))) {
     if (!NEIGH[r.id].some(n => turkish.includes(R(n.to).owner))) continue;
