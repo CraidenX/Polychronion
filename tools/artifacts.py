@@ -22,12 +22,18 @@ SERVICE = {0x001F48: 'море', 0x808080: 'фон / ничейные', 0x000000
 NEARGRAY = lambda c: c not in SERVICE and max((c >> 16) & 255, (c >> 8) & 255, c & 255) - min((c >> 16) & 255, (c >> 8) & 255, c & 255) < 10 and 0x50 <= (c & 255) <= 0x90
 zone = pl >= 0
 items = []   # (карта, тип, x, y, текст)
+SEA = KP == 0x001F48
+def island(lab, cy, cx, s):
+    # кусочек, окружённый морем, — это остров, а не артефакт
+    y, x = int(cy), int(cx); r = 12
+    w = SEA[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1]
+    return w.mean() > 0.35
 def add(mp, kind, x, y, text): items.append((mp, kind, int(x), int(y), text))
 
 for mp, K in (('политическая', KP), ('регионов', KR)):
     cnt = Counter(K.ravel().tolist())
     for c, n in cnt.items():
-        if c in (0x001F48, 0x808080, 0x000000, 0x070707, 0x000020, 0x262626, 0xDFDFDF): continue
+        if c in (0x001F48, 0x808080, 0x000000, 0x070707, 0x000020, 0x262626, 0xDFDFDF, 0x404040, 0xFFFFFF, 0x5E5E5E): continue
         m = K == c
         lab, nl = nd.label(m)
         if nl == 0: continue
@@ -37,26 +43,26 @@ for mp, K in (('политическая', KP), ('регионов', KR)):
         for s, (cy, cx) in zip(sizes, cms):
             iz = zone[int(cy), int(cx)] or zone[max(0, int(cy) - 3):int(cy) + 4, max(0, int(cx) - 3):int(cx) + 4].any()
             if NEARGRAY(c):
-                if s >= 5: add(mp, 'почти серый', cx, cy, f'цвет #{c:06x} ({int(s)} пикс.) — почти как фон #808080, но не он. Перекрасить в нужный цвет')
+                if s >= 5 and iz: add(mp, 'почти серый', cx, cy, f'цвет #{c:06x} ({int(s)} пикс.) — почти как фон #808080, но не он. Перекрасить в нужный цвет')
                 continue
-            if c in (0xFFFFFF, 0x5E5E5E, 0x404040):
-                if s < 6 and iz: add(mp, 'обрывок', cx, cy, f'{SERVICE[c]} #{c:06x}: одиночное пятно {int(s)} пикс.')
-                continue
+            if c in (0xFFFFFF, 0x5E5E5E, 0x404040): continue
             if not iz: continue
-            if s < 30 and s < big:
+            if s < 30 and s < big and not island(lab, cy, cx, s):
                 add(mp, 'обрывок', cx, cy, f'#{c:06x}: оторванный кусочек {int(s)} пикс. (основная часть цвета — {int(big)} пикс.)')
             elif n < 30:
                 add(mp, 'случайный цвет', cx, cy, f'#{c:06x}: цвет встречается всего {n} пикс.')
 
 # цвета государств на карте регионов
-pol_cols = set(Counter(KP[zone].ravel().tolist())) - set(SERVICE)
+pol_cols = {c for c in set(Counter(KP[zone].ravel().tolist())) - set(SERVICE) if not NEARGRAY(c)}
 reg_cnt = Counter(KR[zone].ravel().tolist())
 reg_only_pol = {c for c in pol_cols if c in reg_cnt and Counter(KP[KR == c].ravel().tolist()).most_common(1)[0][0] == c}
 for c in reg_only_pol:
     m = (KR == c) & (KP == c)
     if m.sum() < 1: continue
     lab, nl = nd.label(m)
+    if (KR == c).sum() > 1500: continue   # большой регион — совпадение цветов, не ошибка
     for s, (cy, cx) in zip(nd.sum(m, lab, range(1, nl + 1)), nd.center_of_mass(m, lab, range(1, nl + 1))):
+        if s < 5: continue
         add('регионов', 'цвет державы', cx, cy, f'#{c:06x}: на карте регионов стоит цвет державы ({int(s)} пикс.) — из-за этого здесь получился отдельный регион')
 
 # провинции, поделённые между державами (граница державы не по линии провинции)
