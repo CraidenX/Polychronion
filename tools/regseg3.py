@@ -149,6 +149,23 @@ for r, ids in attach:
     j = min(cand, key=dist)
     for i in ids: c2p[i] = j
     provs[j]['comps'].extend(ids)
+# ручные поправки (fixes.json): кусок в точке from отдаётся провинции, которой принадлежит точка to
+def _comp_at(lon, lat):
+    x, y = int((lon - l0) * fsx), int((p0 - lat) * fsy)
+    win = lab[max(0, y - 6):y + 7, max(0, x - 6):x + 7]; v = win[win >= 0]
+    return int(np.bincount(v).argmax()) if len(v) else None
+if os.path.exists(SP + 'fixes.json'):
+    for fx in json.load(open(SP + 'fixes.json')):
+        a_, b_ = _comp_at(*fx['from']), _comp_at(*fx['to'])
+        if a_ is not None and b_ is not None and c2p[b_] >= 0:
+            old_p = c2p[a_]
+            if old_p >= 0 and a_ in provs[old_p]['comps']: provs[old_p]['comps'].remove(a_)
+            c2p[a_] = c2p[b_]; provs[c2p[b_]]['comps'].append(a_)
+provs_keep = [i for i, p in enumerate(provs) if p['comps']]
+if len(provs_keep) != len(provs):
+    remap = -np.ones(len(provs), np.int32)
+    for n_, i in enumerate(provs_keep): remap[i] = n_
+    provs = [provs[i] for i in provs_keep]; c2p = np.where(c2p >= 0, remap[np.maximum(c2p, 0)], -1)
 # метки на пиксель
 rl = np.where(lab >= 0, c2r[np.maximum(lab, 0)], -1).astype(np.int32)
 pl = np.where(lab >= 0, c2p[np.maximum(lab, 0)], -1).astype(np.int32)

@@ -8,7 +8,7 @@ function bar(v, max = 100, col) { return `<div class="bar"><i style="width:${cla
 function sign(n) { n = Math.round(n); return (n >= 0 ? '+' : '') + n; }
 function moodCol(m) { return m > 60 ? 'var(--good)' : m > 35 ? 'var(--warn)' : 'var(--bad)'; }
 
-function renderAll() { if (!G) return; syncProv(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); drawSelection(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
+function renderAll() { if (!G) return; syncProv(); renderTop(); renderTabs(); if (UI.tab === 'map') { drawOverlay(); drawVector(); drawSelection(); renderMarkers(); renderSide(); } if (UI.tab === 'court') renderCourt(); if (UI.tab === 'state') renderState(); if (UI.tab === 'log') renderLog(); }
 
 function renderTop() {
   const I = computeIncome();
@@ -168,6 +168,8 @@ function applyView() {
   $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.3, 2.2).toFixed(3));
   $('markers').classList.toggle('far', z * k < 0.5 && REGION_DEFS.length > 40);
   $('markers').classList.toggle('near', z * k >= 1.5);
+  $('mapinner').classList.toggle('far', z * k < 0.55);
+  const tp = $('ptip'); if (tp) tp.classList.add('hidden');
 }
 function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), MAXZ); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
 function setupPanZoom() {
@@ -183,11 +185,33 @@ function setupPanZoom() {
   });
   const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; w.style.cursor = ''; if (pts.size === 0) { const d = drag; drag = null; if (d && !d.moved && e.type === 'pointerup') mapClick(e); } };
   w.addEventListener('pointerup', up); w.addEventListener('pointercancel', up);
+  let tipRaf = 0;
+  w.addEventListener('pointermove', e => {
+    if (drag && drag.moved) { $('ptip').classList.add('hidden'); return; }
+    if (tipRaf) return; const cx = e.clientX, cy = e.clientY;
+    tipRaf = requestAnimationFrame(() => { tipRaf = 0; provTip(cx, cy); });
+  });
+  w.addEventListener('pointerleave', () => $('ptip').classList.add('hidden'));
   $('zin').onclick = e => { e.stopPropagation(); zoomAt(1.3, w.clientWidth / 2, w.clientHeight / 2); };
   $('zout').onclick = e => { e.stopPropagation(); zoomAt(1 / 1.3, w.clientWidth / 2, w.clientHeight / 2); };
   $('zfit').onclick = e => { e.stopPropagation(); fitMap(); };
   ['zin', 'zout', 'zfit'].forEach(id => $(id).addEventListener('pointerdown', e => e.stopPropagation()));
   window.addEventListener('resize', () => { clampView(); applyView(); });
+}
+function provAt(clientX, clientY) {
+  if (!PIX.ids) return -1;
+  const r = $('mapwrap').getBoundingClientRect();
+  const mx = (clientX - r.left - UI.view.x) / UI.view.z, my = (clientY - r.top - UI.view.y) / UI.view.z;
+  const px = Math.floor(mx / PIX.s), py = Math.floor(my / PIX.s);
+  if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
+  return PIX.ids[py * PIX.w + px] - 1;
+}
+function provTip(cx, cy) {
+  const t = $('ptip'), k = provAt(cx, cy);
+  if (k < 0 || !G) { t.classList.add('hidden'); return; }
+  const p = MAPINFO.provs[k], o = (G.prov && G.prov[k]) || null, reg = p[0] >= 0 ? R(ID_BY_IDX[p[0]]) : null;
+  t.innerHTML = `<b>${esc(p[4])}</b> · <span style="color:${o && FACTIONS[o] ? FACTIONS[o].color : '#ccc'}">■</span> ${o ? esc(fshort(o)) : '—'}${reg ? ` <span class="muted">· ${esc(RNAME[reg.id])}</span>` : ''}`;
+  t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden');
 }
 function mapClick(e) {
   const t = e.target.closest('.ar,.rm');
@@ -242,12 +266,12 @@ function drawOverlay() {
         const i = row + x, v = ids[i]; if (!v) continue;
         const g = pr[v]; if (g < 0 || pOwn[v] < 0) continue;
         const c = pCol[v], o = i * 4;
-        const al = PIX.mtn && PIX.mtn[i] ? 45 : 112;
+        const al = PIX.mtn && PIX.mtn[i] ? 55 : 125;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = al;
         // соседи справа и снизу
         const vr = x + 1 < w ? ids[i + 1] : 0, vd = y + 1 < h ? ids[i + w] : 0;
-        const orr = vr ? pOwn[vr] : -1, od = vd ? pOwn[vd] : -1;
-        if ((orr >= 0 && orr !== pOwn[v]) || (od >= 0 && od !== pOwn[v])) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
+        const orr = -1, od = -1;
+        if (false) { d[o] = 25; d[o + 1] = 10; d[o + 2] = 25; d[o + 3] = 235; }
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -310,6 +334,32 @@ function regionOutline(ri) {
   for (let v = 1; v < pr.length; v++) if (pr[v] === ri && bb[v * 4 + 2] >= 0) { x0 = Math.min(x0, bb[v * 4]); y0 = Math.min(y0, bb[v * 4 + 1]); x1 = Math.max(x1, bb[v * 4 + 2]); y1 = Math.max(y1, bb[v * 4 + 3]); }
   if (x1 < 0) return '';
   return SEL_CACHE[key] = traceOutline(x => x > 0 && pr[x] === ri, x0, y0, x1, y1);
+}
+/* --- векторные границы (borders.js): берег, провинции, регионы, державы --- */
+const VEC = { segs: null, key: '' };
+function vecInit() {
+  if (typeof BORDERS === 'undefined' || VEC.segs) return;
+  VEC.segs = BORDERS.map(b => {
+    let x = 0, y = 0, d = '';
+    for (let i = 2; i < b.length; i += 2) { x += b[i]; y += b[i + 1]; d += (i === 2 ? 'M' : 'L') + (x / 2) + ' ' + (y / 2); }
+    return [b[0], b[1], d];
+  });
+  const sv = $('vecsvg'); sv.setAttribute('viewBox', `0 0 ${MAPINFO.W} ${MAPINFO.H}`); sv.setAttribute('width', MAPINFO.W); sv.setAttribute('height', MAPINFO.H);
+}
+function drawVector() {
+  vecInit(); if (!VEC.segs) return;
+  const P = MAPINFO.provs, own = k => (G.prov && G.prov[k]) || (P[k][0] >= 0 ? R(ID_BY_IDX[P[k][0]]).owner : null);
+  const key = (G.prov || []).join(',');
+  if (key === VEC.key) return; VEC.key = key;
+  let c = '', p = '', r = '', s = '';
+  for (const [a, b, d] of VEC.segs) {
+    if (a === -1 || b === -1) { c += d; if (a >= 0 && b >= 0) s += d; continue; }
+    if (a < 0 || b < 0) { r += d; continue; }
+    if (own(a) !== own(b)) s += d;
+    else if (P[a][0] !== P[b][0]) r += d;
+    else p += d;
+  }
+  $('vecsvg').innerHTML = `<path class="vc" d="${c}"/><path class="vp" d="${p}"/><path class="vr" d="${r}"/><path class="vs2" d="${s}"/><path class="vs" d="${s}"/>`;
 }
 function drawSelection() {
   const svg = $('selsvg'); if (!svg) return;
@@ -388,7 +438,7 @@ function regionPanel(r) {
     const p = M.provs[UI.selProv], sh = p[3] / area;
     const po = G.prov && G.prov[UI.selProv];
     ph = `<div class="card" style="margin:0 0 8px;padding:8px"><div class="small muted">Провинция</div><b>${esc(p[4])}</b>
-      ${po && po !== r.owner ? `<div class="small"><span style="color:${FACTIONS[po].color}">■</span> ${esc(fname(po))}</div>` : ''}
+      ${po ? `<div style="margin:3px 0"><span style="color:${FACTIONS[po].color};font-size:18px">■</span> <b>${esc(fname(po))}</b>${po !== r.owner ? ' <span class="small warn">(не хозяин региона)</span>' : ''}</div>` : ''}
       <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}% — непроходимы для войск<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
   }
   let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
