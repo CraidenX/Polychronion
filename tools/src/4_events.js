@@ -420,25 +420,41 @@ async function runEvents() {
 
 /* --- ход целиком --- */
 let busy = false;
+// конец сезона: решения ИИ, осады, экономика, двор, события, смена сезона
+async function seasonEnd() {
+  if (!G.over) await aiTurn();
+  if (!G.over) await processSieges();
+  if (!G.over) { economy(); updateRegions(); processHeroes(); worldTick(); normalize(); }
+  if (!G.over) await runEvents();
+  G.armies = G.armies.filter(a => a.units.length > 0);
+  G.armies.forEach(a => { a.moved = false; a.stormed = false; if (a.owner === 'byz' && a.gen && !G.heroes.some(h => h.id === a.gen && h.status === 'court')) a.gen = null; });
+  if (myRegions().length === 0 || R('konst').owner !== 'byz') G.over = 'konst';
+  if (!G.over) {
+    G.turn++; G.season++; G.day = 0; if (G.season > 3) { G.season = 0; G.year++; }
+    if (G.turn % 4 === 0) refreshCandidates();
+    if (nowNum() > dateNum(END.year, END.season)) G.over = 'plague';
+  }
+  syncProv();
+  if (G.over && !G.final) G.final = finale();
+}
+// один день (часы игры в реальном времени); в конце сезона — сезонная обработка. Возвращает true, если сезон сменился
+async function advanceDay() {
+  if (busy || !G || G.over) return false;
+  busy = true;
+  try {
+    await dayTick();
+    if (!G.over && G.day >= SEASON_DAYS) { await seasonEnd(); return true; }
+    if (G.over && !G.final) G.final = finale();
+    return false;
+  } finally { busy = false; }
+}
+// целый сезон сразу (безголовые прогоны и проверки)
 async function endTurn() {
   if (busy || !G || G.over) return;
   busy = true;
   try {
-    await movePlayerArmies();
-    if (!G.over) await aiTurn();
-    if (!G.over) await processSieges();
-    if (!G.over) { economy(); updateRegions(); processHeroes(); worldTick(); normalize(); }
-    if (!G.over) await runEvents();
-    G.armies = G.armies.filter(a => a.units.length > 0);
-    G.armies.forEach(a => { a.moved = false; a.stormed = false; if (a.owner === 'byz' && a.gen && !G.heroes.some(h => h.id === a.gen && h.status === 'court')) a.gen = null; });
-    if (myRegions().length === 0 || R('konst').owner !== 'byz') G.over = 'konst';
-    if (!G.over) {
-      G.turn++; G.season++; if (G.season > 3) { G.season = 0; G.year++; }
-      if (G.turn % 4 === 0) refreshCandidates();
-      if (nowNum() > dateNum(END.year, END.season)) G.over = 'plague';
-    }
-    syncProv();
-    if (G.over && !G.final) G.final = finale();
+    while (!G.over && (G.day || 0) < SEASON_DAYS) await dayTick();
+    await seasonEnd();
   } finally { busy = false; }
 }
 

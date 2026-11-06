@@ -31,6 +31,58 @@ function syncProv() {
 const fname = f => (G && G.fnames && G.fnames[f]) || FACTIONS[f].name;
 const fshort = f => (G && G.fshort && G.fshort[f]) || FACTIONS[f].short;
 const dateStr = (y = G.year, s = G.season) => SEASONS[s] + ' ' + y;
+/* --- реальное время: сезон = SEASON_DAYS дней; экономика, события и решения ИИ — раз в сезон, движение войск — по дням --- */
+const SEASON_DAYS = 91;
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+function dayDate() {   // «14 июля 1261»: день сезона -> настоящая календарная дата
+  const s = G.season, y = G.year, sm = [2, 5, 8, 11][s];
+  const st = Date.UTC(y, sm, 1), en = Date.UTC(s === 3 ? y + 1 : y, (sm + 3) % 12, 1), len = (en - st) / 864e5;
+  const dt = new Date(st + Math.floor(Math.min(SEASON_DAYS - 1, G.day || 0) * len / SEASON_DAYS) * 864e5);
+  return dt.getUTCDate() + ' ' + MONTHS[dt.getUTCMonth()] + ' ' + dt.getUTCFullYear();
+}
+// длительность перехода между соседними областями (дней): по расстоянию, в среднем — сезон; перевал — ещё сезон
+let AVG_LEG = 0;
+function legDays(from, to) {
+  const P = typeof MAPINFO !== 'undefined' && MAPINFO.pos;
+  const lk = (NEIGH[from] || []).find(n => n.to === to);
+  let d = SEASON_DAYS;
+  if (P && P[RID(from)] && P[RID(to)]) {
+    if (!AVG_LEG) { let s = 0, n = 0; for (const id in NEIGH) for (const l of NEIGH[id]) if (l.t !== 'sea' && P[RID(id)] && P[RID(l.to)]) { s += Math.hypot(P[RID(id)][0] - P[RID(l.to)][0], P[RID(id)][1] - P[RID(l.to)][1]); n++; } AVG_LEG = n ? s / n : 1; }
+    const dist = Math.hypot(P[RID(from)][0] - P[RID(to)][0], P[RID(from)][1] - P[RID(to)][1]);
+    d = clamp(Math.round(SEASON_DAYS * dist / AVG_LEG), 30, lk && lk.t === 'sea' ? 110 : 150);
+  }
+  if (lk && lk.t === 'pass') d += SEASON_DAYS;
+  return d;
+}
+// войско в пути: a.leg = {from, to, t, dur}; позиция на карте — между центрами областей
+function legPos(a) { return a.leg ? a.leg.t / a.leg.dur : 0; }
+function startLeg(a) {
+  if (a.leg || !a.path.length) return;
+  const to = a.path[0];
+  if (!NEIGH[a.region].some(n => n.to === to && linkOk(a.owner, n.t)) || (a.owner === 'byz' && !canEnter('byz', to))) { a.path = []; return; }
+  a.leg = { from: a.region, to, t: 0, dur: legDays(a.region, to) }; a.siege = 0;
+  const lk = NEIGH[a.region].find(n => n.to === to);
+  if (lk && lk.t === 'pass' && a.owner === 'byz') log(`${a.name} поднимается на перевал: путь в регион «${RNAME[to]}» займёт ещё сезон.`);
+}
+async function dayTick() {
+  G.day = (G.day || 0) + 1;
+  for (const a of G.armies.slice()) {
+    if (!G.armies.includes(a) || !a.units.length) continue;
+    if (a.leg) {
+      // приказ изменился (или «стоять»): войско поворачивает назад
+      if (a.leg.to !== a.region && a.path[0] !== a.leg.to) a.leg = { from: a.leg.to, to: a.region, t: a.leg.dur - a.leg.t, dur: a.leg.dur, back: true };
+      a.leg.t++;
+      if (a.leg.t >= a.leg.dur) {
+        const to = a.leg.to; a.leg = null;
+        if (to === a.region) continue;   // вернулось
+        a.path.shift();
+        await stepArmy(a, to);
+        if (G.over) return;
+      }
+    }
+    if (!a.leg && a.path.length && G.armies.includes(a)) startLeg(a);
+  }
+}
 const dateNum = (y, s) => y * 4 + s;
 const nowNum = () => dateNum(G.year, G.season);
 const STRAT_RULERS = [
@@ -67,7 +119,7 @@ function newGame() {
     regions: {}, factions: {}, armies: [], heroes: [], candidates: [], captives: [],
     aiwars: [], nextId: 1, log: [], flags: {}, fired: {}, anjou: 0,
     stats: { won: 0, lost: 0, gained: 0, lostR: 0, peakRegions: 0 },
-    lastIncome: {}, autoBattle: false, over: false, fnames: {}, fshort: {}, names: { r: {}, p: {} },
+    lastIncome: {}, autoBattle: false, over: false, fnames: {}, fshort: {}, names: { r: {}, p: {} }, day: 0,
   };
   REGION_DEFS.forEach(([id, nm, owner, w, pop, fort, gar, mood, ter]) => {
     G.regions[id] = { id, owner, wealth: w, pop, fort, garrison: gar, mood, ter, dev: 0, siege: 0, devast: 0 };
@@ -658,6 +710,7 @@ async function aiTurn() {
     // движение
     for (const a of myArm.slice()) {
       if (!G.armies.includes(a) || !a.units.length) { if (!a.units.length) G.armies = G.armies.filter(x => x !== a); continue; }
+      if (a.leg || a.path.length) continue;   // уже в пути
       const here = R(a.region);
       const pow = armyPower(a);
       if (atWar(f, here.owner)) {
@@ -685,7 +738,7 @@ async function aiTurn() {
       let need = (1.75 - (D.aggr || 0.3) * 0.7) * (1 + extra * (f === 'osman' ? 0.12 : 0.4));
       if (extra >= (f === 'osman' ? 7 : 4) && best && R(best).owner !== f) best = null;
       if (best && D.trade && !SEA_PORTS.includes(best)) best = null;
-      if (best && bs > need && !crossPass(a, best)) await stepArmy(a, best);
+      if (best && bs > need) a.path = [best];
       if (G.over) return;
     }
   }

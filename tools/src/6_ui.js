@@ -18,7 +18,7 @@ function renderAll() { if (!G) return; syncProv(); applyNames(); renderTop(); re
 
 function renderTop() {
   const I = computeIncome();
-  $('top').innerHTML = `<span class="date">${dateStr()}</span>
+  $('top').innerHTML = `<span class="date" id="tdate" title="${SEASONS[G.season]} ${G.year}">${dayDate()}</span>
    <span class="stat rul" title="${esc(ruler().desc)}">♛ ${esc(ruler().name)}</span>
    <span class="stat" title="Казна (тыс. иперпиров) и ожидаемый итог за сезон">⛁ ${fmt(G.treasury)} <span class="${I.total >= 0 ? 'good' : 'bad'}">(${sign(I.total)})</span></span>
    <span class="stat" title="Порядок в державе">⚖ Порядок ${Math.round(G.order)}</span>
@@ -26,11 +26,9 @@ function renderTop() {
    <span class="stat" title="Престиж императора">✦ Престиж ${Math.round(G.prestige)}</span>
    <span class="stat" title="Областей у ромеев">▦ ${myRegions().length}</span>
    <span class="sp"></span>
-   <button id="bEnd" class="main" title="Закончить сезон (клавиша Enter)">Конец хода ▶</button>
-   <button id="bYear" title="Сыграть до 4 сезонов подряд; остановится при важных событиях">Год ▶▶</button>
+   <span class="clock">${[['0', '❚❚', 'Пауза (пробел)'], ['1', '▶', 'Обычная скорость (1)'], ['2', '▶▶', 'Быстро (2)'], ['3', '▶▶▶', 'Очень быстро (3)']].map(([v, t, ti]) => `<button class="spd ${UI.speed === +v ? 'on' : ''}" data-spd="${v}" title="${ti}">${t}</button>`).join('')}</span>
    <button id="bMenu">Меню</button>`;
-  $('bEnd').onclick = () => doEndTurn(1);
-  $('bYear').onclick = () => doEndTurn(4);
+  $('top').querySelectorAll('[data-spd]').forEach(b => b.onclick = () => setSpeed(+b.dataset.spd));
   $('bMenu').onclick = showMenu;
 }
 function renderTabs() {
@@ -355,7 +353,7 @@ function mapClick(e) {
 function clickRegion(id) {
   const a = UI.selArmy && G.armies.find(x => x.id === UI.selArmy);
   if (a && a.owner === 'byz' && id !== a.region) {
-    if (setArmyPath(a, id)) { toast(`${a.name}: поход на ${RNAME[id]} (${a.path.length} ход.)`); renderAll(); return; }
+    if (setArmyPath(a, id)) { const d = a.path.reduce((s, x, i) => s + legDays(i ? a.path[i - 1] : a.region, x), 0); toast(`${a.name}: поход на ${RNAME[id]} — около ${d} дн.${UI.speed ? '' : ' Время на паузе: нажмите ▶.'}`); renderAll(); return; }
     else toast(canEnter('byz', id) ? 'Туда не пройти (нужен флот или путь через чужие земли).' : `С державой «${fshort(R(id).owner)}» нет войны — войти нельзя.`);
   }
   UI.sel = id; UI.selArmy = null; renderAll();
@@ -605,9 +603,9 @@ function paintSelection(ctx, z) {
   if (a && a.owner === 'byz') NEIGH[a.region].forEach(n => { if (!linkOk('byz', n.t) || !canEnter('byz', n.to)) return; const p = M.pos[n.to];
     ctx.beginPath(); ctx.arc(p[0], p[1], 26, 0, 7); ctx.fillStyle = 'rgba(255,240,180,.35)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,240,180,.9)'; ctx.lineWidth = w(1.5); ctx.stroke(); });
   myArmies().forEach(x => {
-    if (!x.path.length) return; const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)';
+    if (!x.path.length && !x.leg) return; const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)';
     ctx.setLineDash(x === a ? [] : [w(10), w(6)]); ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 3.5 : 2.5);
-    ctx.beginPath(); let p = M.pos[x.region]; ctx.moveTo(p[0], p[1]); x.path.forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); let p = x.leg ? armyXY(x) : M.pos[x.region]; ctx.moveTo(p[0], p[1]); (x.leg && x.leg.back ? [x.region] : []).concat(x.path).forEach(id => { p = M.pos[id]; ctx.lineTo(p[0], p[1]); }); ctx.stroke(); ctx.setLineDash([]);
     ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fillStyle = col; ctx.fill();
   });
 }
@@ -624,17 +622,55 @@ function renderMarkers() {
       <span class="dot" style="background:${FACTIONS[r.owner].color}"></span> <span class="nm">${esc(RNAME[id])}</span><br><span class="fx">${'▮'.repeat(Math.min(6, r.fort))}${r.owner === 'byz' ? ' ' + Math.round(r.mood) + '☺' : ''}</span></div>`;
   }
   if (M.provs) M.provs.forEach((p, k) => { if (p[0] < 0 || (p[4].includes(', земля ') && UI.selProv !== k)) return; h += `<div class="pm ${UI.selProv === k ? 'selp' : ''}" style="left:${p[1]}px;top:${p[2]}px">${esc(p[4])}</div>`; });
-  const byReg = {};
-  G.armies.forEach(a => (byReg[a.region] = byReg[a.region] || []).push(a));
-  for (const rid in byReg) {
-    const p = M.pos[rid];
-    byReg[rid].forEach((a, i) => {
-      const g = genOf(a);
-      h += `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${p[0] + 26 + i * 6}px;top:${p[1] - 8 - i * 24}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.path.length ? ' ➜' : ''}</div>`;
-    });
-  }
-  $('markers').innerHTML = h;
+  $('markers').innerHTML = h + '<div id="armymk"></div>';
+  renderArmies();
 }
+
+// флажки войск (обновляются каждый игровой день, отдельно от остальных подписей)
+function armyXY(a) {
+  const M = MAPINFO, slot = G.armies.filter(x => x.region === a.region && !x.leg).indexOf(a);
+  if (a.leg) {
+    const p = M.pos[a.leg.from], q = M.pos[a.leg.to], t = legPos(a);
+    return [p[0] + (q[0] - p[0]) * t + 10, p[1] + (q[1] - p[1]) * t - 6];
+  }
+  const p = M.pos[a.region], i = Math.max(0, slot);
+  return [p[0] + 26 + i * 6, p[1] - 8 - i * 24];
+}
+function renderArmies() {
+  const box = $('armymk'); if (!box || !G) return;
+  box.innerHTML = G.armies.map(a => {
+    const g = genOf(a), [x, y] = armyXY(a);
+    return `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''} ${a.leg ? 'moving' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${x}px;top:${y}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.path.length ? ' ➜' : ''}</div>`;
+  }).join('');
+}
+
+/* --- часы: реальное время с паузой и тремя скоростями --- */
+const DAYS_PER_SEC = [0, 4, 9, 20];
+UI.speed = 0; UI.autoPause = true;
+try { UI.autoPause = localStorage.getItem('poly_autopause') !== 'off'; } catch (e) { }
+function setSpeed(v) { UI.speed = v; if (v) { UI.lastSpeed = v; SFX.play('turn'); } document.querySelectorAll('[data-spd]').forEach(b => b.classList.toggle('on', +b.dataset.spd === v)); }
+let clockAcc = 0, clockLast = 0;
+function clockFrame(now) {
+  requestAnimationFrame(clockFrame);
+  const dt = clockLast ? Math.min(0.25, (now - clockLast) / 1000) : 0; clockLast = now;
+  if (!G || G.over || !UI.speed || busy || $('app').classList.contains('hidden') || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden')) return;
+  clockAcc += dt * DAYS_PER_SEC[UI.speed];
+  if (clockAcc >= 1) { clockAcc = Math.min(clockAcc - 1, 2); runDay(); }
+}
+async function runDay() {
+  const before = G.log.length ? G.log[0] : null, season = G.season;
+  const mineBefore = new Set(myRegions().filter(r => G.armies.some(a => a.region === r.id && atWar('byz', a.owner))).map(r => r.id));
+  const changed = await advanceDay();
+  if (!G) return;
+  if (G.over) { save(); renderAll(); showFinale(); return; }
+  const fresh = G.log.slice(0, Math.max(0, G.log.indexOf(before)));
+  const threat = myRegions().filter(r => G.armies.some(a => a.region === r.id && atWar('byz', a.owner)) && !mineBefore.has(r.id));
+  if (changed || fresh.length) { save(); renderAll(); } else { $('tdate') && ($('tdate').textContent = dayDate()); renderArmies(); if (G.day % 3 === 0 && myArmies().some(x => x.leg)) scheduleVector(); if (UI.selArmy && G.day % 2 === 0) renderSide(); }   // карта — только ради линий маршрутов, и не каждый день
+  if (UI.autoPause && (threat.length || fresh.some(l => l.k === 'imp'))) {
+    setSpeed(0); toast(threat.length ? `Враг вошёл в наши земли: ${threat.map(r => RNAME[r.id]).join(', ')}. Пауза.` : 'Важное событие — пауза.');
+  }
+}
+if (!HEADLESS) requestAnimationFrame(clockFrame);
 
 /* --- боковая панель --- */
 function renderSide() {
@@ -731,8 +767,9 @@ function armyPanel(a) {
   <p class="small">Всего ${fmt(armyMen(a))} чел., сила ≈ ${Math.round(armyPower(a))}, содержание ${upkeepOf(a).toFixed(1)} за сезон.</p>`;
   if (canRecruit(a)) h += `<div class="small">Нанять отряд:</div><div class="btnrow">${UTYPES.map(t => `<button class="small" data-rec="${t}" ${G.treasury < recruitCost(t) ? 'disabled' : ''} title="Атака ${UNIT[t].atk}, защита ${UNIT[t].def}, ход ${UNIT[t].spd}${UNIT[t].rng > 1 ? ', стреляет на ' + UNIT[t].rng : ''}; содержание ${UNIT[t].up} за 100 чел.">${UNIT[t].icon} ${UNIT[t].name} (${recruitCost(t)})</button>`).join('')}</div>`;
   else h += `<p class="small muted">Нанимать можно только в своей области без врагов (не больше 12 отрядов).</p>`;
-  h += `<p class="small">${a.path.length ? 'Поход: ' + a.path.map(x => RNAME[x]).join(' → ') : 'Стоит на месте. Нажмите на область на карте, чтобы отдать приказ идти.'}</p>
-  <div class="btnrow">${a.path.length ? '<button id="bStop">Стоять</button>' : ''}
+  if (a.leg) h += `<p class="small">${a.leg.back ? 'Возвращается в' : 'В пути в'} «${esc(RNAME[a.leg.to])}»: ещё ${a.leg.dur - a.leg.t} дн.</p>`;
+  h += `<p class="small">${a.path.length ? 'Поход: ' + a.path.map(x => RNAME[x]).join(' → ') : a.leg ? '' : 'Стоит на месте. Нажмите на область на карте, чтобы отдать приказ идти.'}</p>
+  <div class="btnrow">${a.path.length ? `<button id="bStop">${a.leg && !a.leg.back ? 'Повернуть назад' : 'Стоять'}</button>` : ''}
   ${atWar('byz', R(a.region).owner) && !a.stormed ? `<button class="main" id="bStorm">⚔ Штурмовать (${RNAME[a.region]})</button>` : ''}
   ${myArmies().filter(x => x !== a && x.region === a.region).map(x => `<button data-merge="${x.id}">Влить «${esc(x.name)}»</button>`).join('')}
   <button id="bBack">Готово</button></div>`;
@@ -888,6 +925,7 @@ function showMenu() {
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA ? 'Хребты: в цвет владельца (сделать своего цвета)' : 'Хребты: своего цвета (красить в цвет владельца)'}</button>
+   <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
    <button id="mNames">Скачать мои названия (файл)</button>
@@ -899,6 +937,7 @@ function showMenu() {
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
   $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
+  $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
   $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 205; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
@@ -908,12 +947,12 @@ function showMenu() {
 function showHelp() {
   modal(`<h2>Как играть</h2>
   <p><b>Цель.</b> Пройти от лета 1261 до 1347 года и встретить Чёрную смерть сильной державой. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
-  <p><b>Ход</b> — один сезон. Отдайте приказы и нажмите «Конец хода». «Год ▶▶» проматывает до четырёх сезонов, но останавливается при опасности.</p>
-  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда по одной области за сезон. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
+  <p><b>Время</b> идёт само, по дням. Кнопки вверху: ❚❚ пауза, ▶ ▶▶ ▶▶▶ — скорость (клавиши: пробел, 1, 2, 3). Приказы можно отдавать и на паузе. Налоги, стройки, двор и события считаются раз в сезон (3 месяца). При важных событиях и вторжении врага игра сама встаёт на паузу (это можно выключить в меню).</p>
+  <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на область: войско пойдёт туда; переход в соседнюю область занимает от месяца до полугода, в среднем — сезон. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
   <p><b>Осады.</b> Войско во вражеской области осаждает её: через несколько сезонов (зависит от укреплений) гарнизон сдаётся. Можно штурмовать сразу — откроется экран боя.</p>
   <p><b>Бой.</b> Выберите свой отряд, нажмите светлую клетку, чтобы пойти, или врага с красной рамкой, чтобы атаковать. Лучники стреляют на 3 клетки. Конница с разгона (2+ клетки) бьёт в полтора раза сильнее, но вязнет в лесу и против пехоты в обороне. Холмы и леса защищают. Отряд с низким духом бежит. Можно «Рассчитать автоматически».</p>
   <p><b>Двор</b> — до 7 героев с поручениями. <b>Государство</b> — налоги, монета, законы, уния, флот, стройки, наследник, войны.</p>
-  <p class="small muted">Клавиши: Enter — конец хода, Esc — снять выбор.</p>
+  <p class="small muted">Клавиши: пробел — пауза, 1/2/3 — скорость, / — поиск, Esc — снять выбор.</p>
   <button class="main" onclick="closeModal()">Понятно</button>`);
 }
 function toggleLaw(k) {
@@ -1096,7 +1135,7 @@ function showIntro() {
     SFX.play('event');
     modal(`<div class="small muted">Пролог · Лето 1261</div><h2>Город снова ромейский</h2>
     <p>${esc(INTRO_TEXT)}</p>
-    <div class="note"><b>Как играть.</b> Один ход — один сезон. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на регион — войско пойдёт туда. Пунктир — морские пути (нужен флот). Белые хребты — горы: через них не пройти, а перевал задерживает войско на сезон. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
+    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ ▶ ▶▶ ▶▶▶ вверху (или пробел и клавиши 1–3). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на регион — войско пойдёт туда. Пунктир — морские пути (нужен флот). Коричневые хребты — горы: через них не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает ещё сезон. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
     <p class="small muted">Цель — дожить до 1347 года и встретить Чёрную смерть сильной державой. Потеря Константинополя — конец игры.</p>
     <button class="main" id="introNext">Далее: кто будет править?</button>`);
     $('introNext').onclick = () => { closeModal(); res(); };
@@ -1109,7 +1148,9 @@ function boot() {
   if ($('tCont')) $('tCont').onclick = () => { if (load()) enterGame(); };
   document.addEventListener('keydown', e => {
     if (!G || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden') || $('app').classList.contains('hidden')) return;
-    if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); doEndTurn(1); }
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.key === ' ') { e.preventDefault(); setSpeed(UI.speed ? 0 : (UI.lastSpeed || 1)); }
+    if (['1', '2', '3'].includes(e.key)) { UI.lastSpeed = +e.key; setSpeed(+e.key); }
     if (e.key === 'Escape') { UI.sel = null; UI.selArmy = null; UI.selProv = null; renderAll(); }
   });
 }
