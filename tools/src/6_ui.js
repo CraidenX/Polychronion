@@ -206,7 +206,17 @@ function provAt(clientX, clientY) {
   const mx = (clientX - r.left - UI.view.x) / UI.view.z, my = (clientY - r.top - UI.view.y) / UI.view.z;
   const px = Math.floor(mx / PIX.s), py = Math.floor(my / PIX.s);
   if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
-  return PIX.ids[py * PIX.w + px] - 1;
+  return idsNear(px, py) - 1;
+}
+// номер провинции под точкой; если там море — ближайший клочок суши в радиусе ~9 экранных пикселей (мелкие острова)
+function idsNear(px, py) {
+  const W = PIX.w, H = PIX.h, ids = PIX.ids, v = ids[py * W + px];
+  if (v) return v;
+  const r = Math.min(14, Math.ceil(9 / UI.view.z / PIX.s)); let best = 0, bd = 1e9;
+  for (let y = Math.max(0, py - r); y <= Math.min(H - 1, py + r); y++) for (let x = Math.max(0, px - r); x <= Math.min(W - 1, px + r); x++) {
+    const u = ids[y * W + x]; if (!u) continue; const d = (x - px) * (x - px) + (y - py) * (y - py); if (d < bd && d <= r * r) { bd = d; best = u; }
+  }
+  return best;
 }
 function provTip(cx, cy) {
   const t = $('ptip'), k = provAt(cx, cy);
@@ -223,7 +233,7 @@ function mapClick(e) {
   let idx = -1, prov = null;
   if (PIX.ids) {
     const px = Math.floor(mx / PIX.s), py = Math.floor(my / PIX.s);
-    if (px >= 0 && py >= 0 && px < PIX.w && py < PIX.h) { const v = PIX.ids[py * PIX.w + px]; if (v) { prov = v - 1; idx = PIX.provReg[v]; } }
+    if (px >= 0 && py >= 0 && px < PIX.w && py < PIX.h) { const v = idsNear(px, py); if (v) { prov = v - 1; idx = PIX.provReg[v]; } }
   } else {
     const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
     if (gx >= 0 && gy >= 0 && gx < MAPINFO.GW && gy < MAPINFO.GH) idx = regionGrid[gy * MAPINFO.GW + gx];
@@ -538,7 +548,7 @@ function regionPanel(r) {
       <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}% — непроходимы для войск<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
   }
   let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
-  <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}</div>
+  <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}${FACTIONS[r.owner].house ? ` <span class="muted">· дом: ${esc(FACTIONS[r.owner].house)}</span>` : ''}</div>
   <table class="small">
   <tr><td>Местность</td><td>${TERRAIN_NAMES[r.ter]}</td></tr>
   ${provs.length ? `<tr><td>Провинций</td><td>${provs.length}</td></tr>` : ''}

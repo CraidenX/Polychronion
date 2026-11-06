@@ -163,8 +163,8 @@ const END = { year: 1347, season: 1 };
 const FACTIONS = {
   byz:      { name: 'Ромейская империя', short: 'Ромеи', color: '#7a2f8f', greek: true },
   epirus:   { name: 'Эпирский деспотат', short: 'Эпир', color: '#2f8f7a', greek: true, rel: -40, war: true, aggr: .5, mix: [5, 2, 3, 0] },
-  achaea:   { name: 'Ахейское княжество', short: 'Ахайя', color: '#d4a22a', rel: -50, war: true, aggr: .5, mix: [3, 4, 1, 1] },
-  athens:   { name: 'Афинское герцогство', short: 'Афины', color: '#e0c860', rel: -10, aggr: .2, mix: [3, 3, 1, 1] },
+  achaea:   { name: 'Ахейское княжество', short: 'Ахайя', house: 'Виллардуэны', color: '#d4a22a', rel: -50, war: true, aggr: .5, mix: [3, 4, 1, 1] },
+  athens:   { name: 'Афинское герцогство', short: 'Афины', house: 'де ла Рош', color: '#e0c860', rel: -10, aggr: .2, mix: [3, 3, 1, 1] },
   venice:   { name: 'Венецианская республика', short: 'Венеция', color: '#c0303a', rel: -30, war: true, aggr: .15, mix: [3, 1, 3, 3], trade: true },
   genoa:    { name: 'Генуэзская республика', short: 'Генуя', color: '#3e74b8', rel: 40, aggr: .1, mix: [3, 1, 3, 3], trade: true },
   bulgaria: { name: 'Болгарское царство', short: 'Болгары', color: '#4f8f36', rel: -20, aggr: .45, mix: [4, 4, 2, 0] },
@@ -182,12 +182,12 @@ const FACTIONS = {
   vlachs:   { name: 'Земля Литовоя', short: 'Литовой', color: '#a5734f', rel: 0, aggr: .2, mix: [3, 4, 2, 0] },
   hungary:  { name: 'Венгерское королевство', short: 'Венгрия', color: '#7f474d', rel: 0, aggr: .2, mix: [3, 4, 2, 1] },
   slavonia: { name: 'Герцогство Славония', short: 'Славония', house: 'Арпады (герцог Бела)', lord: 'hungary', color: '#f86670', rel: 0, aggr: .15, mix: [3, 4, 2, 1] },
-  candar:   { name: 'Бейлик Чобаногуллары', short: 'Чобаногуллары', color: '#d9b860', rel: -20, aggr: .5, mix: [2, 5, 3, 0] },
+  candar:   { name: 'Бейлик Кастамону', short: 'Кастамону', house: 'Чобаногуллары', color: '#d9b860', rel: -20, aggr: .5, mix: [2, 5, 3, 0] },
   kefalonia:{ name: 'Пфальцграфство Кефалония', house: 'Орсини', short: 'Кефалония', color: '#d3acb9', rel: 0, aggr: .1, mix: [3, 2, 1, 2] },
   naxos:    { name: 'Герцогство Наксос', short: 'Наксос', house: 'Санудо', color: '#18327b', rel: -10, aggr: .1, mix: [3, 1, 2, 2] },
   tinos:    { name: 'Сеньория Тинос', house: 'Гизи', short: 'Тинос', color: '#728cd5', rel: -10, aggr: .05, mix: [2, 1, 2, 2] },
   salona:   { name: 'Сеньория Салона', short: 'Салона', color: '#4cff00', rel: -10, aggr: .05, mix: [2, 3, 1, 1] },
-  bodonitsa:{ name: 'Маркграфство Бодоница', short: 'Бодоница', color: '#fc70d6', rel: -10, aggr: .05, mix: [2, 3, 1, 1] },
+  bodonitsa:{ name: 'Маркграфство Бодоница', short: 'Бодоница', house: 'Паллавичини', color: '#fc70d6', rel: -10, aggr: .05, mix: [2, 3, 1, 1] },
   papal:    { name: 'Папская область (Беневенто)', short: 'Папство', color: '#e8c547', keepColor: true, rel: 0, aggr: 0, mix: [3, 2, 1, 1] },
   makri:    { name: 'Владение на Ликийском побережье', short: 'Ликийцы', color: '#267f00', rel: 0, aggr: .05, mix: [3, 2, 2, 0] },
   georgia:  { name: 'Царство Картли', short: 'Картли', house: 'Багратионы (Давид VII Улу)', color: '#386599', rel: 20, aggr: .1, mix: [3, 4, 2, 0], greek: false },
@@ -195,23 +195,23 @@ const FACTIONS = {
   armenia:  { name: 'Киликийская Армения', short: 'Армения', color: '#d68cbe', rel: 10, aggr: .05, mix: [3, 4, 2, 1] },
   mamluk:   { name: 'Мамлюкский султанат', short: 'Мамлюки', color: '#bca65d', rel: 10, aggr: .1, mix: [2, 5, 3, 1] },
   outremer: { name: 'Иерусалимское королевство', short: 'Иерусалим', color: '#f7f9fd', rel: 0, aggr: .05, mix: [2, 3, 1, 3] },
-  antioch:  { name: 'Антиохия и Триполи', short: 'Антиохия', color: '#a3bff3', rel: 0, aggr: .05, mix: [2, 3, 1, 3] },
+  antioch:  { name: 'Княжество Антиохия и Триполи', house: 'Раймундиды (Боэмунд VI)', short: 'Антиохия', color: '#a3bff3', rel: 0, aggr: .05, mix: [2, 3, 1, 3] },
   ilkhan:   { name: 'Ильханат', short: 'Ильханы', color: '#e83002', rel: 0, aggr: .1, mix: [1, 6, 4, 0] },
-  shirvan:  { name: 'Ширваншахи', short: 'Ширван', color: '#00b587', rel: 0, aggr: .05, mix: [3, 4, 2, 0] },
-  karaman:  { name: 'Караманиды', short: 'Караман', color: '#3a96b2', rel: -10, aggr: .3, mix: [2, 5, 3, 0] },
+  shirvan:  { name: 'Ширваншахство', house: 'Кесраниды', short: 'Ширван', color: '#00b587', rel: 0, aggr: .05, mix: [3, 4, 2, 0] },
+  karaman:  { name: 'Бейлик Караман', short: 'Караман', house: 'Караманиды', color: '#3a96b2', rel: -10, aggr: .3, mix: [2, 5, 3, 0] },
   free:     { name: 'Ничейные земли', short: 'Ничейные', color: '#8c8c8c', rel: 0, aggr: 0, mix: [3, 2, 1, 0] },
-  zakarids: { name: 'Закариды (Армения)', short: 'Закариды', color: '#ffa830', rel: 10, aggr: .1, mix: [3, 4, 2, 0] },
-  mosul:    { name: 'Мосульский эмират', short: 'Мосул', color: '#544253', rel: 0, aggr: .1, mix: [2, 4, 3, 0] },
+  zakarids: { name: 'Княжество Ани', short: 'Ани', house: 'Закариды', color: '#ffa830', rel: 10, aggr: .1, mix: [3, 4, 2, 0] },
+  mosul:    { name: 'Эмират Мосул', house: 'Лулуиды', short: 'Мосул', color: '#544253', rel: 0, aggr: .1, mix: [2, 4, 3, 0] },
   macva:    { name: 'Банат Мачва', house: 'Ростислав Михайлович', short: 'Мачва', color: '#e05900', rel: 0, aggr: .2, mix: [3, 4, 2, 0] },
   khachen:  { name: 'Княжество Хачен', short: 'Хачен', color: '#ffbae3', rel: 10, aggr: .05, mix: [3, 3, 2, 0] },
   artuqid:  { name: 'Эмират Мардин', short: 'Мардин', house: 'Артукиды', color: '#994a06', rel: 0, aggr: .1, mix: [2, 4, 3, 0] },
-  samtskhe: { name: 'Самцхе (Джакели)', short: 'Самцхе', color: '#747c45', rel: 10, aggr: .05, mix: [3, 4, 2, 0] },
+  samtskhe: { name: 'Атабегство Самцхе', house: 'Джакели', short: 'Самцхе', color: '#747c45', rel: 10, aggr: .05, mix: [3, 4, 2, 0] },
   seneslau: { name: 'Земля Сенеслава', short: 'Сенеслав', color: '#77503e', rel: 0, aggr: .1, mix: [3, 4, 2, 0] },
-  syunik:   { name: 'Сюник (Орбелианы)', short: 'Сюник', color: '#00c6e5', rel: 10, aggr: .05, mix: [3, 3, 2, 0] },
-  mengujek: { name: 'Бейлик Мангуджакидов (Дивриги)', short: 'Мангуджакиды', color: '#266026', rel: 0, aggr: .1, mix: [2, 4, 3, 0] },
-  kerak:    { name: 'Эмират Керак (Айюбиды)', short: 'Керак', color: '#167c7b', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
-  theodoro: { name: 'Готия (Феодоро)', short: 'Феодоро', color: '#4f7c6b', rel: 20, aggr: .05, mix: [3, 2, 2, 0], greek: true },
-  kacic:    { name: 'Омиш (Качичи)', short: 'Омиш', color: '#009652', rel: 0, aggr: .1, mix: [3, 1, 2, 1] },
+  syunik:   { name: 'Княжество Сюник', house: 'Орбелианы', short: 'Сюник', color: '#00c6e5', rel: 10, aggr: .05, mix: [3, 3, 2, 0] },
+  mengujek: { name: 'Бейлик Дивриги', short: 'Дивриги', house: 'Мангуджакиды', color: '#266026', rel: 0, aggr: .1, mix: [2, 4, 3, 0] },
+  kerak:    { name: 'Эмират Керак', house: 'Айюбиды', short: 'Керак', color: '#167c7b', rel: 0, aggr: .05, mix: [2, 4, 3, 0] },
+  theodoro: { name: 'Княжество Готия', short: 'Феодоро', color: '#4f7c6b', rel: 20, aggr: .05, mix: [3, 2, 2, 0], greek: true },
+  kacic:    { name: 'Княжество Омиш', house: 'Качичи', short: 'Омиш', color: '#009652', rel: 0, aggr: .1, mix: [3, 1, 2, 1] },
   nizari:   { name: 'Низариты', short: 'Низариты', color: '#326400', rel: 0, aggr: .05, mix: [3, 1, 2, 1] },
   gibelet:  { name: 'Сеньория Джебейль', short: 'Джебейль', house: 'Эмбриако', color: '#dddd87', rel: 0, aggr: .05, mix: [2, 3, 1, 2] },
   shuf:     { name: 'Друзы Шуфа', short: 'Шуф', color: '#2b440f', rel: 0, aggr: .05, mix: [2, 3, 1, 2] },
@@ -2229,7 +2229,17 @@ function provAt(clientX, clientY) {
   const mx = (clientX - r.left - UI.view.x) / UI.view.z, my = (clientY - r.top - UI.view.y) / UI.view.z;
   const px = Math.floor(mx / PIX.s), py = Math.floor(my / PIX.s);
   if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
-  return PIX.ids[py * PIX.w + px] - 1;
+  return idsNear(px, py) - 1;
+}
+// номер провинции под точкой; если там море — ближайший клочок суши в радиусе ~9 экранных пикселей (мелкие острова)
+function idsNear(px, py) {
+  const W = PIX.w, H = PIX.h, ids = PIX.ids, v = ids[py * W + px];
+  if (v) return v;
+  const r = Math.min(14, Math.ceil(9 / UI.view.z / PIX.s)); let best = 0, bd = 1e9;
+  for (let y = Math.max(0, py - r); y <= Math.min(H - 1, py + r); y++) for (let x = Math.max(0, px - r); x <= Math.min(W - 1, px + r); x++) {
+    const u = ids[y * W + x]; if (!u) continue; const d = (x - px) * (x - px) + (y - py) * (y - py); if (d < bd && d <= r * r) { bd = d; best = u; }
+  }
+  return best;
 }
 function provTip(cx, cy) {
   const t = $('ptip'), k = provAt(cx, cy);
@@ -2246,7 +2256,7 @@ function mapClick(e) {
   let idx = -1, prov = null;
   if (PIX.ids) {
     const px = Math.floor(mx / PIX.s), py = Math.floor(my / PIX.s);
-    if (px >= 0 && py >= 0 && px < PIX.w && py < PIX.h) { const v = PIX.ids[py * PIX.w + px]; if (v) { prov = v - 1; idx = PIX.provReg[v]; } }
+    if (px >= 0 && py >= 0 && px < PIX.w && py < PIX.h) { const v = idsNear(px, py); if (v) { prov = v - 1; idx = PIX.provReg[v]; } }
   } else {
     const gx = Math.floor(mx / MAPINFO.C), gy = Math.floor(my / MAPINFO.C);
     if (gx >= 0 && gy >= 0 && gx < MAPINFO.GW && gy < MAPINFO.GH) idx = regionGrid[gy * MAPINFO.GW + gx];
@@ -2561,7 +2571,7 @@ function regionPanel(r) {
       <div class="small">${p[5] ? `Горы: ${Math.round(p[5] * 100)}% — непроходимы для войск<br>` : ''}${Math.round(sh * 100)}% земель региона · население ≈ ${fmt(r.pop * sh)} тыс.${r.owner === 'byz' ? ` · доход ≈ ${(regionIncome(r) * sh).toFixed(1)}` : ''}</div></div>`;
   }
   let h = ph + `<h3>${esc(RNAME[r.id])}</h3>
-  <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}</div>
+  <div><span class="dot" style="display:inline-block;width:12px;height:12px;background:${FACTIONS[r.owner].color}"></span> ${esc(fname(r.owner))}${FACTIONS[r.owner].house ? ` <span class="muted">· дом: ${esc(FACTIONS[r.owner].house)}</span>` : ''}</div>
   <table class="small">
   <tr><td>Местность</td><td>${TERRAIN_NAMES[r.ter]}</td></tr>
   ${provs.length ? `<tr><td>Провинций</td><td>${provs.length}</td></tr>` : ''}
