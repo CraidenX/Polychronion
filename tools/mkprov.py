@@ -92,7 +92,7 @@ for i, p in enumerate(plist):
     for nn, col in lst:
         f = faction_of(((col >> 16) & 255, (col >> 8) & 255, col & 255), lon, lat)
         if f: p['own'] = f; break
-    if p['own'] is None and p['gi'] is not None: p['own'] = gen['regions'][p['gi']][2]
+    if p['own'] is None: p['own'] = 'free'   # серая на политической карте — ничейная земля
     tot = sum(n for n, _ in lst)
     if len(lst) > 1 and tot and lst[0][0] / tot < 0.75 and lst[1][0] > 200:
         report_mixed.append(f"{p['name']} — {round(lst[0][0] / tot * 100)}% #{lst[0][1]:06x}, {round(lst[1][0] / tot * 100)}% #{lst[1][1]:06x}")

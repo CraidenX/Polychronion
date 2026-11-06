@@ -255,7 +255,9 @@ function drawOverlay() {
   const NP = (MAPINFO.provs || []).length;
   const pOwn = new Int16Array(NP + 1).fill(-1), pCol = new Array(NP + 1);
   for (let k = 0; k < NP; k++) { const o = (G.prov && G.prov[k]) || (MAPINFO.provs[k][0] >= 0 ? R(ID_BY_IDX[MAPINFO.provs[k][0]]).owner : null); if (!o) continue; pOwn[k + 1] = oi(o); pCol[k + 1] = hex(o); }
-  PIX.pCol = pCol; PIX.pOwn = pOwn; PIX.vtKey = '';
+  const pFree = new Uint8Array(NP + 1);
+  for (let k = 0; k < NP; k++) if (G.prov && G.prov[k] === 'free') { pFree[k + 1] = 1; pCol[k + 1] = [40, 40, 40]; }
+  PIX.pCol = pCol; PIX.pOwn = pOwn; PIX.pFree = pFree; PIX.vtKey = '';
   if (PIX.ids) {
     // раскраска для отдалённого вида: вполовину разрешения (выборка каждого второго пикселя карты провинций)
     const tw = cv.width, th = cv.height, W = PIX.w, ids = PIX.ids, pr = PIX.provReg, st = W / tw;
@@ -267,7 +269,7 @@ function drawOverlay() {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
         if (pr[v] < 0 || pOwn[v] < 0) continue;
         const c = pCol[v], o = (y * tw + x) * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = PIX.mtn && PIX.mtn[i] ? 55 : 125;
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (PIX.mtn && PIX.mtn[i] ? 55 : 125);
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -401,7 +403,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = mt && mt[i] ? 55 : 125; } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (mt && mt[i] ? 55 : 125); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);

@@ -71,7 +71,7 @@ info = []
 for r in regs:
     m = rl == r['id']; x, y = label_point(m); lon, lat = tolonlat(x, y)
     f, col = owner_of(r['id'], lon, lat)
-    if f is None: rl[m] = -1; print('skip region without state colour', round(lon, 1), round(lat, 1)); continue
+    if f is None: f, col = 'free', None   # серая на политической карте — ничейная земля
     info.append({'rid': r['id'], 'x': x, 'y': y, 'lon': lon, 'lat': lat, 'owner': f, 'col': col, 'n': r['n'], 'parts': r['parts'], 'id': None})
 byrid = {i['rid']: i for i in info}
 regs_by = {r['id']: r for r in regs}

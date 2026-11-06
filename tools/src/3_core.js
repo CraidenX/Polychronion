@@ -142,7 +142,7 @@ function armiesIn(rid, owner) { return G.armies.filter(a => a.region === rid && 
 function myArmies() { return G.armies.filter(a => a.owner === 'byz'); }
 function myRegions() { return Object.values(G.regions).filter(r => r.owner === 'byz'); }
 function atWar(a, b) {
-  if (a === b) return false;
+  if (a === b || a === 'free' || b === 'free') return false;   // ничейные земли пока никто не трогает
   if (a === 'byz') return G.factions[b].war;
   if (b === 'byz') return G.factions[a].war;
   if (a === 'rebel' || b === 'rebel') return false;
