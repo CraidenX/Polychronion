@@ -229,17 +229,43 @@ function provGraph() {
   const M = MAPINFO, P = M.provs, k = M.W / 5298;
   const km = (a, b) => Math.hypot((P[a][1] - P[b][1]) * 0.63 / k, (P[a][2] - P[b][2]) * 0.82 / k);
   const adj = P.map(() => []), reg = P.map(p => p[0] >= 0 ? M.ids[p[0]] : null), byReg = {};
-  for (const [a, b, t] of M.padj || []) {
+  const RD = typeof ROADS !== 'undefined' ? ROADS : null;
+  (M.padj || []).forEach(([a, b, t], i) => {
     const sea = t === 'sea' || t === 'strait';
-    const d = Math.max(1, Math.round(km(a, b) / (sea ? SAIL_KM : MARCH_KM))) + (t === 'pass' ? PASS_DAYS : 0);
-    adj[a].push({ to: b, t, d }); adj[b].push({ to: a, t, d });
-  }
+    // дорога по местности (roads.js): ломаная от центра провинции a к центру b; длина — в км
+    let pts = null, len = km(a, b);
+    if (RD && RD[i]) {
+      const r = RD[i], n = r.length / 2; pts = new Float32Array(r.length); let x = 0, y = 0;
+      for (let j = 0; j < n; j++) { x += r[2 * j]; y += r[2 * j + 1]; pts[2 * j] = x; pts[2 * j + 1] = y; }
+      len = 0; for (let j = 1; j < n; j++) len += Math.hypot((pts[2 * j] - pts[2 * j - 2]) * 0.63 / k, (pts[2 * j + 1] - pts[2 * j - 1]) * 0.82 / k);
+    }
+    const d = Math.max(1, Math.round(len / (sea ? SAIL_KM : MARCH_KM))) + (t === 'pass' ? PASS_DAYS : 0);
+    adj[a].push({ to: b, t, d, pts, rev: false, km: len }); adj[b].push({ to: a, t, d, pts, rev: true, km: len });
+  });
   reg.forEach((r, i) => { if (r) (byReg[r] = byReg[r] || []).push(i); });
   const main = {};
   for (const r in byReg) { const c = M.pos[r]; main[r] = c ? byReg[r].reduce((b, i) => ((P[i][1] - c[0]) ** 2 + (P[i][2] - c[1]) ** 2 < (P[b][1] - c[0]) ** 2 + (P[b][2] - c[1]) ** 2 ? i : b), byReg[r][0]) : byReg[r][0]; }
   return PG = { adj, reg, byReg, main, km };
 }
 const provReg = k => provGraph().reg[k];
+// точка на дороге от провинции from к to на доле пути f (0..1)
+function roadPoint(from, to, f) {
+  const g = provGraph(), e = g.adj[from].find(x => x.to === to), P = MAPINFO.provs;
+  if (!e || !e.pts) return [P[from][1] + (P[to][1] - P[from][1]) * f, P[from][2] + (P[to][2] - P[from][2]) * f];
+  const p = e.pts, n = p.length / 2;
+  if (!e.cum) { e.cum = new Float32Array(n); for (let j = 1; j < n; j++) e.cum[j] = e.cum[j - 1] + Math.hypot(p[2 * j] - p[2 * j - 2], p[2 * j + 1] - p[2 * j - 1]); }
+  const L = e.cum[n - 1], s = (e.rev ? 1 - f : f) * L;
+  let j = 1; while (j < n - 1 && e.cum[j] < s) j++;
+  const seg = e.cum[j] - e.cum[j - 1] || 1, u = (s - e.cum[j - 1]) / seg;
+  return [p[2 * j - 2] + (p[2 * j] - p[2 * j - 2]) * u, p[2 * j - 1] + (p[2 * j + 1] - p[2 * j - 1]) * u];
+}
+// вся дорога от from к to (для рисования маршрута)
+function roadPts(from, to) {
+  const e = provGraph().adj[from].find(x => x.to === to), P = MAPINFO.provs;
+  if (!e || !e.pts) return [[P[from][1], P[from][2]], [P[to][1], P[to][2]]];
+  const out = []; for (let j = 0; j < e.pts.length; j += 2) out.push([e.pts[j], e.pts[j + 1]]);
+  return e.rev ? out.reverse() : out;
+}
 // провинция, где стоит войско (если не задана или не совпадает с регионом — главная провинция региона)
 function armyProv(a) {
   const g = provGraph(), r = RID(a.region);
@@ -247,8 +273,8 @@ function armyProv(a) {
   return a.prov;
 }
 // путь по провинциям (Дейкстра по дням): транзит — только через свои регионы, текущий и целевой
-function findProvPath(a, toReg, toProv) {
-  const g = provGraph(), from = armyProv(a), cur = RID(a.region); toReg = RID(toReg);
+function findProvPath(a, toReg, toProv, fromProv) {
+  const g = provGraph(), from = fromProv != null ? fromProv : armyProv(a), cur = fromProv != null ? g.reg[fromProv] : RID(a.region); toReg = RID(toReg);
   const dist = new Map([[from, 0]]), prev = new Map(), done = new Set(), heap = [[0, from]];
   const push = (d, v) => { heap.push([d, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
@@ -270,6 +296,27 @@ function findProvPath(a, toReg, toProv) {
 }
 function pathDays(a) { const g = provGraph(); let s = 0, v = armyProv(a); for (const w of a.path) { const e = g.adj[v].find(x => x.to === w); s += e ? e.d : 0; v = w; } return s; }
 function findPath(a, to) { const p = findProvPath(a, to); return p; }
+// свой маршрут: продолжить путь от последней точки похода до новой провинции (Ctrl/Shift + щелчок)
+function addWaypoint(a, to, prov) {
+  const last = a.path.length ? a.path[a.path.length - 1] : armyProv(a);
+  if (prov === last) return true;
+  const p = findProvPath(a, to, prov, last); if (!p) return false;
+  a.path = a.path.concat(p); return true;
+}
+// отряды между войсками в одной провинции
+function armiesTogether(a, b) { return a !== b && a.owner === b.owner && !a.leg && !b.leg && armyProv(a) === armyProv(b); }
+function transferUnits(from, to, idx) {
+  const room = 12 - to.units.length, take = idx.slice().sort((x, y) => y - x).slice(0, Math.max(0, room));
+  const moved = take.map(i => from.units.splice(i, 1)[0]).reverse(); to.units.push(...moved);
+  if (!from.units.length) removeArmy(from);
+  return moved.length;
+}
+function splitArmy(a, idx) {
+  if (!idx.length || idx.length >= a.units.length) return null;
+  if (a.owner === 'byz' && myArmies().length >= 2 + G.heroes.filter(h => h.role === 'general' && h.status === 'court').length) return null;
+  const n = addArmy(a.owner, a.region, [], 'Войско ' + (myArmies().length + 1)); n.prov = armyProv(a);
+  transferUnits(a, n, idx); return n;
+}
 function setArmyPath(a, to, prov) {
   to = RID(to);
   if (to === RID(a.region) && (prov == null || prov === armyProv(a))) { a.path = []; return true; }

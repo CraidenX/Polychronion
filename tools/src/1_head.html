@@ -75,6 +75,8 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 .clock .spd{min-width:30px;padding:5px 6px;font-size:13px}
 .clock .spd.on{background:var(--purple);border-color:var(--gold);color:#fff}
 .ar.moving{opacity:.92;border-style:dashed}
+tr.urow{cursor:grab} tr.urow:active{cursor:grabbing}
+button.drop{outline:2px dashed var(--gold);background:rgba(217,183,95,.25)}
 #zoombtns{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:5}
 #zoombtns button{width:36px;height:36px;padding:0;font-size:20px}
 #side{width:340px;max-width:45%;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:10px}
@@ -157,4 +159,5 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <div id="modal" class="hidden"><div class="box" id="mbox"></div></div>
 <div id="toast"></div>
 <script src="borders.js"></script>
+<script src="roads.js"></script>
 <script>

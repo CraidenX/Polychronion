@@ -50,7 +50,11 @@ for p, d in strait.items():
 for q in json.load(open(SP + 'umap/passes.json')):
     a, b = q[0], q[1]; edges[(min(a, b), max(a, b))] = 'pass'
 # приморские провинции
-coastm = nd.binary_dilation(sea, iterations=2) & (pl >= 0) & ~sea
+# открытое море — крупные водоёмы (озёра и реки не дают порта)
+slab, sn = nd.label(np.isin(kP, [0x001F48]))
+ssz = nd.sum(np.ones_like(slab), slab, range(1, sn + 1))
+opensea = np.isin(slab, [i + 1 for i, v in enumerate(ssz) if v > 150000])
+coastm = nd.binary_dilation(opensea, iterations=3) & (pl >= 0) & ~sea
 coast = sorted(set(np.unique(pl[coastm]).tolist()) - {-1})
 # морские пути регионов -> между ближайшими приморскими провинциями
 gen = json.load(open(SP + 'gen.json')); mi = json.load(open(SP + 'mapinfo3.json'))
