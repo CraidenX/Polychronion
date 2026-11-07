@@ -81,16 +81,16 @@ w = np.clip(hmix * 0.9, 0, 0.5)   # подножия чуть землистее
 land_out = land_out * (1 - w) + mcol * w
 land_out *= shade[..., None]
 out = np.where(landm[..., None], np.clip(land_out, 0, 255), out).astype(np.int32)
-# реки (Natural Earth, mkrivers.py): синие линии под пиками
-if os.path.exists(SP + 'umap/rivers.npy'):
-    rv = np.load(SP + 'umap/rivers.npy').astype(np.float32)[..., None] / 255
-    rcol = np.array([30, 66, 112], np.float32)
-    out = np.clip(out.astype(np.float32) * (1 - rv) + rcol * rv, 0, 255).astype(np.int32)
 # леса (mkforest.py): деревья-значки под пиками
 sys.path.insert(0, SP)
 from peaks import draw_trees
 if os.path.exists(SP + 'umap/forest.npy'):
     out = draw_trees(out, np.load(SP + 'umap/forest.npy') & landm, np.load(SP + 'umap/conifer.npy'), np.random.default_rng(1204))
+# реки (mkrivers.py — малые реки с карты мода): поверх леса, под пиками
+if os.path.exists(SP + 'umap/rivers.npy'):
+    rv = np.load(SP + 'umap/rivers.npy').astype(np.float32)[..., None] / 255
+    rcol = np.array([30, 66, 112], np.float32)
+    out = np.clip(out.astype(np.float32) * (1 - rv) + rcol * rv, 0, 255).astype(np.int32)
 # рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
 from peaks import draw_peaks
 out = draw_peaks(out, allm & landm, np.random.default_rng(1261), bg=bgm & ~zone)

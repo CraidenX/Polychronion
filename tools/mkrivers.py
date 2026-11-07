@@ -1,124 +1,56 @@
-# Реки: линии из Natural Earth (rivers.json — вырезка ne_10m_rivers_lake_centerlines и ne_10m_rivers_europe,
-# общественное достояние, naturalearthdata.com) в проекции карты автора (umap/fit.json), затем — «гидрография»:
-#   1) реки, повторяющие воду автора (Дунай, Нил, Тигр, Евфрат…), убираются целиком;
-#   2) там, где река подходит к воде автора, она обрезается и устье дотягивается до ближайшей воды;
-#   3) концы рек, оказавшиеся рядом с другой рекой, присоединяются к ней (приток);
-#   4) остаются только реки, которые по цепочке притоков доходят до воды (моря, озера, реки автора) или до края карты.
+# Малые реки — с карты мода (source/*mod*реки*.png, автор загрузил; судоходные реки автор уже нанёс на свои карты).
+# В моде река нарисована двумя тёмными берегами (#000020) с руслом между ними. Порядок:
+#   1) совмещение: карта мода шире на 113 px; сдвиг подбирается по морю (совпадение ~99,98%);
+#   2) берега рек на суше автора (не ближе 2 px к его воде — там береговая линия и большие реки) -> заливка русла;
+#   3) осевая линия русла (скелет) -> река ровной ширины ~2,3 px с мягким краем;
+#   4) каждое пятно рек должно касаться воды автора или края карты (иначе — убрать; если вода близко — дотянуть).
 # Выход: umap/rivers.npy — маска 0..255 (полная карта) для mkmap3.py и ids.png.
-import json, os, glob, math
+import os, glob
 import numpy as np
 from PIL import Image, ImageDraw
 import scipy.ndimage as nd
+from skimage.morphology import skeletonize
 SP = os.path.dirname(os.path.abspath(__file__)) + '/'
-fit = json.load(open(SP + 'umap/fit.json'))
-P = np.asarray(Image.open(sorted(glob.glob(SP + '../source/*political*.png'))[0]).convert('RGB')).astype(np.int32)
-kP = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
-H, W = kP.shape
-k = W / fit.get('W', 2000); l0, sx, p0, sy = fit['p'][0], fit['p'][1] * k, fit['p'][2], fit['p'][3] * k
-water = np.isin(kP, [0x001F48, 0x000020])
+def load(pat):
+    a = np.asarray(Image.open(sorted(glob.glob(SP + '../source/' + pat))[0]).convert('RGB')).astype(np.int32)
+    return (a[..., 0] << 16) | (a[..., 1] << 8) | a[..., 2]
+kB = load('*political*.png'); H, W = kB.shape
+kM = load('*mod*реки*.png')
+water = np.isin(kB, [0x001F48, 0x000020])
+# 1) сдвиг по морю
+best = None
+for dx in range(0, kM.shape[1] - W + 1):
+    s = ((kM[::6, dx:dx + W:6] == 0x001F48) == (kB[::6, ::6] == 0x001F48)).mean()
+    if best is None or s > best[0]: best = (s, dx)
+dx = best[1]; kM = kM[:, dx:dx + W]
+print('сдвиг карты мода', dx, 'совпадение моря', round(best[0] * 100, 2), '%')
+# 2) берега -> русло
 wd, (wy, wx) = nd.distance_transform_edt(~water, return_indices=True)
-def wdist(x, y):
-    xi, yi = min(W - 1, max(0, int(round(x)))), min(H - 1, max(0, int(round(y))))
-    return wd[yi, xi], (wx[yi, xi], wy[yi, xi])
-def width(r):
-    r = 12 if r is None else r
-    return 2.4 if r <= 3 else 2.0 if r <= 6 else 1.6 if r <= 9 else 1.3 if r <= 10 else 1.1
-NEAR, MOUTH, JOIN = 9, 28, 10          # px: «у воды», как далеко дотягивать устье, как далеко искать реку-приёмник
-runs = []                               # [точки, толщина, бледная, связана_с_водой]
-dropped_dup = 0
-for rv in json.load(open(SP + 'rivers.json')):
-    if rv['f'] == 'Lake Centerline': continue
-    pts = [((x - l0) * sx, (p0 - y) * sy) for x, y in rv['c']]
-    if len(pts) < 2: continue
-    # плотнее точки (не реже 3 px), чтобы резать точно
-    dense = [pts[0]]
-    for a, b in zip(pts, pts[1:]):
-        n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / 3))
-        dense += [(a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n) for t in range(1, n + 1)]
-    near = [wdist(x, y)[0] < NEAR for x, y in dense]
-    if sum(near) > 0.5 * len(dense): dropped_dup += 1; continue     # дубль реки автора
-    w = width(rv['r']); faint = rv['f'] == 'Intermittent River'
-    cur = []
-    for i, (p, nr) in enumerate(zip(dense, near)):
-        if not nr: cur.append(p); continue
-        if len(cur) >= 3: runs.append([cur, w, faint, False, True, set()]); cur = []   # прервана водой: устье -> к воде
-        else: cur = []
-    if len(cur) >= 3: runs.append([cur, w, faint, False, False, set()])
-# устья: конец рядом с водой — дотягиваем до воды
-def edge(p): return p[0] < 4 or p[1] < 4 or p[0] > W - 5 or p[1] > H - 5
-for r in runs:
-    pts = r[0]
-    for end in (0, -1):
-        p = pts[end]; d, (qx, qy) = wdist(*p)
-        if d < MOUTH or (end == -1 and r[4]) or edge(p):
-            if not edge(p) and d < MOUTH * 1.5: (pts.insert(0, (qx, qy)) if end == 0 else pts.append((qx, qy)))
-            r[3] = True; r[5].add(end)
-# притоки: конец рядом с другой рекой — присоединяем
-idm = np.full((H, W), -1, np.int32)
-for i, r in enumerate(runs):
-    for x, y in r[0]:
-        xi, yi = int(round(x)), int(round(y))
-        if 0 <= xi < W and 0 <= yi < H: idm[max(0, yi - 1):yi + 2, max(0, xi - 1):xi + 2] = i
-adj = [set() for _ in runs]
-for i, r in enumerate(runs):
-    for end in (0, -1):
-        x, y = r[0][end]; xi, yi = int(round(x)), int(round(y))
-        y0, y1, x0, x1 = max(0, yi - JOIN), min(H, yi + JOIN + 1), max(0, xi - JOIN), min(W, xi + JOIN + 1)
-        win = idm[y0:y1, x0:x1]
-        ys, xs = np.nonzero((win >= 0) & (win != i))
-        if not len(ys): continue
-        j = np.argmin((ys + y0 - yi) ** 2 + (xs + x0 - xi) ** 2); o = int(win[ys[j], xs[j]])
-        adj[i].add(o); adj[o].add(i); r[5].add(end)
-        q = (float(xs[j] + x0), float(ys[j] + y0))
-        if end == 0: r[0].insert(0, q)
-        else: r[0].append(q)
-# только связанные с водой (через цепочку притоков)
-ok = [r[3] for r in runs]; stack = [i for i, v in enumerate(ok) if v]
-while stack:
-    i = stack.pop()
-    for j in adj[i]:
-        if not ok[j]: ok[j] = True; stack.append(j)
-S = 3
-img = Image.new('L', (W * S, H * S), 0); d = ImageDraw.Draw(img)
-kept = 0
-for r, good in zip(runs, ok):
-    if not good: continue
-    kept += 1
-    pts = r[0]
-    # устье — связанный конец (если оба или ни один — тот, что ближе к воде); к истоку река сужается
-    ends = r[5]
-    mouth_last = (-1 in ends and 0 not in ends) or (ends in ({0, -1}, set()) and wdist(*pts[-1])[0] <= wdist(*pts[0])[0])
-    if not mouth_last: pts = pts[::-1]
-    n = len(pts); L = [0.0]
-    for a, b in zip(pts, pts[1:]): L.append(L[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
-    tot = L[-1] or 1; col = 150 if r[2] else 255
-    for t in range(n - 1):
-        f = 0.45 + 0.55 * min(1.0, L[t + 1] / min(tot, 220))            # первые ~220 px от истока — сужение
-        wpx = max(1.0, r[1] * f * S)
-        a, b = pts[t], pts[t + 1]
-        d.line([(a[0] * S, a[1] * S), (b[0] * S, b[1] * S)], fill=col, width=round(wpx))
-        rr = wpx / 2; d.ellipse([b[0] * S - rr, b[1] * S - rr, b[0] * S + rr, b[1] * S + rr], fill=col)
-m = np.asarray(img.resize((W, H), Image.BOX)).astype(np.float32)   # BOX: чёткий край без размытия
-m = np.clip((m - 25) * 1.25, 0, 255).astype(np.uint8)              # подтянуть контраст края
+banks = np.isin(kM, [0x000020, 0x001F48]) & ~water & (wd > 2)
+chan = nd.binary_closing(banks, structure=np.ones((3, 3)), iterations=2) & ~water
+chan = nd.binary_opening(chan, structure=np.ones((2, 2)))
+# 3) осевая линия и ровная ширина
+sk = skeletonize(chan)
+sk &= ~nd.binary_dilation(water, iterations=1)
+# дотянуть устья: концы скелета у воды автора (до 6 px) соединяем с водой
+nb = nd.convolve(sk.astype(np.uint8), np.ones((3, 3), np.uint8), mode='constant') - sk
+ends = sk & (nb == 1)
+ys, xs = np.nonzero(ends & (wd <= 6))
+img = Image.fromarray((sk * 255).astype(np.uint8)); d = ImageDraw.Draw(img)
+for y, x in zip(ys, xs): d.line([(x, y), (wx[y, x], wy[y, x])], fill=255, width=1)
+sk = np.asarray(img) > 0
+# 4) только связанные с водой или краем карты
+lab, n = nd.label(sk, structure=np.ones((3, 3)))
+touch = set(np.unique(lab[nd.binary_dilation(water, iterations=2)]).tolist())
+e = np.zeros_like(water); e[:3] = e[-3:] = True; e[:, :3] = e[:, -3:] = True
+touch |= set(np.unique(lab[e]).tolist()); touch.discard(0)
+sz = nd.sum(sk, lab, range(1, n + 1))
+keep = np.isin(lab, [i + 1 for i in range(n) if (i + 1) in touch or sz[i] > 400])   # большие оторванные — озёрные/бессточные, оставить
+removed = n - len(touch) - sum(1 for i in range(n) if (i + 1) not in touch and sz[i] > 400)
+sk &= keep
+# ширина ~2,3 px с мягким краем
+dist = nd.distance_transform_edt(~sk)
+m = np.clip((1.75 - dist) / 1.0, 0, 1) * 255
 m[water] = 0
-# проверка по готовому рисунку: каждое пятно рек должно касаться воды или края карты;
-# близкие (до CONNECT px) — дотягиваем линией от ближайшей точки, далёкие — убираем
-CONNECT = 32
-lab, nlab = nd.label(nd.binary_dilation(m > 40, iterations=1))
-wnear = nd.binary_dilation(water, iterations=3)
-edgeb = np.zeros_like(water); edgeb[:4] = edgeb[-4:] = True; edgeb[:, :4] = edgeb[:, -4:] = True
-okl = set(np.unique(lab[wnear | edgeb]).tolist()) - {0}
-con = Image.new('L', (W, H), 0); dc = ImageDraw.Draw(con); fixed = removed = 0
-for li, sl in enumerate(nd.find_objects(lab), 1):
-    if li in okl: continue
-    sub = lab[sl] == li; ys, xs = np.nonzero(sub); ys = ys + sl[0].start; xs = xs + sl[1].start
-    dd = wd[ys, xs]; j = int(np.argmin(dd))
-    if dd[j] <= CONNECT:
-        qy, qx = wy[ys[j], xs[j]], wx[ys[j], xs[j]]
-        dc.line([(xs[j], ys[j]), (qx, qy)], fill=230, width=2); fixed += 1
-    else:
-        m[ys, xs] = 0; removed += 1
-m = np.maximum(m, np.asarray(con)); m[water] = 0
-print('пятен рек:', nlab, 'дотянуто до воды:', fixed, 'убрано оторванных:', removed)
-np.save(SP + 'umap/rivers.npy', m)
-print('кусков рек', len(runs), 'оставлено', kept, 'убрано оторванных', len(runs) - kept, 'дублей реки автора', dropped_dup, 'пикселей', int((m > 60).sum()))
+np.save(SP + 'umap/rivers.npy', m.astype(np.uint8))
+print('пятен рек', n, 'убрано оторванных', removed, 'пикселей реки', int((m > 60).sum()))
