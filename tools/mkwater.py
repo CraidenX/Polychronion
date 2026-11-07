@@ -7,6 +7,8 @@
 import os, sys, json, math
 import numpy as np
 from PIL import Image, ImageDraw
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import trees as TS
 import scipy.ndimage as nd
 SP = os.path.dirname(os.path.abspath(__file__)) + '/'
 OUTD = sys.argv[1] if len(sys.argv) > 1 else SP + '..'
@@ -146,29 +148,20 @@ def paint(B, x0, y0, K, rv):
     B = B * (1 - 0.8 * rvb) + RIVER * 0.8 * rvb
     # леса: тени крон, кроны (светлая/тёмная сторона), чернильная дуга снизу
     P = sub(TP, x0, y0, x0 + w / K, y0 + h / K, 6)
+    # деревья — готовые рисунки (trees.py) в духе Knights of Honor; на земле — мягкая тень вправо-вниз
     S = 3
-    def canv(): return Image.new('L', (w * S, h * S), 0)
-    Lt, Dk, Ed, Sh = canv(), canv(), canv(), canv()
-    dl, dd, de, ds = (ImageDraw.Draw(c) for c in (Lt, Dk, Ed, Sh))
+    Sh = Image.new('L', (w * S, h * S), 0); ds = ImageDraw.Draw(Sh)
+    lay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
     for i in np.argsort(P['y'], kind='stable'):
-        X, Y = tr(P['x'][i], P['y'][i]); X *= S; Y *= S; r = P['r'][i] * K * S
-        if P['con'][i]:
-            pts = [(X, Y - r * 2.2), (X - r * 0.9, Y + r * 0.4), (X + r * 0.9, Y + r * 0.4)]
-            ds.ellipse([X - r * 0.2, Y, X + r * 1.6, Y + r * 0.8], fill=255)
-            dd.polygon(pts, fill=255); dl.polygon([pts[0], pts[1], (X, Y + r * 0.4)], fill=255)
-            de.line([pts[1], pts[0], pts[2]], fill=255, width=max(1, int(K * S * 0.45)))
-        else:
-            ds.ellipse([X - r * 0.4, Y - r * 0.2, X + r * 1.8, Y + r * 1.1], fill=255)
-            dd.ellipse([X - r, Y - r, X + r, Y + r], fill=255)
-            dl.ellipse([X - r * 0.95, Y - r * 1.0, X + r * 0.45, Y + r * 0.35], fill=255)
-            de.arc([X - r, Y - r, X + r, Y + r], 10, 170, fill=255, width=max(1, int(K * S * 0.45)))
-    def g(c, s): return nd.gaussian_filter(np.asarray(c.resize((w, h), Image.BOX), np.float32) / 255, s)
-    L_, D_, E_, Sh_ = g(Lt, 0.35 * K), g(Dk, 0.35 * K), g(Ed, 0.3 * K), g(Sh, 1.0 * K)
-    green_d = np.array([62, 92, 52], np.float32) / 255; green_l = np.array([128, 156, 92], np.float32) / 255
-    B = B * (1 - 0.25 * Sh_[..., None])
-    B = B * (1 - 0.85 * D_[..., None]) + (green_d * gr[..., None] * 0.6 + B * 0.4) * 0.85 * D_[..., None]
-    B = B * (1 - 0.75 * L_[..., None]) + (green_l * 0.75 + PAPER * 0.25) * 0.75 * L_[..., None]
-    B = B * (1 - 0.5 * E_[..., None]) + INK * 0.5 * E_[..., None]
+        X, Y = tr(P['x'][i], P['y'][i]); r = P['r'][i] * K
+        px = max(3, int(round(r * 4.2)))
+        ds.ellipse([(X - r * 0.3) * S, (Y - r * 0.1) * S, (X + r * 1.9) * S, (Y + r * 0.9) * S], fill=255)
+        spr = TS.sprite('c' if P['con'][i] else 'd', int(P['x'][i] * 7 + P['y'][i] * 13), px)
+        lay.alpha_composite(spr, (int(round(X - px / 2)), int(round(Y - px * 0.72))))   # низ кроны — у точки дерева
+    Sh_ = nd.gaussian_filter(np.asarray(Sh.resize((w, h), Image.BOX), np.float32) / 255, 1.0 * K)
+    TL = np.asarray(lay, np.float32) / 255; D_ = TL[..., 3]
+    B = B * (1 - 0.28 * Sh_[..., None])
+    B = B * (1 - D_[..., None]) + TL[..., :3] * D_[..., None]
     # горы-мазки (порт paint_mountains): силуэт, светлая грань, тень, контур; цвет — из подложки
     P = sub(MP, x0, y0, x0 + w / K, y0 + h / K, 40)
     face = Image.new('L', (w, h), 0); df = ImageDraw.Draw(face)
@@ -212,7 +205,7 @@ def paint(B, x0, y0, K, rv):
     B = lum + (B - lum) * 1.18
     B = (B - 0.52) * 1.2 + 0.5
     B = np.clip(B, 0, 1) ** 1.06
-    OBJ['m'] = (f > 0); OBJ['t'] = D_ > 0.35
+    OBJ['m'] = (f > 0); OBJ['t'] = D_ > 0.4
     return np.clip(B, 0, 1)
 
 out = paint(B0.copy(), 0, 0, 1, RV)

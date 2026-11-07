@@ -713,52 +713,31 @@ function setMapMode(m) { UI.mapMode = m; const b = $('zmode'); if (b) { b.classL
 /* --- облака: отдельный холст поверх карты, медленно плывут по ветру (карта при этом не перерисовывается) --- */
 const CL = { on: true, sprites: [], list: [], last: 0 };
 try { CL.on = localStorage.getItem('poly_clouds') !== 'off'; } catch (e) { }
-function cloudSprite(seed) {
-  // пушистое облако: несколько крупных «тел» + много мелких клубов по верхнему краю; низ плоский и чуть серее
-  let s = seed; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  r(); r(); const kind = Math.floor(r() * 4);                                   // 0 — кучевое, 1 — вытянутое, 2 — башенка, 3 — клочки
-  const w = 300, h = 200, c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
-  const span = [0.6, 0.82, 0.42, 0.7][kind] * w * (0.8 + r() * 0.35), dome = [0.5, 0.3, 0.85, 0.35][kind] * (0.7 + r() * 0.6), base = h * 0.7;
-  // 1–3 «горба» в разных местах и разной высоты — облака не похожи друг на друга
-  const hn = 1 + Math.floor(r() * 3), hs = Array.from({ length: hn }, () => [w / 2 + (r() - 0.5) * span * 0.7, 0.45 + r() * 0.75, span * (0.18 + r() * 0.25)]);
-  const HUMP = px => 0.35 + hs.reduce((m, [c, a, wd]) => Math.max(m, a * Math.exp(-(((px - c) / wd) ** 2))), 0);
-  const puffs = [];
-  // тело: клубы вплотную вдоль основания, к середине крупнее и выше (купол)
-  const R0 = [26, 20, 28, 18][kind];
-  for (let px = w / 2 - span / 2; px <= w / 2 + span / 2; px += R0 * (0.55 + r() * 0.25)) {
-    const t = (px - w / 2) / (span / 2), f = Math.max(0, 1 - t * t) * HUMP(px);
-    const pr = R0 * (0.55 + 0.75 * f) * (0.85 + r() * 0.3);
-    puffs.push([px + (r() - 0.5) * 6, base - pr * 0.55 - f * dome * 40 + (r() - 0.5) * 6, pr]);
-  }
-  // мелкие клубы по верхнему краю — «пушистость»
-  const body = puffs.slice(), small = 30 + Math.floor(r() * 25);
-  for (let i = 0; i < small; i++) {
-    const p = body[Math.floor(r() * body.length)], a = -Math.PI * (0.12 + r() * 0.76), d = p[2] * (0.7 + r() * 0.25), pr = p[2] * (0.22 + r() * 0.3);
-    const yy = p[1] + Math.sin(a) * d; if (yy + pr * 0.3 > base) continue; puffs.push([p[0] + Math.cos(a) * d, yy, pr]);
-  }
-  if (kind === 3) for (let i = 0; i < 5; i++) { const px = w / 2 + (r() - 0.5) * span * 1.3, pr = 7 + r() * 8; puffs.push([px, base - pr - r() * 14, pr]); }
-  x.save(); x.beginPath(); x.rect(0, 0, w, base + 4); x.clip();     // плоское дно
-  for (const [px, py, pr] of puffs) { const g = x.createRadialGradient(px, py + pr * 0.4, pr * 0.15, px, py + pr * 0.4, pr * 1.05); g.addColorStop(0, 'rgba(158,166,186,.5)'); g.addColorStop(1, 'rgba(158,166,186,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py + pr * 0.4, pr * 1.05, 0, 7); x.fill(); }
-  for (const [px, py, pr] of puffs) { const g = x.createRadialGradient(px - pr * 0.3, py - pr * 0.35, pr * 0.05, px, py, pr); g.addColorStop(0, 'rgba(255,255,255,.98)'); g.addColorStop(0.55, 'rgba(250,251,253,.85)'); g.addColorStop(0.85, 'rgba(240,243,248,.35)'); g.addColorStop(1, 'rgba(236,240,246,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py, pr, 0, 7); x.fill(); }
-  x.restore();
-  const g2 = x.createLinearGradient(0, base - 30, 0, base + 4); g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, 'rgba(120,130,152,.28)');   // серое дно
-  x.globalCompositeOperation = 'source-atop'; x.fillStyle = g2; x.fillRect(0, 0, w, h); x.globalCompositeOperation = 'source-over';
-  const sh = document.createElement('canvas'); sh.width = w; sh.height = h; const y = sh.getContext('2d');
-  for (const [px, py, pr] of puffs) { if (pr < 12) continue; const g = y.createRadialGradient(px, py, pr * 0.2, px, py, pr * 1.15); g.addColorStop(0, 'rgba(20,24,40,.45)'); g.addColorStop(1, 'rgba(20,24,40,0)'); y.fillStyle = g; y.beginPath(); y.arc(px, py, pr * 1.15, 0, 7); y.fill(); }
-  return { c, sh };
-}
+// атлас готовых облаков (mkclouds.py): облако на карте = 2–4 заготовки атласа разного размера («конструктор»)
+const CA = { img: null, sh: null, meta: null };
+if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') fetch('clouds.json').then(r => r.ok ? r.json() : null).then(m => {
+  if (!m) return; const im = new Image(); im.onload = () => {
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d');   // тень: тот же атлас, тёмный и размытый
+    x.filter = 'blur(6px)'; x.drawImage(im, 0, 0); x.filter = 'none'; x.globalCompositeOperation = 'source-in'; x.fillStyle = 'rgb(18,22,38)'; x.fillRect(0, 0, c.width, c.height);
+    CA.img = im; CA.sh = c; CA.meta = m;
+  }; im.src = 'clouds.png';
+}).catch(() => { });
 function cloudsInit() {
-  if (CL.sprites.length || !MAPINFO) return;
-  for (let i = 0; i < 16; i++) CL.sprites.push(cloudSprite(1261 + i * 977));
-  let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  for (let i = 0; i < 26; i++) CL.list.push({ x: r() * MAPINFO.W, y: r() * MAPINFO.H, w: 120 + r() * 170, sp: CL.sprites[i % 16], v: 0.6 + r() * 0.7, fl: r() < 0.5 });
+  if (CL.list.length || !MAPINFO || !CA.meta) return;
+  let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647, n = CA.meta.n;
+  for (let i = 0; i < 22; i++) {
+    const parts = [], k = 2 + Math.floor(r() * 3), sz = 150 + r() * 120;   // ширина главной части, px карты
+    for (let j = 0; j < k; j++) parts.push({ s: Math.floor(r() * n), dx: j ? (r() - 0.5) * sz * 1.1 : 0, dy: j ? (r() - 0.6) * sz * 0.22 : 0, w: sz * (j ? 0.45 + r() * 0.45 : 1), fl: r() < 0.5, a: j ? 0.85 + r() * 0.15 : 1 });
+    parts.sort((p, q) => p.dy - q.dy);   // дальние (выше) — раньше
+    CL.list.push({ x: r() * MAPINFO.W, y: r() * MAPINFO.H, w: sz * 1.8, parts, v: 0.6 + r() * 0.7 });
+  }
 }
 function cloudFrame(now) {
   requestAnimationFrame(cloudFrame);
   const cv = $('cloudcv'); if (!cv) return;
   const show = CL.on && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
   if (!show) { if (cv.width) { cv.width = 0; } CL.last = now; return; }
-  if (now - CL.last < 33) return;   // ~30 кадров/с
+  if (now - CL.last < 33 || !CA.img) return;   // ~30 кадров/с
   const dt = Math.min(0.2, (now - CL.last) / 1000); CL.last = now;
   cloudsInit();
   const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
@@ -768,16 +747,17 @@ function cloudFrame(now) {
   x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   const fade = clamp(1.25 - (z * M.W / 5298 - 0.6) * 0.45, 0.35, 1);   // вблизи облака прозрачнее
   const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
+  const m = CA.meta, sw = m ? m.w : 1, shh = m ? m.h : 1;
   for (const c of CL.list) {
     c.x += 9 * c.v * dt; c.y += 1.6 * c.v * dt;               // ветер с запада
-    if (c.x > M.W + 200) c.x = -c.w - 200; if (c.y > M.H + 150) c.y = -150;
-    const h = c.w * 200 / 300;
-    if (c.x + c.w + 80 < vx0 || c.x - 80 > vx1 || c.y + h + 120 < vy0 || c.y > vy1) continue;
-    const fx = c.fl ? -1 : 1;   // половина облаков зеркальна — больше разнообразия
-    x.save(); x.translate(c.x + c.w / 2, c.y); x.scale(fx, 1);
-    x.globalAlpha = 0.2 * fade; x.drawImage(c.sp.sh, -c.w / 2 + 40 * fx, 70, c.w, h);
-    x.globalAlpha = 0.85 * fade; x.drawImage(c.sp.c, -c.w / 2, 0, c.w, h);
-    x.restore();
+    if (c.x > M.W + 300) c.x = -c.w - 300; if (c.y > M.H + 200) c.y = -200;
+    if (c.x + c.w + 120 < vx0 || c.x - c.w - 120 > vx1 || c.y + c.w + 160 < vy0 || c.y - c.w > vy1) continue;
+    for (const pass of [0, 1]) for (const p of c.parts) {
+      const w = p.w, h = w * shh / sw, sx = (p.s % m.cols) * sw, sy = Math.floor(p.s / m.cols) * shh;
+      x.save(); x.translate(c.x + p.dx + (pass ? 0 : 60), c.y + p.dy + (pass ? 0 : 95)); if (p.fl) x.scale(-1, 1);
+      x.globalAlpha = (pass ? 0.92 * p.a : 0.16) * fade; x.drawImage(pass ? CA.img : CA.sh, sx, sy, sw, shh, -w / 2, -h, w, h);
+      x.restore();
+    }
   }
   x.globalAlpha = 1;
 }
