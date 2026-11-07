@@ -44,11 +44,11 @@ def army(x, y, size, col, men):
     d.text((x + 5.5 * u, y + 6.3 * u), men, fill=INK, font=f, anchor='mm')
 CITIES = [('Палермо', 13.36, 38.12, True), ('Мессина', 15.55, 38.19, True), ('Катания', 15.09, 37.50, False), ('Сиракузы', 15.29, 37.07, False),
           ('Агридженто', 13.58, 37.31, False), ('Реджо', 15.65, 38.11, False), ('Козенца', 16.25, 39.30, False), ('Трапани', 12.51, 38.02, False)]
-for n, lo, la, big in CITIES: city(*px(lo, la), 3.0 if big else 2.4, big)
-fort(*px(15.29, 37.85), 2.6)            # Таормина
-fort(*px(16.08, 38.62), 2.6)            # Тропеа / замок Калабрии
-army(*px(14.28, 37.62), 2.6, (114, 6, 80, 255), '2 400')      # ромеи (цвет державы)
-army(*px(16.30, 38.92), 2.6, (136, 140, 85, 255), '3 100')    # Сицилийское королевство
+for n, lo, la, big in CITIES: city(*px(lo, la), 17 if big else 13, big)
+fort(*px(15.29, 37.85), 14)            # Таормина
+fort(*px(16.08, 38.62), 14)            # Тропеа / замок Калабрии
+army(*px(14.28, 37.62), 14, (114, 6, 80, 255), "2 400")      # ромеи (цвет державы)
+army(*px(16.30, 38.92), 14, (136, 140, 85, 255), '3 100')    # Сицилийское королевство
 L = L.resize(img.size, Image.LANCZOS)
 img = Image.alpha_composite(img, L)
 # подписи сепией с «бумажным» ореолом
@@ -56,7 +56,7 @@ t = Image.new('RGBA', img.size, (0, 0, 0, 0)); dt = ImageDraw.Draw(t)
 f1 = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf', 15)
 f2 = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf', 26)
 for n, lo, la, big in CITIES:
-    x, y = px(lo, la); dt.text((x, y + 13), n, font=f1, fill=(70, 48, 32, 255), anchor='mt', stroke_width=3, stroke_fill=(238, 226, 198, 200))
+    x, y = px(lo, la); dt.text((x, y + 12), n, font=f1, fill=(70, 48, 32, 255), anchor='mt', stroke_width=3, stroke_fill=(238, 226, 198, 200))
 for n, lo, la in [('СИЦИЛИЯ', 14.1, 37.2), ('КАЛАБРИЯ', 16.45, 39.55)]:
     x, y = px(lo, la); dt.text((x, y), n, font=f2, fill=(70, 48, 32, 170), anchor='mm', stroke_width=2, stroke_fill=(238, 226, 198, 120))
 img = Image.alpha_composite(img, t).convert('RGB')
