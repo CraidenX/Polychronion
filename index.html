@@ -41,7 +41,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #veccv{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
 #cloudcv{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
 #mapover{position:absolute;left:0;top:0;transform-origin:0 0;z-index:2;pointer-events:none}
-#mapinner.far #ptip{position:fixed;pointer-events:none;z-index:20;background:rgba(20,12,24,.92);border:1px solid var(--gold);border-radius:6px;padding:3px 8px;font-size:13px;white-space:nowrap}
+#ptip{position:fixed;pointer-events:none;z-index:20;background:rgba(20,12,24,.92);border:1px solid var(--gold);border-radius:6px;padding:3px 8px;font-size:13px;white-space:nowrap}
 #markers{position:absolute;left:0;top:0}
 .rm{position:absolute;transform:translate(-50%,-50%) scale(var(--s,1));pointer-events:auto;cursor:pointer;text-align:center;white-space:nowrap}
 .rm .dot{display:inline-block;width:14px;height:14px;border-radius:3px;border:2px solid #2a1a10;vertical-align:middle}
@@ -165,7 +165,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 64, "date": "07.11.2026 17:43"};
+const GAME_VERSION = {"v": 65, "date": "07.11.2026 20:53"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2971,15 +2971,18 @@ if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') 
     CA.img = im; CA.sh = c; CA.meta = m;
   }; im.src = 'clouds.png';
 }).catch(() => { });
-function cloudsInit() {
-  if (CL.list.length || !MAPINFO || !CA.meta) return;
-  let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647, n = CA.meta.n;
-  for (let i = 0; i < 22; i++) {
-    const parts = [], k = 2 + Math.floor(r() * 3), sz = 150 + r() * 120;   // ширина главной части, px карты
-    for (let j = 0; j < k; j++) parts.push({ s: Math.floor(r() * n), dx: j ? (r() - 0.5) * sz * 1.1 : 0, dy: j ? (r() - 0.6) * sz * 0.22 : 0, w: sz * (j ? 0.45 + r() * 0.45 : 1), fl: r() < 0.5, a: j ? 0.85 + r() * 0.15 : 1 });
-    parts.sort((p, q) => p.dy - q.dy);   // дальние (выше) — раньше
-    CL.list.push({ x: r() * MAPINFO.W, y: r() * MAPINFO.H, w: sz * 1.8, parts, v: 0.6 + r() * 0.7 });
-  }
+// облака идут вокруг того места, куда смотрит игрок: «область облаков» = видимая часть карты с запасом;
+// облако, ушедшее за неё по ветру, снова рождается с наветренной (западной) стороны и плавно проявляется
+const WIND = [9, 1.6];   // px карты в секунду
+let CSEED = 7; const crnd = () => (CSEED = (CSEED * 16807) % 2147483647) / 2147483647;
+function newCloud(c, x0, y0, x1, y1, upwind) {
+  const n = CA.meta.n, parts = [], k = 2 + Math.floor(crnd() * 3), sz = 150 + crnd() * 130;
+  for (let j = 0; j < k; j++) parts.push({ s: Math.floor(crnd() * n), dx: j ? (crnd() - 0.5) * sz * 1.2 : 0, dy: j ? (crnd() - 0.5) * sz * 0.45 : 0, w: sz * (j ? 0.45 + crnd() * 0.5 : 1), fl: crnd() < 0.5, fv: crnd() < 0.3 });
+  parts.sort((p, q) => p.dy - q.dy);
+  c.parts = parts; c.w = sz * 1.9; c.v = 0.6 + crnd() * 0.7; c.age = 0;
+  if (upwind) { c.x = x0 - c.w * (0.6 + crnd()); c.y = y0 + crnd() * (y1 - y0); }
+  else { c.x = x0 + crnd() * (x1 - x0); c.y = y0 + crnd() * (y1 - y0); }
+  return c;
 }
 function cloudFrame(now) {
   requestAnimationFrame(cloudFrame);
@@ -2988,24 +2991,36 @@ function cloudFrame(now) {
   if (!show) { if (cv.width) { cv.width = 0; } CL.last = now; return; }
   if (now - CL.last < 33 || !CA.img) return;   // ~30 кадров/с
   const dt = Math.min(0.2, (now - CL.last) / 1000); CL.last = now;
-  cloudsInit();
   const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
   if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
   const x = cv.getContext('2d'), v = UI.view, z = v.z, M = MAPINFO;
   x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
-  x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
-  const fade = clamp(1.25 - (z * M.W / 5298 - 0.6) * 0.45, 0.35, 1);   // вблизи облака прозрачнее
-  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
-  const m = CA.meta, sw = m ? m.w : 1, shh = m ? m.h : 1;
+  // видимость от приближения: на отдалении плотные, вблизи почти прозрачные (не мешают рассматривать карту)
+  const zs = z * M.W / 5298, fade = clamp(1.12 - zs * 0.42, 0.08, 1), shf = clamp(1.1 - zs * 0.3, 0.25, 1);
+  // область облаков: видимое + запас; количество — по площади (≈ одно облако на 520×520 px карты)
+  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z, mw = (vx1 - vx0) * 0.5 + 300, mh = (vy1 - vy0) * 0.5 + 200;
+  const ax0 = vx0 - mw, ay0 = vy0 - mh, ax1 = vx1 + mw, ay1 = vy1 + mh;
+  const want = clamp(Math.round((ax1 - ax0) * (ay1 - ay0) / (520 * 520)), 4, 46);
+  while (CL.list.length < want) CL.list.push(newCloud({}, ax0, ay0, ax1, ay1, false));
+  if (CL.list.length > want) CL.list.length = want;
+  const m = CA.meta, sw = m.w, shh = m.h;
+  // параллакс: облака выше земли — при сдвиге карты смещаются чуть сильнее своих теней
+  const cxs = Wd / 2, cys = Hd / 2, PAR = 1.1;
   for (const c of CL.list) {
-    c.x += 9 * c.v * dt; c.y += 1.6 * c.v * dt;               // ветер с запада
-    if (c.x > M.W + 300) c.x = -c.w - 300; if (c.y > M.H + 200) c.y = -200;
-    if (c.x + c.w + 120 < vx0 || c.x - c.w - 120 > vx1 || c.y + c.w + 160 < vy0 || c.y - c.w > vy1) continue;
-    for (const pass of [0, 1]) for (const p of c.parts) {
-      const w = p.w, h = w * shh / sw, sx = (p.s % m.cols) * sw, sy = Math.floor(p.s / m.cols) * shh;
-      x.save(); x.translate(c.x + p.dx + (pass ? 0 : 60), c.y + p.dy + (pass ? 0 : 95)); if (p.fl) x.scale(-1, 1);
-      x.globalAlpha = (pass ? 0.92 * p.a : 0.16) * fade; x.drawImage(pass ? CA.img : CA.sh, sx, sy, sw, shh, -w / 2, -h, w, h);
-      x.restore();
+    c.x += WIND[0] * c.v * dt; c.y += WIND[1] * c.v * dt; c.age += dt;
+    if (c.x - c.w > ax1 || c.y - c.w > ay1) newCloud(c, ax0, ay0, ax1, ay1, true);            // ушло по ветру — новое с запада
+    else if (c.x + c.w < ax0 - 400 || c.y + c.w < ay0 - 400 || c.x - c.w > ax1 + 400) newCloud(c, ax0, ay0, ax1, ay1, false);   // карту сдвинули далеко
+    const born = clamp(c.age / 3, 0, 1);
+    if (c.x + c.w + 120 < vx0 - 200 || c.x - c.w - 120 > vx1 + 200 || c.y + c.w + 160 < vy0 - 200 || c.y - c.w > vy1 + 200) continue;
+    for (const pass of [0, 1]) {
+      if (pass) x.setTransform(dpr * z * PAR, 0, 0, dpr * z * PAR, dpr * (cxs + (v.x - cxs) * PAR), dpr * (cys + (v.y - cys) * PAR));
+      else x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+      for (const p of c.parts) {
+        const w = p.w, h = w * shh / sw, sx = (p.s % m.cols) * sw, sy = Math.floor(p.s / m.cols) * shh;
+        x.save(); x.translate(c.x + p.dx + (pass ? 0 : 70), c.y + p.dy + (pass ? 0 : 90)); x.scale(p.fl ? -1 : 1, p.fv ? -1 : 1);
+        x.globalAlpha = (pass ? 0.95 * fade : 0.17 * shf) * born; x.drawImage(pass ? CA.img : CA.sh, sx, sy, sw, shh, -w / 2, -h / 2, w, h);
+        x.restore();
+      }
     }
   }
   x.globalAlpha = 1;
