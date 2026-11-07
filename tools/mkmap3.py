@@ -86,8 +86,12 @@ if os.path.exists(SP + 'umap/rivers.npy'):
     rv = np.load(SP + 'umap/rivers.npy').astype(np.float32)[..., None] / 255
     rcol = np.array([30, 66, 112], np.float32)
     out = np.clip(out.astype(np.float32) * (1 - rv) + rcol * rv, 0, 255).astype(np.int32)
-# рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
+# леса (mkforest.py): деревья-значки под пиками
 sys.path.insert(0, SP)
+from peaks import draw_trees
+if os.path.exists(SP + 'umap/forest.npy'):
+    out = draw_trees(out, np.load(SP + 'umap/forest.npy') & landm, np.load(SP + 'umap/conifer.npy'), np.random.default_rng(1204))
+# рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
 from peaks import draw_peaks
 out = draw_peaks(out, allm & landm, np.random.default_rng(1261), bg=bgm & ~zone)
 # широкая маска гор (для режима «хребты своего цвета» — без заливки державы) — в синий канал ids.png
@@ -100,6 +104,9 @@ if os.path.exists(idp):
     if os.path.exists(SP + 'umap/rivers.npy'):   # реки: B=180 — видны сквозь цвет державы
         rvm = (np.load(SP + 'umap/rivers.npy') > 45) & ~keep_outer & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
         b[rvm] = 180
+    if os.path.exists(SP + 'umap/forest.npy'):   # леса: B=165 — видны сквозь цвет державы (слабее гор)
+        fm = np.load(SP + 'umap/forest.npy') & ~keep_outer & (b == 0) & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
+        b[fm] = 165
     I[..., 2] = b; Image.fromarray(I).save(idp, optimize=True)
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]

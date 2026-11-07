@@ -41,9 +41,9 @@ for rv in json.load(open(SP + 'rivers.json')):
     cur = []
     for i, (p, nr) in enumerate(zip(dense, near)):
         if not nr: cur.append(p); continue
-        if len(cur) >= 3: runs.append([cur, w, faint, False, True]); cur = []   # прервана водой: устье -> к воде
+        if len(cur) >= 3: runs.append([cur, w, faint, False, True, set()]); cur = []   # прервана водой: устье -> к воде
         else: cur = []
-    if len(cur) >= 3: runs.append([cur, w, faint, False, False])
+    if len(cur) >= 3: runs.append([cur, w, faint, False, False, set()])
 # устья: конец рядом с водой — дотягиваем до воды
 def edge(p): return p[0] < 4 or p[1] < 4 or p[0] > W - 5 or p[1] > H - 5
 for r in runs:
@@ -52,7 +52,7 @@ for r in runs:
         p = pts[end]; d, (qx, qy) = wdist(*p)
         if d < MOUTH or (end == -1 and r[4]) or edge(p):
             if not edge(p) and d < MOUTH * 1.5: (pts.insert(0, (qx, qy)) if end == 0 else pts.append((qx, qy)))
-            r[3] = True
+            r[3] = True; r[5].add(end)
 # притоки: конец рядом с другой рекой — присоединяем
 idm = np.full((H, W), -1, np.int32)
 for i, r in enumerate(runs):
@@ -68,7 +68,7 @@ for i, r in enumerate(runs):
         ys, xs = np.nonzero((win >= 0) & (win != i))
         if not len(ys): continue
         j = np.argmin((ys + y0 - yi) ** 2 + (xs + x0 - xi) ** 2); o = int(win[ys[j], xs[j]])
-        adj[i].add(o); adj[o].add(i)
+        adj[i].add(o); adj[o].add(i); r[5].add(end)
         q = (float(xs[j] + x0), float(ys[j] + y0))
         if end == 0: r[0].insert(0, q)
         else: r[0].append(q)
@@ -84,9 +84,41 @@ kept = 0
 for r, good in zip(runs, ok):
     if not good: continue
     kept += 1
-    d.line([(x * S, y * S) for x, y in r[0]], fill=150 if r[2] else 255, width=max(1, round(r[1] * S)), joint='curve')
+    pts = r[0]
+    # устье — связанный конец (если оба или ни один — тот, что ближе к воде); к истоку река сужается
+    ends = r[5]
+    mouth_last = (-1 in ends and 0 not in ends) or (ends in ({0, -1}, set()) and wdist(*pts[-1])[0] <= wdist(*pts[0])[0])
+    if not mouth_last: pts = pts[::-1]
+    n = len(pts); L = [0.0]
+    for a, b in zip(pts, pts[1:]): L.append(L[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+    tot = L[-1] or 1; col = 150 if r[2] else 255
+    for t in range(n - 1):
+        f = 0.45 + 0.55 * min(1.0, L[t + 1] / min(tot, 220))            # первые ~220 px от истока — сужение
+        wpx = max(1.0, r[1] * f * S)
+        a, b = pts[t], pts[t + 1]
+        d.line([(a[0] * S, a[1] * S), (b[0] * S, b[1] * S)], fill=col, width=round(wpx))
+        rr = wpx / 2; d.ellipse([b[0] * S - rr, b[1] * S - rr, b[0] * S + rr, b[1] * S + rr], fill=col)
 m = np.asarray(img.resize((W, H), Image.BOX)).astype(np.float32)   # BOX: чёткий край без размытия
 m = np.clip((m - 25) * 1.25, 0, 255).astype(np.uint8)              # подтянуть контраст края
 m[water] = 0
+# проверка по готовому рисунку: каждое пятно рек должно касаться воды или края карты;
+# близкие (до CONNECT px) — дотягиваем линией от ближайшей точки, далёкие — убираем
+CONNECT = 32
+lab, nlab = nd.label(nd.binary_dilation(m > 40, iterations=1))
+wnear = nd.binary_dilation(water, iterations=3)
+edgeb = np.zeros_like(water); edgeb[:4] = edgeb[-4:] = True; edgeb[:, :4] = edgeb[:, -4:] = True
+okl = set(np.unique(lab[wnear | edgeb]).tolist()) - {0}
+con = Image.new('L', (W, H), 0); dc = ImageDraw.Draw(con); fixed = removed = 0
+for li, sl in enumerate(nd.find_objects(lab), 1):
+    if li in okl: continue
+    sub = lab[sl] == li; ys, xs = np.nonzero(sub); ys = ys + sl[0].start; xs = xs + sl[1].start
+    dd = wd[ys, xs]; j = int(np.argmin(dd))
+    if dd[j] <= CONNECT:
+        qy, qx = wy[ys[j], xs[j]], wx[ys[j], xs[j]]
+        dc.line([(xs[j], ys[j]), (qx, qy)], fill=230, width=2); fixed += 1
+    else:
+        m[ys, xs] = 0; removed += 1
+m = np.maximum(m, np.asarray(con)); m[water] = 0
+print('пятен рек:', nlab, 'дотянуто до воды:', fixed, 'убрано оторванных:', removed)
 np.save(SP + 'umap/rivers.npy', m)
 print('кусков рек', len(runs), 'оставлено', kept, 'убрано оторванных', len(runs) - kept, 'дублей реки автора', dropped_dup, 'пикселей', int((m > 60).sum()))
