@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 import scipy.ndimage as nd
 
-def draw_peaks(out, allm, rng, scale=2, cell=7, bg=None):
+def draw_peaks(out, allm, rng, scale=2, cell=7, bg=None, keep=None):
     H, W = allm.shape
     # «высота» хребта: толщина маски вокруг точки — крупнее пики там, где хребет толще
     thick = nd.gaussian_filter(allm.astype(np.float32), 3.0)
@@ -15,7 +15,8 @@ def draw_peaks(out, allm, rng, scale=2, cell=7, bg=None):
     order = rng.permutation(len(ys))
     _, first = np.unique(key[order], return_index=True)
     sel = order[first]
-    sel = sel[rng.random(len(sel)) < 0.85]
+    pk = 0.85 if keep is None else keep[ys[sel], xs[sel]]
+    sel = sel[rng.random(len(sel)) < pk]
     py, px = ys[sel], xs[sel]
     t = thick[py, px]
     # слой гор рисуем в увеличенном размере (сглаживание краёв), только вокруг хребтов

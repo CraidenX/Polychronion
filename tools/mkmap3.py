@@ -81,10 +81,41 @@ w = np.clip(hmix * 0.9, 0, 0.5)   # подножия чуть землистее
 land_out = land_out * (1 - w) + mcol * w
 land_out *= shade[..., None]
 out = np.where(landm[..., None], np.clip(land_out, 0, 255), out).astype(np.int32)
+# --- местность по эталонной карте (mkterrain.py), если вырезки есть: цвет земли, тип местности, высоты ---
+EU = os.path.exists(SP + 'terrain/color.jpg')
+if EU:
+    ecol = np.asarray(Image.open(SP + 'terrain/color.jpg').convert('RGB')).astype(np.float32)
+    ter = np.asarray(Image.open(SP + 'terrain/type.png')); hgt = np.asarray(Image.open(SP + 'terrain/height.png')).astype(np.float32)
+    # «рисованные» цвета типов местности (смешиваются с цветом эталона — карта, а не спутниковый снимок)
+    PAL = {0: (112, 140, 72), 5: (138, 156, 84), 4: (168, 160, 102), 3: (206, 182, 132), 7: (184, 156, 108),
+           2: (152, 128, 98), 6: (128, 120, 106), 16: (232, 232, 230), 1: (74, 104, 54), 9: (84, 108, 86),
+           19: (200, 176, 126), 35: (150, 148, 108)}
+    pal = ecol.copy()
+    for i, c in PAL.items(): pal[ter == i] = c
+    pal = np.stack([nd.gaussian_filter(pal[..., c], 1.1) for c in range(3)], -1)
+    basecol = ecol * 0.5 + pal * 0.5 + noise(5)[..., None] * 8
+    Hs = nd.gaussian_filter(hgt, 1.3)
+    gy2, gx2 = np.gradient(Hs * 0.11)
+    nz2 = 1 / np.sqrt(gx2 ** 2 + gy2 ** 2 + 1)
+    shade2 = np.clip((-gx2 * L[0] - gy2 * L[1] + L[2]) * nz2 / L[2], 0.55, 1.45)
+    land2 = np.clip(basecol * shade2[..., None], 0, 255)
+    coast = k == 0x000020
+    keepl = landm & ~coast
+    out = np.where(keepl[..., None], land2, out).astype(np.int32)
+    # границы внешних земель автора (чёрные линии за краем зоны) — поверх
+    olin = ~zone & ((k == 0) | (np.isin(k, [0x262626, 0x404040]) & ~nd.binary_dilation(k == 0x5E5E5E, iterations=2)))
+    out[olin] = (out[olin] * 0.35).astype(np.int32)
+    euw = np.isin(ter, [1]) & landm                                   # лесистая местность эталона
+    forest_m = nd.binary_opening(euw, iterations=1)
+    if os.path.exists(SP + 'umap/forest.npy'): forest_m |= np.load(SP + 'umap/forest.npy') & landm   # + исторические леса (mkforest.py)
+    conifer_m = forest_m & ((Hs > 118) | (nd.distance_transform_edt(~allm) < 22))
+    eu_mtn = np.isin(ter, [6, 16, 2]) & landm & (Hs > 127)            # пики эталона — только на самых высоких местах
 # леса (mkforest.py): деревья-значки под пиками
 sys.path.insert(0, SP)
 from peaks import draw_trees
-if os.path.exists(SP + 'umap/forest.npy'):
+if EU:
+    out = draw_trees(out, forest_m, conifer_m, np.random.default_rng(1204))
+elif os.path.exists(SP + 'umap/forest.npy'):
     out = draw_trees(out, np.load(SP + 'umap/forest.npy') & landm, np.load(SP + 'umap/conifer.npy'), np.random.default_rng(1204))
 # реки (mkrivers.py — малые реки с карты мода): поверх леса, под пиками
 if os.path.exists(SP + 'umap/rivers.npy'):
@@ -93,9 +124,10 @@ if os.path.exists(SP + 'umap/rivers.npy'):
     out = np.clip(out.astype(np.float32) * (1 - rv) + rcol * rv, 0, 255).astype(np.int32)
 # рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
 from peaks import draw_peaks
-out = draw_peaks(out, allm & landm, np.random.default_rng(1261), bg=bgm & ~zone)
+pkeep = np.where(allm, 0.85, 0.4).astype(np.float32)   # на игровых хребтах — плотно, на горах эталона — реже
+out = draw_peaks(out, (allm | (eu_mtn if EU else False)) & landm, np.random.default_rng(1261), bg=None, keep=pkeep)
 # широкая маска гор (для режима «хребты своего цвета» — без заливки державы) — в синий канал ids.png
-massif = (Hm > 0.38) & zone
+massif = ((Hm > 0.38) | (nd.binary_dilation(eu_mtn, iterations=3) if EU else False)) & zone
 idp = sys.argv[1] + '/ids.png'
 if os.path.exists(idp):
     I = np.asarray(Image.open(idp).convert('RGB')).copy()
@@ -104,8 +136,8 @@ if os.path.exists(idp):
     if os.path.exists(SP + 'umap/rivers.npy'):   # реки: B=180 — видны сквозь цвет державы
         rvm = (np.load(SP + 'umap/rivers.npy') > 45) & ~keep_outer & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
         b[rvm] = 180
-    if os.path.exists(SP + 'umap/forest.npy'):   # леса: B=165 — видны сквозь цвет державы (слабее гор)
-        fm = np.load(SP + 'umap/forest.npy') & ~keep_outer & (b == 0) & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
+    if EU or os.path.exists(SP + 'umap/forest.npy'):   # леса: B=165 — видны сквозь цвет державы (слабее гор)
+        fm = (forest_m if EU else np.load(SP + 'umap/forest.npy')) & ~keep_outer & (b == 0) & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
         b[fm] = 165
     I[..., 2] = b; Image.fromarray(I).save(idp, optimize=True)
 im = Image.fromarray(out.astype(np.uint8))
