@@ -84,8 +84,8 @@ out = np.where(landm[..., None], np.clip(land_out, 0, 255), out).astype(np.int32
 # реки (Natural Earth, mkrivers.py): синие линии под пиками
 if os.path.exists(SP + 'umap/rivers.npy'):
     rv = np.load(SP + 'umap/rivers.npy').astype(np.float32)[..., None] / 255
-    rcol = np.array([38, 76, 120], np.float32)
-    out = np.clip(out.astype(np.float32) * (1 - rv * 0.9) + rcol * rv * 0.9, 0, 255).astype(np.int32)
+    rcol = np.array([30, 66, 112], np.float32)
+    out = np.clip(out.astype(np.float32) * (1 - rv) + rcol * rv, 0, 255).astype(np.int32)
 # рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
 sys.path.insert(0, SP)
 from peaks import draw_peaks
@@ -104,5 +104,5 @@ if os.path.exists(idp):
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]
 # исходный размер — без пересжатия
-im.save(sys.argv[1] + '/map.jpg', quality=88, optimize=True, progressive=True)   # фон с текстурами — JPEG
+im.save(sys.argv[1] + '/map.jpg', quality=91, optimize=True, progressive=True)   # фон с текстурами — JPEG
 print(W, H)

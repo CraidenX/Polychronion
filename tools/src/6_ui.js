@@ -2,7 +2,7 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 135, mapMode: 'pol', sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 115, mapMode: 'pol', sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
 try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 190; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
@@ -964,7 +964,7 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
-   <button id="mRidge">${UI.ridgeA === 135 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
+   <button id="mRidge">${UI.ridgeA === 115 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
@@ -979,7 +979,7 @@ function showMenu() {
   $('mNames').onclick = exportNames;
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 135 ? 190 : 135; try { localStorage.setItem('poly_ridge', UI.ridgeA === 135 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 115 ? 190 : 115; try { localStorage.setItem('poly_ridge', UI.ridgeA === 115 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
