@@ -250,6 +250,9 @@ function initMap() {
         const mtn = new Uint8Array(ids.length), outer = new Uint8Array(ids.length);
         for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : b >= 170 && b <= 190 ? 2 : b >= 162 && b <= 168 ? 3 : 0; if (b >= 100 && b < 160) outer[k] = b - 99; }   // 1 — горы, 2 — река
         PIX.mtn = mtn; PIX.outer = outer;
+        if (MAPSTYLE === 'wc') {   // акварель: прозрачнее цвет державы ровно там, где нарисованы горы, леса и реки
+          const rm = new Image(); rm.onload = () => { try { const c2 = document.createElement('canvas'); c2.width = rm.width; c2.height = rm.height; const x2 = c2.getContext('2d'); x2.drawImage(rm, 0, 0); const q = x2.getImageData(0, 0, rm.width, rm.height).data; for (let k2 = 0; k2 < mtn.length; k2++) { const b = q[k2 * 4]; mtn[k2] = b > 200 ? 1 : b >= 170 && b <= 190 ? 2 : b >= 162 && b <= 168 ? 3 : 0; } if (G) { drawOverlay(); PIX.vtKey = ''; scheduleVector(); } } catch (e) { } }; rm.src = 'relief_wc.png';
+        }
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
         const np = M.provs.length + 1, bb = new Int32Array(np * 4);
         for (let k = 0; k < np; k++) { bb[k * 4] = 1e9; bb[k * 4 + 1] = 1e9; bb[k * 4 + 2] = -1; bb[k * 4 + 3] = -1; }
@@ -705,6 +708,57 @@ function renderArmies() {
 // режимы карты: «Политическая» (цвета держав поверх местности) и «Местность» (горы, реки, моря без заливки)
 function setMapMode(m) { UI.mapMode = m; const b = $('zmode'); if (b) { b.classList.toggle('on', m === 'geo'); b.title = m === 'geo' ? 'Режим карты: местность (M — политическая)' : 'Режим карты: политическая (M — местность)'; } $('markers').classList.toggle('geo', m === 'geo'); PIX.vtKey = ''; VEC.cache = null; scheduleVector(); }
 
+/* --- облака: отдельный холст поверх карты, медленно плывут по ветру (карта при этом не перерисовывается) --- */
+const CL = { on: true, sprites: [], list: [], last: 0 };
+try { CL.on = localStorage.getItem('poly_clouds') !== 'off'; } catch (e) { }
+function cloudSprite(seed) {
+  let s = seed; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const w = 440, h = 240, c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
+  const puffs = []; const n = 9 + Math.floor(r() * 6);
+  for (let i = 0; i < n; i++) { const t = i / (n - 1); puffs.push([100 + t * (w - 200) + (r() - 0.5) * 30, h * 0.58 - Math.sin(t * Math.PI) * (20 + r() * 30) + (r() - 0.5) * 16, 26 + r() * 30 + Math.sin(t * Math.PI) * 18]); }
+  for (const [px, py, pr] of puffs) {   // тень снизу каждого клуба
+    const g = x.createRadialGradient(px, py + pr * 0.35, pr * 0.2, px, py + pr * 0.35, pr); g.addColorStop(0, 'rgba(150,158,176,.55)'); g.addColorStop(1, 'rgba(150,158,176,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py + pr * 0.35, pr, 0, 7); x.fill();
+  }
+  for (const [px, py, pr] of puffs) {   // светлые клубы
+    const g = x.createRadialGradient(px - pr * 0.25, py - pr * 0.3, pr * 0.1, px, py, pr); g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(0.6, 'rgba(246,247,250,.8)'); g.addColorStop(1, 'rgba(240,242,248,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py, pr, 0, 7); x.fill();
+  }
+  const sh = document.createElement('canvas'); sh.width = w; sh.height = h; const y = sh.getContext('2d');   // тень облака на земле
+  for (const [px, py, pr] of puffs) { const g = y.createRadialGradient(px, py, pr * 0.2, px, py, pr * 1.1); g.addColorStop(0, 'rgba(20,24,40,.5)'); g.addColorStop(1, 'rgba(20,24,40,0)'); y.fillStyle = g; y.beginPath(); y.arc(px, py, pr * 1.1, 0, 7); y.fill(); }
+  return { c, sh };
+}
+function cloudsInit() {
+  if (CL.sprites.length || !MAPINFO) return;
+  for (let i = 0; i < 6; i++) CL.sprites.push(cloudSprite(1261 + i * 977));
+  let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 16; i++) CL.list.push({ x: r() * MAPINFO.W, y: r() * MAPINFO.H, w: 340 + r() * 340, sp: CL.sprites[i % 6], v: 0.6 + r() * 0.6 });
+}
+function cloudFrame(now) {
+  requestAnimationFrame(cloudFrame);
+  const cv = $('cloudcv'); if (!cv) return;
+  const show = CL.on && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
+  if (!show) { if (cv.width) { cv.width = 0; } CL.last = now; return; }
+  if (now - CL.last < 33) return;   // ~30 кадров/с
+  const dt = Math.min(0.2, (now - CL.last) / 1000); CL.last = now;
+  cloudsInit();
+  const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
+  if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
+  const x = cv.getContext('2d'), v = UI.view, z = v.z, M = MAPINFO;
+  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
+  x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+  const fade = clamp(1.25 - (z * M.W / 5298 - 0.6) * 0.45, 0.35, 1);   // вблизи облака прозрачнее
+  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
+  for (const c of CL.list) {
+    c.x += 9 * c.v * dt; c.y += 1.6 * c.v * dt;               // ветер с запада
+    if (c.x > M.W + 200) c.x = -c.w - 200; if (c.y > M.H + 150) c.y = -150;
+    const h = c.w * 240 / 440;
+    if (c.x + c.w + 80 < vx0 || c.x - 80 > vx1 || c.y + h + 120 < vy0 || c.y > vy1) continue;
+    x.globalAlpha = 0.22 * fade; x.drawImage(c.sp.sh, c.x + 70, c.y + 110, c.w, h);
+    x.globalAlpha = 0.78 * fade; x.drawImage(c.sp.c, c.x, c.y, c.w, h);
+  }
+  x.globalAlpha = 1;
+}
+if (!HEADLESS) requestAnimationFrame(cloudFrame);
+
 /* --- часы: реальное время с паузой и тремя скоростями --- */
 // скорости как в Europa Universalis: день за 2 с, 1 с, 0,5 с, 0,2 с, 0,1 с
 const DAYS_PER_SEC = [0, 0.5, 1, 2, 5, 10];
@@ -1004,6 +1058,7 @@ function showMenu() {
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
+   <button id="mCl">${CL.on ? 'Облака: включены (выключить)' : 'Облака: выключены (включить)'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
    <button id="mNames">Скачать мои названия (файл)</button>
@@ -1015,6 +1070,7 @@ function showMenu() {
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
   $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
+  $('mCl').onclick = () => { CL.on = !CL.on; try { localStorage.setItem('poly_clouds', CL.on ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mStyle').onclick = () => { save(); try { localStorage.setItem('poly_style', MAPSTYLE === 'wc' ? 'sat' : 'wc'); } catch (e) { } location.reload(); };
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };

@@ -37,7 +37,7 @@ def noise(scale, oct=4, shape=(H, W), r=rng):
 lum = ecol.mean(2, keepdims=True)
 pig = np.clip((ecol - lum) * 1.05 + lum, 0, 1) * 1.12            # снимок -> пигмент: светлее, цвет сохраняется
 pig = nd.gaussian_filter(pig, (2.0, 2.0, 0))            # мазок — без пиксельной ряби
-base = pig * 0.58 + PAPER * 0.42
+base = pig * 0.66 + PAPER * 0.34
 blot = noise(40); gran = noise(1.2, 2)
 base *= (0.93 + 0.10 * blot)[..., None]; base *= (0.94 + 0.08 * gran)[..., None]
 # пигмент собирается у края мазка: на границах типов местности и у берега
@@ -101,12 +101,30 @@ SPG, SIZEK, TH = 11.0, 0.9, 0.42
 gm = (hsm >= TH) & land & (nd.distance_transform_edt(land) >= 4) & bigland2   # не на крошечных островах и не на самом берегу
 mx, my = pick(gm, int(SPG * 0.75), np.clip((hsm - TH) / (1 - TH) * 1.15, 0, 1), r2)
 mh = hsm[np.clip(my.astype(int), 0, H - 1), np.clip(mx.astype(int), 0, W - 1)]
+n = len(mx); ms = SPG * SIZEK * (0.65 + 0.8 * mh) * r2.uniform(0.8, 1.25, n); mwk = r2.uniform(1.9, 2.6, n)
+# весь силуэт — на суше: подножие дальше от воды, чем полширины горы, и над вершиной тоже суша
+dland = nd.distance_transform_edt(land)
+xi, yi = np.clip(mx.astype(int), 0, W - 1), np.clip(my.astype(int), 0, H - 1)
+ok = (dland[yi, xi] >= ms * mwk * 0.42) & land[np.clip((my - ms * 0.75).astype(int), 0, H - 1), xi]
+# прореживание: гора не ставится, если рядом (эллипс вдоль хребта) уже стоит другая — меньше наслоения
+order = np.argsort(-mh); keep = np.zeros(n, bool); taken = {}
+for i in order:
+    if not ok[i]: continue
+    gx, gy = int(mx[i] // SPG), int(my[i] // SPG); near = False
+    for ax in (gx - 2, gx - 1, gx, gx + 1, gx + 2):
+        for ay in (gy - 1, gy, gy + 1):
+            for j in taken.get((ax, ay), ()):
+                if ((mx[i] - mx[j]) / (ms[i] * mwk[i] * 0.55)) ** 2 + ((my[i] - my[j]) / (ms[i] * 0.55)) ** 2 < 1: near = True; break
+            if near: break
+        if near: break
+    if not near: keep[i] = True; taken.setdefault((gx, gy), []).append(i)
+mx, my, mh, ms, mwk = mx[keep], my[keep], mh[keep], ms[keep], mwk[keep]
 n = len(mx)
-MP = dict(x=mx, y=my, h=mh, s=SPG * SIZEK * (0.65 + 0.8 * mh) * r2.uniform(0.8, 1.25, n), wk=r2.uniform(1.9, 2.6, n),
+MP = dict(x=mx, y=my, h=mh, s=ms, wk=mwk,
           pk=r2.uniform(-0.3, 0.2, n), bumps=nd.gaussian_filter1d(r2.normal(0, 1, (n, 25)), 1.5, axis=1),
           vx=r2.uniform(0.08, 0.25, n), vm=r2.uniform(-0.04, 0.04, n), vy=r2.uniform(0.35, 0.55, n))
 # деревья: лиственные — кроны-кружки, хвойные — ёлки
-tx, ty = pick(forest & land, 4, 0.9, r2)
+tx, ty = pick(forest & land & (dland >= 3.5), 5, 0.85, r2)   # реже и не на самом берегу
 TP = dict(x=tx, y=ty, con=conifer[np.clip(ty.astype(int), 0, H - 1), np.clip(tx.astype(int), 0, W - 1)], r=r2.uniform(1.7, 2.5, len(tx)), j=r2.uniform(-0.06, 0.06, len(tx)))
 # штрихи волн в открытом море
 wx, wy = pick(WL & (dist > 26), 46, 0.55, r2)
@@ -115,6 +133,7 @@ def sub(P, x0, y0, x1, y1, mg):
     s = (P['x'] >= x0 - mg) & (P['x'] < x1 + mg) & (P['y'] >= y0 - mg) & (P['y'] < y1 + mg)
     return {kk: v[s] for kk, v in P.items()}
 
+OBJ = {}
 def paint(B, x0, y0, K, rv):
     """B — подложка куска (h×w×3, 0..1) в масштабе K, левый верхний угол = (x0, y0) в 1×; rv — реки куска."""
     h, w = B.shape[:2]
@@ -186,12 +205,22 @@ def paint(B, x0, y0, K, rv):
             dw.arc([X + o, Y - l * 0.18 + o * 0.6, X + l / 2 + o, Y + l * 0.18 + o * 0.6], 200, 340, fill=255, width=max(1, int(K)))
     WVm = np.asarray(wv.resize((w, h), Image.BOX), np.float32)[..., None] / 255 * 0.28
     B = B * (1 - WVm) + INK * WVm
+    # освещение: контраст и насыщенность (карта была «ярко-блеклой»)
+    lum = B.mean(2, keepdims=True)
+    B = lum + (B - lum) * 1.18
+    B = (B - 0.52) * 1.2 + 0.5
+    B = np.clip(B, 0, 1) ** 1.06
+    OBJ['m'] = (f > 0); OBJ['t'] = D_ > 0.35
     return np.clip(B, 0, 1)
 
-if os.environ.get('ONLY1'): out = paint(B0.copy(), 0, 0, 1, RV); Image.fromarray((out * 255).astype(np.uint8)).save(OUTD + '/map_wc.jpg', quality=90); sys.exit(0)
 out = paint(B0.copy(), 0, 0, 1, RV)
+# маска нарисованных значков для игры: на политической карте цвет державы над ними прозрачнее (горы 255, леса 165, реки 180)
+rel = np.zeros((H, W), np.uint8)
+rel[OBJ['t']] = 165; rel[RV > 0.18] = 180; rel[OBJ['m']] = 255
+Image.fromarray(rel).save(OUTD + '/relief_wc.png', optimize=True)
 Image.fromarray((out * 255).astype(np.uint8)).save(OUTD + '/map_wc.jpg', quality=90, optimize=True, progressive=True)
-print('map_wc.jpg готово')
+print('map_wc.jpg готово, гор', len(MP['x']), 'деревьев', len(TP['x']))
+if os.environ.get('ONLY1'): sys.exit(0)
 # ---------- плитки 2× ----------
 T, MG = 512, 12
 hid = OUTD + '/hi_wc'; os.makedirs(hid, exist_ok=True)
