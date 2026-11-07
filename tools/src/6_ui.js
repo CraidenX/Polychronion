@@ -2,9 +2,9 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 205, sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 190, relief: true, reliefA: 1, sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
-try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
+try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; UI.relief = localStorage.getItem('poly_relief') !== 'off'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
 // перевал: [цвет пунктира, цвет подложки]
 const PASSCOL = { black: ['#140c10', 'rgba(240,226,190,.75)'], red: ['#d21c1c', 'rgba(255,240,215,.7)'], brown: ['#4a2408', 'rgba(240,214,160,.8)'] };
@@ -107,7 +107,7 @@ const SFX = (() => {
 if (!HEADLESS) document.addEventListener('click', e => { if (e.target.closest && e.target.closest('button') && !e.target.closest('.nosfx')) SFX.play('click'); }, true);
 
 /* --- заранее загружаем карту (с самого титульного экрана), со шкалой загрузки --- */
-const PRE = { got: {}, total: { img: 1600000, ids: 450000 }, p: null, ready: false, imgOk: false };
+const PRE = { got: {}, total: { img: 1700000, ids: 470000, rel: 180000 }, p: null, ready: false, imgOk: false };
 function prefetch(url, key) {
   if (typeof fetch === 'undefined' || location.protocol === 'file:') return Promise.resolve(url);
   return fetch(url).then(r => {
@@ -123,7 +123,7 @@ function prefetch(url, key) {
 }
 function loadProgress() {
   if (HEADLESS) return;
-  const got = (PRE.got.img || 0) + (PRE.got.ids || 0), tot = PRE.total.img + PRE.total.ids;
+  const got = (PRE.got.img || 0) + (PRE.got.ids || 0) + (PRE.got.rel || 0), tot = PRE.total.img + PRE.total.ids + PRE.total.rel;
   const pct = Math.min(100, Math.round(got / tot * 100)), done = PRE.ready && PRE.imgOk;
   const txt = got >= tot ? 'Подготовка карты…' : `Загрузка карты: ${pct}%`;
   const tf = document.getElementById('tfill'); if (tf) tf.style.width = pct + '%';
@@ -132,7 +132,9 @@ function loadProgress() {
   const ml = document.getElementById('maploading');
   if (ml) { ml.querySelector('.lfill').style.width = pct + '%'; ml.querySelector('.ltxt').textContent = txt; ml.classList.toggle('done', done); }
 }
-if (!HEADLESS) PRE.p = { img: prefetch('map.jpg', 'img'), ids: prefetch('ids.png', 'ids') };
+if (!HEADLESS) PRE.p = { img: prefetch('map.jpg', 'img'), ids: prefetch('ids.png', 'ids'), rel: prefetch('relief.jpg', 'rel') };
+// слой рельефа (отмывка гор): кладётся поверх цветов держав
+if (!HEADLESS) PRE.p.rel.then(u => { const im = new Image(); im.onload = () => { PIX.rel = im; if (typeof scheduleVector === 'function') scheduleVector(); }; im.src = u; });
 
 /* --- названия: базовые, свои (переименованные игроком) и динамические (зависят от хозяина) --- */
 let BASE_RNAME = null, BASE_PNAME = null;
@@ -403,7 +405,7 @@ function drawOverlay() {
       for (let x = 0; x < tw; x++) {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
         if (pr[v] < 0 || pOwn[v] < 0) continue;
-        const m = PIX.mtn && PIX.mtn[i] && !pFree[v], c = m ? PIX.pColD[v] : pCol[v], o = (y * tw + x) * 4;
+        const m = PIX.mtn && PIX.mtn[i] && !pFree[v], c = pCol[v], o = (y * tw + x) * 4;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? UI.ridgeA : 190);
       }
     }
@@ -538,12 +540,14 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = m ? PIX.pColD[v] : pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? UI.ridgeA : 190); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? UI.ridgeA : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
     ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
+  // рельеф поверх цветов держав (как в EU4): светлые склоны светлее, теневые — темнее
+  if (PIX.rel && UI.relief) { const k = PIX.rel.naturalWidth / M.W; ctx.globalCompositeOperation = UI.reliefMode || 'soft-light'; ctx.globalAlpha = UI.reliefA; ctx.drawImage(PIX.rel, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; }
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   // границы
@@ -959,7 +963,8 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
-   <button id="mRidge">${UI.ridgeA ? 'Хребты: в цвет владельца (сделать своего цвета)' : 'Хребты: своего цвета (красить в цвет владельца)'}</button>
+   <button id="mRel">${UI.relief ? 'Рельеф гор: включён (выключить — быстрее на слабых компьютерах)' : 'Рельеф гор: выключен (включить)'}</button>
+   <button id="mRidge">${UI.ridgeA ? 'Горы: в цвет владельца (показать природный цвет)' : 'Горы: природного цвета (красить в цвет владельца)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
@@ -974,7 +979,8 @@ function showMenu() {
   $('mNames').onclick = exportNames;
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 205; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
+  $('mRel').onclick = () => { UI.relief = !UI.relief; try { localStorage.setItem('poly_relief', UI.relief ? 'on' : 'off'); } catch (e) { } scheduleVector(); showMenu(); };
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 190; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
@@ -1170,7 +1176,7 @@ function showIntro() {
     SFX.play('event');
     modal(`<div class="small muted">Пролог · Лето 1261</div><h2>Город снова ромейский</h2>
     <p>${esc(INTRO_TEXT)}</p>
-    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ и 1–5 вверху (или пробел, клавиши 1–5, + и −). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на любую провинцию — войско пойдёт туда самым быстрым путём. Ctrl или Shift + щелчок — продлить маршрут через выбранную провинцию (свой путь). Правый щелчок — отменить приказ. Пунктир — морские пути (нужен флот). Коричневые хребты — горы: через них не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает на 15 дней дольше. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
+    <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ и 1–5 вверху (или пробел, клавиши 1–5, + и −). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на любую провинцию — войско пойдёт туда самым быстрым путём. Ctrl или Shift + щелчок — продлить маршрут через выбранную провинцию (свой путь). Правый щелчок — отменить приказ. Пунктир — морские пути (нужен флот). Горы: через хребты не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает на 15 дней дольше. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
     <p class="small muted">Цель — дожить до 1347 года и встретить Чёрную смерть сильной державой. Потеря Константинополя — конец игры.</p>
     <button class="main" id="introNext">Далее: кто будет править?</button>`);
     $('introNext').onclick = () => { closeModal(); res(); };

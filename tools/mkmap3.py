@@ -49,18 +49,51 @@ t = np.clip(near * 2.2, 0, 1) + noise(24) * 0.08
 deep, shallow = np.array([0, 20, 54], np.float32), np.array([20, 56, 96], np.float32)
 seacol = deep[None, None, :] * (1 - t[..., None]) + shallow[None, None, :] * t[..., None]
 out[sea] = np.clip(seacol[sea], 0, 255).astype(np.int32)
-# горы: светлые хребты с тенью справа-снизу — объём
-# горы: коричневые хребты с объёмом (свет сверху-слева, тень справа-снизу), контур — тёмно-коричневый
-mtn = np.isin(gk, [0x8B5A2B, 0xFF00FF]) & zone
-edge = (gk == 0x4A2F1A) & zone
-sh = np.zeros_like(mtn); sh[1:, 1:] = mtn[:-1, :-1]; sh &= ~mtn & ~edge & landm
-out[sh] = (out[sh] * 0.6).astype(np.int32)
-up = np.zeros_like(mtn); up[1:, 1:] = mtn[:-1, :-1]
-base_b = np.array([139, 90, 43], np.float32) + (noise(5)[..., None] * 26)
-out[mtn] = np.clip(base_b[mtn] + np.where(up[mtn], -14, 18)[:, None], 0, 255).astype(np.int32)
-out[edge] = (74, 47, 26)
-pas = (gk == 0xFF00FF) & zone
-out[pas] = (236, 214, 160)   # перевал — светлая тропа
+# --- горы: рельеф вместо схематичных хребтов ---
+# высота: гладкий массив вокруг хребтов (шире маски) + неровности; отмывка — свет с северо-запада
+import scipy.ndimage as nd
+ridge = np.isin(gk, [0x8B5A2B, 0x4A2F1A, 0xFF00FF]) & zone
+bgm = (k == 0x5E5E5E) | ((k == 0x262626) & nd.binary_dilation(k == 0x5E5E5E, iterations=2)) | ((gk == 0x5E5E5E) & zone)
+allm = (ridge | bgm) & landm
+for c_, sh_ in ((0, 2), (1, 0), (2, -3)):   # под хребтами — та же земля, цвет даст рельеф
+    ch_ = out[..., c_].astype(np.float32); ch_[allm] = tex[allm] + sh_; out[..., c_] = np.clip(ch_, 0, 255).astype(np.int32)
+dout = nd.distance_transform_edt(~allm)                                                   # расстояние до хребта, px
+din = np.minimum(nd.distance_transform_edt(allm), 5)                                     # глубина внутри хребта
+ridged = lambda s: 0.5 - np.abs(noise(s))                                                # ветвящиеся отроги
+rough = ridged(15) * 0.8 + ridged(7) * 0.5 + noise(3) * 0.2
+fall = np.exp(-(dout / (9 + 6 * (noise(30) + 0.5))) ** 1.4)                              # спад к подножию, неровный край
+Hm = (0.55 + din / 5 * 0.45) * fall * (0.75 + rough * 0.9)
+Hm = np.clip(Hm, 0, 1.2).astype(np.float32)
+hills = (noise(40) * 0.5 + noise(14) * 0.35) * 0.025                                   # пологие холмы равнин
+Ht = np.where(landm, Hm + hills, 0).astype(np.float32)
+Z = 22.0
+gy_, gx_ = np.gradient(nd.gaussian_filter(Ht, 0.7) * Z)
+L = np.array([-0.62, -0.62, 0.48]); L /= np.linalg.norm(L)
+nz = 1 / np.sqrt(gx_ ** 2 + gy_ ** 2 + 1)
+shade = (-gx_ * L[0] - gy_ * L[1] + L[2]) * nz / L[2]          # 1 — ровное место
+shade = np.clip(shade, 0.35, 1.6)
+# цвет гор: предгорья — землистые, склоны — каменистые, вершины — светлые
+hmix = np.clip((Hm - 0.1) / 0.95, 0, 1)[..., None]
+foot, rock, peak = np.array([124, 114, 92], np.float32), np.array([128, 112, 92], np.float32), np.array([178, 170, 156], np.float32)
+mcol = np.where(hmix < 0.6, foot + (rock - foot) * (hmix / 0.6), rock + (peak - rock) * ((hmix - 0.6) / 0.4))
+land_out = out.astype(np.float32)
+w = np.clip(hmix * 1.3, 0, 0.85)
+land_out = land_out * (1 - w) + mcol * w
+land_out *= shade[..., None]
+out = np.where(landm[..., None], np.clip(land_out, 0, 255), out).astype(np.int32)
+# слой рельефа для игры (кладётся поверх цветов держав): 128 — ровно, светлее/темнее — склоны; вершины чуть светлее
+rel = np.clip(128 * np.clip(shade, 0.5, 1.45) + hmix[..., 0] * 10, 0, 255)
+rel[~landm] = 128
+rel[~nd.binary_dilation(zone, iterations=40)] = 128   # за краем зоны рельеф уже в подложке — не удваиваем
+Image.fromarray(rel.astype(np.uint8), 'L').resize((W0 // 2, H0 // 2), Image.BILINEAR).save(sys.argv[1] + '/relief.jpg', quality=82, optimize=True)
+# широкая маска гор (для режима «хребты своего цвета» — без заливки державы) — в синий канал ids.png
+massif = (Hm > 0.38) & zone
+idp = sys.argv[1] + '/ids.png'
+if os.path.exists(idp):
+    I = np.asarray(Image.open(idp).convert('RGB')).copy()
+    b = I[..., 2]; keep_outer = (b >= 100) & (b < 160)
+    b[~keep_outer] = 0; b[massif & ~keep_outer & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)] = 255
+    I[..., 2] = b; Image.fromarray(I).save(idp, optimize=True)
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]
 # исходный размер — без пересжатия
