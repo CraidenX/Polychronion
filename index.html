@@ -39,6 +39,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #ovl{image-rendering:auto}
 #selsvg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
 #veccv{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
+#wavecv{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
 #cloudcv{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
 #mapover{position:absolute;left:0;top:0;transform-origin:0 0;z-index:2;pointer-events:none}
 #ptip{position:fixed;pointer-events:none;z-index:20;background:rgba(20,12,24,.92);border:1px solid var(--gold);border-radius:6px;padding:3px 8px;font-size:13px;white-space:nowrap}
@@ -147,7 +148,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
     <div id="view-map" class="view">
       <div id="mapwrap">
         <div id="mapinner" class="hidden"><img id="mapimg" alt="Карта"></div>
-        <canvas id="veccv"></canvas><canvas id="cloudcv"></canvas><div id="mapover"><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="maploading"><div class="lbox"><div>Загрузка карты…</div><div class="lbar"><div class="lfill"></div></div><div class="ltxt"></div></div></div><div id="msearchbox" class="hidden"><input id="msearch" type="search" placeholder="Найти регион, провинцию…" autocomplete="off"><div id="msres" class="hidden"></div></div><div id="zoombtns"><button id="zsearch" title="Поиск (клавиша /)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button><button id="zmode" title="Режим карты: политическая (M — местность)"><svg width="20" height="18" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M1 18 8 5l4 7 3-4 8 10z"/><path d="M6.3 8.2 8 5l1.8 3.2"/></svg></button><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
+        <canvas id="veccv"></canvas><canvas id="wavecv"></canvas><canvas id="cloudcv"></canvas><div id="mapover"><div id="markers"></div></div><div id="ptip" class="hidden"></div><div id="maploading"><div class="lbox"><div>Загрузка карты…</div><div class="lbar"><div class="lfill"></div></div><div class="ltxt"></div></div></div><div id="msearchbox" class="hidden"><input id="msearch" type="search" placeholder="Найти регион, провинцию…" autocomplete="off"><div id="msres" class="hidden"></div></div><div id="zoombtns"><button id="zsearch" title="Поиск (клавиша /)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button><button id="zmode" title="Режим карты: политическая (M — местность)"><svg width="20" height="18" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M1 18 8 5l4 7 3-4 8 10z"/><path d="M6.3 8.2 8 5l1.8 3.2"/></svg></button><button id="zin" title="Приблизить">+</button><button id="zout" title="Отдалить">−</button><button id="zfit" title="Вся карта">⤢</button></div>
       </div>
       <div id="side"></div>
     </div>
@@ -165,7 +166,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 67, "date": "07.11.2026 21:14"};
+const GAME_VERSION = {"v": 68, "date": "07.11.2026 21:22"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -3027,6 +3028,67 @@ function cloudFrame(now) {
 }
 if (!HEADLESS) requestAnimationFrame(cloudFrame);
 
+/* --- волны: гребешки над морем (как на старых картах) — появляются и тают, медленно идут по ветру --- */
+const WV = { on: true, pts: null, spr: null, last: 0, t: 0 };
+try { WV.on = localStorage.getItem('poly_waves') !== 'off'; } catch (e) { }
+function waveSprites() {   // 4 формы гребешка: светлая дуга + тёмная тень под ней
+  const out = [];
+  for (let f = 0; f < 4; f++) {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 24; const x = c.getContext('2d'); x.lineCap = 'round';
+    const k = [1, 0.8, 1.15, 0.9][f], humps = f % 2 ? 2 : 1;
+    for (const [col, dy, lw] of [['rgba(6,24,44,.6)', 2.6, 3.4], ['rgba(240,248,252,1)', 0, 3]]) {
+      x.strokeStyle = col; x.lineWidth = lw; x.beginPath();
+      for (let h = 0; h < humps; h++) { const w = 44 / humps, x0 = 10 + h * w; x.moveTo(x0, 15 + dy); x.quadraticCurveTo(x0 + w * 0.5, (15 - 9 * k) + dy, x0 + w, 15 + dy); }
+      x.stroke();
+    }
+    out.push(c);
+  }
+  return out;
+}
+function wavesInit() {
+  if (WV.pts || !PIX.ids || !PIX.outer) return;
+  const W = PIX.w, H = PIX.h, ids = PIX.ids, ot = PIX.outer, S = PIX.s || 1;
+  const water = (x, y) => x >= 0 && y >= 0 && x < W && y < H && !ids[y * W + x] && !ot[y * W + x];
+  let s = 99; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const pts = [], step = 34;
+  for (let gy = step / 2; gy < H; gy += step) for (let gx = step / 2; gx < W; gx += step) {
+    const x = Math.round(gx + (r() - 0.5) * step * 0.8), y = Math.round(gy + (r() - 0.5) * step * 0.8);
+    let ok = true; for (const [dx, dy] of [[0, 0], [-12, 0], [12, 0], [0, -8], [0, 8], [-8, -6], [8, 6]]) if (!water(x + dx, y + dy)) { ok = false; break; }
+    if (ok) pts.push({ x: x * S, y: y * S, ph: r() * 6.28, sp: 0.35 + r() * 0.4, f: Math.floor(r() * 4), sz: 0.8 + r() * 0.5, lod: Math.floor(r() * 4) });
+  }
+  WV.pts = pts; WV.spr = waveSprites();
+}
+function waveFrame(now) {
+  requestAnimationFrame(waveFrame);
+  const cv = $('wavecv'); if (!cv) return;
+  const show = WV.on && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
+  if (!show) { if (cv.width) cv.width = 0; WV.last = now; return; }
+  if (now - WV.last < 40) return;
+  const dt = Math.min(0.2, (now - WV.last) / 1000); WV.last = now; WV.t += dt;
+  wavesInit(); if (!WV.pts) return;
+  const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
+  if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
+  const x = cv.getContext('2d'), v = UI.view, z = v.z;
+  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
+  const zs = z * MAPINFO.W / 5298;
+  const lod = zs < 0.4 ? 1 : zs < 0.7 ? 2 : 4;                     // на отдалении — реже
+  const scr = clamp(26 * zs, 13, 44), a0 = clamp(0.55 + zs * 0.2, 0.55, 0.9);   // размер на экране, px
+  const vx0 = -v.x / z - 40, vy0 = -v.y / z - 40, vx1 = vx0 + Wd / z + 80, vy1 = vy0 + Hd / z + 80, T = WV.t;
+  for (const p of WV.pts) {
+    if (p.lod >= lod) continue;
+    const drift = Math.sin(T * 0.13 * p.sp + p.ph) * 6;            // покачивание по ветру
+    const px = p.x + drift, py = p.y;
+    if (px < vx0 || px > vx1 || py < vy0 || py > vy1) continue;
+    const life = Math.sin(T * p.sp + p.ph); if (life <= 0.1) continue;   // гребешок вырастает и тает
+    const a = (life - 0.1) / 0.9;
+    const w = scr * p.sz * (0.7 + 0.3 * a), h = w * 24 / 64;
+    x.globalAlpha = a * a0;
+    x.drawImage(WV.spr[p.f], dpr * (v.x + px * z) - w * dpr / 2, dpr * (v.y + py * z) - h * dpr / 2 - a * 2 * dpr, w * dpr, h * dpr);
+  }
+  x.globalAlpha = 1;
+}
+if (!HEADLESS) requestAnimationFrame(waveFrame);
+
 /* --- часы: реальное время с паузой и тремя скоростями --- */
 // скорости как в Europa Universalis: день за 2 с, 1 с, 0,5 с, 0,2 с, 0,1 с
 const DAYS_PER_SEC = [0, 0.5, 1, 2, 5, 10];
@@ -3326,6 +3388,7 @@ function showMenu() {
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
+   <button id="mWv">${WV.on ? 'Волны: включены (выключить)' : 'Волны: выключены (включить)'}</button>
    <button id="mCl">${CL.on ? 'Облака: включены (выключить)' : 'Облака: выключены (включить)'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
@@ -3338,6 +3401,7 @@ function showMenu() {
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
   $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
+  $('mWv').onclick = () => { WV.on = !WV.on; try { localStorage.setItem('poly_waves', WV.on ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mCl').onclick = () => { CL.on = !CL.on; try { localStorage.setItem('poly_clouds', CL.on ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mStyle').onclick = () => { save(); try { localStorage.setItem('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); } catch (e) { } location.reload(); };
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
