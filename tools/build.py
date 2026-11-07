@@ -4,6 +4,13 @@ mi=json.load(open(SP+(sys.argv[2] if len(sys.argv)>2 else 'mapinfo.json')))
 mi.setdefault('ids',[r[0] for r in json.load(open(SP+'regions.json'))])
 mi.pop('adj',None)
 js=''.join(open(SP+'src/'+f).read() for f in ['2_data.js','3_core.js','4_events.js','5_battle.js','6_ui.js'])
+import subprocess, datetime
+try: vn=int(subprocess.run(['git','-C',SP,'rev-list','--count','HEAD'],capture_output=True,text=True).stdout.strip())+1
+except Exception: vn=0
+vd=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=4))).strftime('%d.%m.%Y %H:%M')
+VER={'v':vn,'date':vd}
+json.dump(VER,open(SP+'../version.json','w'),ensure_ascii=False)
+js='const GAME_VERSION = '+json.dumps(VER,ensure_ascii=False)+';\n'+js
 js=js.replace('/*MAPINFO*/null',json.dumps(mi,ensure_ascii=False,separators=(',',':')))
 if len(sys.argv)>3: js=js.replace('/*GEN*/null',open(SP+sys.argv[3]).read())
 import os

@@ -180,6 +180,7 @@ if os.path.exists(idp):
         fm = (forest_m if EU else np.load(SP + 'umap/forest.npy')) & ~keep_outer & (b == 0) & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
         b[fm] = 165
     I[..., 2] = b; Image.fromarray(I).save(idp, optimize=True)
+np.savez_compressed(SP + 'umap/masks.npz', forest=forest_m, conifer=conifer_m, ridge=allm & landm, mtn=(eu_mtn if EU else np.zeros_like(landm)) & landm, zone=zone, land=landm, water=WL, cleanwater=WP, k=k, gk=gk)   # для mkwater.py
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]
 # исходный размер — без пересжатия

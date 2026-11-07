@@ -132,7 +132,23 @@ function loadProgress() {
   const ml = document.getElementById('maploading');
   if (ml) { ml.querySelector('.lfill').style.width = pct + '%'; ml.querySelector('.ltxt').textContent = txt; ml.classList.toggle('done', done); }
 }
-if (!HEADLESS) PRE.p = { img: prefetch('map.jpg', 'img'), ids: prefetch('ids.png', 'ids') };
+// стиль подложки: акварель (по умолчанию) или прежняя «снимок»; выбор — в меню, запоминается
+const MAPSTYLE = (() => { try { return localStorage.getItem('poly_style') || 'wc'; } catch (e) { return 'wc'; } })();
+const MAPSRC = MAPSTYLE === 'wc' ? 'map_wc.jpg' : 'map.jpg', HIDIR = MAPSTYLE === 'wc' ? 'hi_wc' : 'hi';
+if (!HEADLESS) PRE.p = { img: prefetch(MAPSRC, 'img'), ids: prefetch('ids.png', 'ids') };
+/* --- версия игры: номер сборки; раз в минуту проверяем, не вышла ли новая --- */
+function versionText(v) { return v ? `версия ${v.v} · ${v.date}` : ''; }
+function checkVersion() {
+  if (HEADLESS || typeof fetch === 'undefined' || location.protocol === 'file:' || typeof GAME_VERSION === 'undefined') return;
+  fetch('version.json?t=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(v => {
+    if (!v || v.v <= GAME_VERSION.v || document.getElementById('newver')) return;
+    const d = document.createElement('div'); d.id = 'newver';
+    d.innerHTML = `Вышла новая ${esc(versionText(v))}. <button class="small main">Обновить</button>`;
+    d.querySelector('button').onclick = () => location.reload();
+    document.body.appendChild(d);
+  }).catch(() => { });
+}
+if (!HEADLESS) { setTimeout(checkVersion, 4000); setInterval(checkVersion, 60000); }
 
 /* --- названия: базовые, свои (переименованные игроком) и динамические (зависят от хозяина) --- */
 let BASE_RNAME = null, BASE_PNAME = null;
@@ -472,14 +488,14 @@ function regionOutline(ri) {
 }
 /* --- подложка высокого разрешения: плитки hi/X_Y.jpg (512×512 карты в 1024×1024), грузятся только видимые --- */
 const HI = { idx: null, img: new Map(), use: 0 };
-if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') fetch('hi/index.json').then(r => r.ok ? r.json() : null).then(j => { if (j) { HI.idx = j; HI.has = new Set(j.tiles.map(t => t[0] + '_' + t[1])); } }).catch(() => { });
+if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') fetch(HIDIR + '/index.json').then(r => r.ok ? r.json() : null).then(j => { if (j) { HI.idx = j; HI.has = new Set(j.tiles.map(t => t[0] + '_' + t[1])); } }).catch(() => { });
 function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS) {
   const T = HI.idx.T, tx0 = Math.floor(vx0 / T), ty0 = Math.floor(vy0 / T), tx1 = Math.floor((vx1 - 1) / T), ty1 = Math.floor((vy1 - 1) / T);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingQuality = 'high';
   for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
     const key = tx + '_' + ty; if (!HI.has.has(key)) continue;
     let e = HI.img.get(key);
-    if (!e) { const im = new Image(); e = { im, ok: false }; im.onload = () => { e.ok = true; scheduleVector(); }; im.src = 'hi/' + key + '.jpg'; HI.img.set(key, e); }
+    if (!e) { const im = new Image(); e = { im, ok: false }; im.onload = () => { e.ok = true; scheduleVector(); }; im.src = HIDIR + '/' + key + '.jpg'; HI.img.set(key, e); }
     e.use = ++HI.use;
     if (!e.ok) continue;
     const [a, b] = toS(tx * T, ty * T), [c, d] = toS(tx * T + e.im.naturalWidth / 2, ty * T + e.im.naturalHeight / 2);
@@ -982,7 +998,8 @@ eventHook = (ev, opts) => new Promise(res => {
   $('mbox').querySelectorAll('.opt').forEach(b => b.onclick = () => { closeModal(); res(opts[+b.dataset.k]); });
 });
 function showMenu() {
-  modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
+  modal(`<h2>Меню</h2><div class="small muted" style="margin:-6px 0 8px">${typeof GAME_VERSION !== 'undefined' ? esc(versionText(GAME_VERSION)) : ''}</div><div class="btnrow" style="flex-direction:column">
+   <button id="mStyle">Стиль карты: ${MAPSTYLE === 'wc' ? 'акварель' : 'прежний'} (сменить — страница перезагрузится, игра сохранится)</button>
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
@@ -998,6 +1015,7 @@ function showMenu() {
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
   $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
+  $('mStyle').onclick = () => { save(); try { localStorage.setItem('poly_style', MAPSTYLE === 'wc' ? 'sat' : 'wc'); } catch (e) { } location.reload(); };
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
   $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; try { localStorage.setItem('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
@@ -1204,6 +1222,7 @@ function showIntro() {
 }
 async function startNew() { newGame(); enterGame(); await showIntro(); await runPrologue(); save(); renderAll(); }
 function boot() {
+  if (typeof GAME_VERSION !== 'undefined' && $('tver')) $('tver').textContent = versionText(GAME_VERSION);
   $('titlebtns').innerHTML = `<button class="main" id="tNew">Новая игра</button>${hasSave() ? '<button id="tCont">Продолжить</button>' : ''}`;
   $('tNew').onclick = startNew;
   if ($('tCont')) $('tCont').onclick = () => { if (load()) enterGame(); };

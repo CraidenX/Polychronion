@@ -78,6 +78,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 .ar.moving{opacity:.92;border-style:dashed}
 tr.urow{cursor:grab} tr.urow:active{cursor:grabbing}
 button.drop{outline:2px dashed var(--gold);background:rgba(217,183,95,.25)}
+#newver{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:60;background:rgba(20,12,24,.96);border:1px solid var(--gold);border-radius:8px;padding:8px 12px;color:var(--gold2);font-size:14px;box-shadow:0 4px 18px rgba(0,0,0,.5)}
 #zoombtns{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:5}
 #zoombtns button{width:36px;height:36px;padding:0;font-size:20px}
 #side{width:340px;max-width:45%;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:10px}
@@ -133,6 +134,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
     <div class="muted">1261 — 1347. От возвращения Константинополя до Чёрной смерти</div>
     <p>Вы — василевс ромеев. Город снова ваш, но вокруг — латиняне, болгары, сербы, сельджуки, а за горизонтом ждёт Карл Анжуйский. Через восемьдесят шесть лет придёт чума. Что останется от державы к тому дню?</p>
     <div id="titlebtns"></div>
+    <div id="tver" class="small muted" style="margin-top:10px;text-align:center"></div>
     <div id="tload"><div class="lbar"><div class="lfill" id="tfill"></div></div><span id="ttxt">Загрузка карты…</span></div>
     <p class="small muted">Один ход — один сезон. Карта: перетаскивайте мышью, колесо — масштаб. Сохранение — в браузере.</p>
   </div>
