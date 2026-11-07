@@ -2,7 +2,7 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 115, mapMode: 'pol', sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 85, mapMode: 'pol', sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
 try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 190; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
@@ -256,7 +256,7 @@ function fitMap() {
   const z = clamp(Math.min(w / (f[2] - f[0]), h / (f[3] - f[1])), minZoom(), MAXZ);
   UI.view.z = z; UI.view.x = w / 2 - (f[0] + f[2]) / 2 * z; UI.view.y = h / 2 - (f[1] + f[3]) / 2 * z; clampView(); applyView();
 }
-function minZoom() { const w = $('mapwrap').clientWidth || 800, h = $('mapwrap').clientHeight || 600; return Math.min(w / MAPINFO.W, h / MAPINFO.H); }
+function minZoom() { const w = $('mapwrap').clientWidth || 800, h = $('mapwrap').clientHeight || 600; return Math.max(w / MAPINFO.W, h / MAPINFO.H); }   // карта всегда закрывает окно — без полос по краям
 function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clientHeight, v = UI.view; const mw = MAPINFO.W * v.z, mh = MAPINFO.H * v.z; v.x = mw < w ? (w - mw) / 2 : clamp(v.x, w - mw, 0); v.y = mh < h ? (h - mh) / 2 : clamp(v.y, h - mh, 0); }
 function applyView() {
   const z = UI.view.z, k = MAPINFO.W / 4000; // подписи держат читаемый размер при отдалении
@@ -406,7 +406,7 @@ function drawOverlay() {
         if (!v) { if (PIX.outer && PIX.outer[i]) { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; }   // земли за краем зоны — серая вуаль
         if (pr[v] < 0 || pOwn[v] < 0) continue;
         const m = PIX.mtn && PIX.mtn[i] && !pFree[v], c = pCol[v], o = (y * tw + x) * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? (PIX.mtn[i] === 2 ? 45 : PIX.mtn[i] === 3 ? 150 : UI.ridgeA) : 190);
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? (PIX.mtn[i] === 2 ? 20 : PIX.mtn[i] === 3 ? 115 : UI.ridgeA) : 190);
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -470,6 +470,25 @@ function regionOutline(ri) {
   if (x1 < 0) return '';
   return SEL_CACHE[key] = traceOutline(x => x > 0 && pr[x] === ri, x0, y0, x1, y1);
 }
+/* --- подложка высокого разрешения: плитки hi/X_Y.jpg (512×512 карты в 1024×1024), грузятся только видимые --- */
+const HI = { idx: null, img: new Map(), use: 0 };
+if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') fetch('hi/index.json').then(r => r.ok ? r.json() : null).then(j => { if (j) { HI.idx = j; HI.has = new Set(j.tiles.map(t => t[0] + '_' + t[1])); } }).catch(() => { });
+function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS) {
+  const T = HI.idx.T, tx0 = Math.floor(vx0 / T), ty0 = Math.floor(vy0 / T), tx1 = Math.floor((vx1 - 1) / T), ty1 = Math.floor((vy1 - 1) / T);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingQuality = 'high';
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+    const key = tx + '_' + ty; if (!HI.has.has(key)) continue;
+    let e = HI.img.get(key);
+    if (!e) { const im = new Image(); e = { im, ok: false }; im.onload = () => { e.ok = true; scheduleVector(); }; im.src = 'hi/' + key + '.jpg'; HI.img.set(key, e); }
+    e.use = ++HI.use;
+    if (!e.ok) continue;
+    const [a, b] = toS(tx * T, ty * T), [c, d] = toS(tx * T + e.im.naturalWidth / 2, ty * T + e.im.naturalHeight / 2);
+    ctx.drawImage(e.im, a, b, c - a, d - b);
+  }
+  ctx.restore();
+  if (HI.img.size > 40) { const old = [...HI.img.entries()].sort((p, q) => p[1].use - q[1].use).slice(0, HI.img.size - 40); for (const [k] of old) HI.img.delete(k); }   // держим в памяти не больше 40 плиток
+}
+
 /* --- векторные границы (borders.js): рисуются на холсте размером с экран, только видимая часть ---
    (раньше это был один огромный SVG — при сильном приближении браузер его не тянул) */
 const VEC = { segs: null, key: '', cls: null, raf: 0 };
@@ -531,6 +550,7 @@ function paintVector() {
     }
     const k = (img.naturalWidth || img.width) / M.W;
     ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
+    if (z * dpr >= 1.15 && HI.idx) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
   if (UI.mapMode === 'geo') { /* режим «Местность»: без заливки держав */ }
@@ -541,7 +561,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v) { if (PIX.outer && PIX.outer[i]) { const o = (y * vw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; } if (pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? (mt[i] === 2 ? 45 : mt[i] === 3 ? 150 : UI.ridgeA) : 190); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v) { if (PIX.outer && PIX.outer[i]) { const o = (y * vw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; } if (pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? (mt[i] === 2 ? 20 : mt[i] === 3 ? 115 : UI.ridgeA) : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
@@ -965,7 +985,7 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
-   <button id="mRidge">${UI.ridgeA === 115 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
+   <button id="mRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
@@ -980,7 +1000,7 @@ function showMenu() {
   $('mNames').onclick = exportNames;
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 115 ? 190 : 115; try { localStorage.setItem('poly_ridge', UI.ridgeA === 115 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; try { localStorage.setItem('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;

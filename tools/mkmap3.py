@@ -110,22 +110,62 @@ if EU:
     if os.path.exists(SP + 'umap/forest.npy'): forest_m |= np.load(SP + 'umap/forest.npy') & landm   # + исторические леса (mkforest.py)
     conifer_m = forest_m & ((Hs > 118) | (nd.distance_transform_edt(~allm) < 22))
     eu_mtn = np.isin(ter, [6, 16, 2]) & landm & (Hs > 127)            # пики эталона — только на самых высоких местах
-# леса (mkforest.py): деревья-значки под пиками
+# --- значки и реки: точки выбираются один раз, рисуются в 1× (map.jpg) и 2× (плитки hi/ для приближения) ---
 sys.path.insert(0, SP)
-from peaks import draw_trees
-if EU:
-    out = draw_trees(out, forest_m, conifer_m, np.random.default_rng(1204))
-elif os.path.exists(SP + 'umap/forest.npy'):
-    out = draw_trees(out, np.load(SP + 'umap/forest.npy') & landm, np.load(SP + 'umap/conifer.npy'), np.random.default_rng(1204))
-# реки (mkrivers.py — малые реки с карты мода): поверх леса, под пиками
-if os.path.exists(SP + 'umap/rivers.npy'):
-    rv = np.load(SP + 'umap/rivers.npy').astype(np.float32)[..., None] / 255
-    rcol = np.array([30, 66, 112], np.float32)
-    out = np.clip(out.astype(np.float32) * (1 - rv) + rcol * rv, 0, 255).astype(np.int32)
-# рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
-from peaks import draw_peaks
+from peaks import peak_points, tree_points, render_peaks, render_trees, forest_floor
+if not EU:
+    forest_m = (np.load(SP + 'umap/forest.npy') & landm) if os.path.exists(SP + 'umap/forest.npy') else np.zeros_like(landm)
+    conifer_m = np.load(SP + 'umap/conifer.npy') if os.path.exists(SP + 'umap/conifer.npy') else np.zeros_like(landm)
+fsoft = nd.gaussian_filter(forest_m.astype(np.float32), 2.0)
+TP = tree_points(forest_m, conifer_m, np.random.default_rng(1204))
 pkeep = np.where(allm, 0.85, 0.4).astype(np.float32)   # на игровых хребтах — плотно, на горах эталона — реже
-out = draw_peaks(out, (allm | (eu_mtn if EU else False)) & landm, np.random.default_rng(1261), bg=None, keep=pkeep)
+PP = peak_points((allm | (eu_mtn if EU else False)) & landm, np.random.default_rng(1261), keep=pkeep)
+RV = np.load(SP + 'umap/rivers.npy').astype(np.float32) / 255 if os.path.exists(SP + 'umap/rivers.npy') else np.zeros(landm.shape, np.float32)
+RCOL = np.array([30, 66, 112], np.float32)
+base0 = out.copy()
+# для плиток 2×: вода с гладким контуром вместо «лесенки» — две заливки (суша/вода продолжены через границу) и мягкая маска
+WL = np.isin(k, [0x001F48, 0x000020]) | (np.isin(gk, [0x001F48, 0x000020]) & zone)
+_, (iy, ix) = nd.distance_transform_edt(WL, return_indices=True); landfill = base0[iy, ix]
+WP = (k == 0x001F48) | ((gk == 0x001F48) & zone)   # цвет воды — только из «чистой» воды, без тёмного контура «лесенкой»
+_, (iy, ix) = nd.distance_transform_edt(~WP, return_indices=True); waterfill = base0[iy, ix]
+del iy, ix
+def paint(o, fs, rv, x0, y0, K):
+    o = forest_floor(o, fs)
+    o = render_trees(o, TP, x0, y0, K)
+    o = np.clip(o.astype(np.float32) * (1 - rv[..., None]) + RCOL * rv[..., None], 0, 255)
+    return render_peaks(o, PP, x0, y0, K)
+out = paint(base0, fsoft, RV, 0, 0, 1)
+# плитки 2× (512×512 карты -> 1024×1024 px)
+T, MG = 512, 8
+hid = sys.argv[1] + '/hi'; os.makedirs(hid, exist_ok=True)
+grain = lambda shp: (np.random.default_rng(7).random(shp, dtype=np.float32) - 0.5) * 7
+tiles = []
+def up(a, mode):
+    im = Image.fromarray(a); return np.asarray(im.resize((a.shape[1] * 2, a.shape[0] * 2), mode))
+for ty in range(0, H0, T):
+    for tx in range(0, W0, T):
+        x0, y0, x1, y1 = max(0, tx - MG), max(0, ty - MG), min(W0, tx + T + MG), min(H0, ty + T + MG)
+        if not landm[ty:ty + T, tx:tx + T].any(): continue
+        U3 = lambda A: np.stack([up(np.clip(A[y0:y1, x0:x1, c], 0, 255).astype(np.uint8), Image.BICUBIC) for c in range(3)], -1).astype(np.float32)
+        bl, bw = U3(landfill), U3(waterfill)
+        wm = nd.gaussian_filter(up((WL[y0:y1, x0:x1] * 255).astype(np.uint8), Image.BILINEAR).astype(np.float32) / 255, 1.5)
+        a_ = np.clip((wm - 0.5) * 4 + 0.5, 0, 1)[..., None]                 # гладкий край воды
+        b = bl * (1 - a_) + bw * a_
+        edge = np.clip(1 - np.abs(wm - 0.5) * 4, 0, 1)[..., None] * 0.8    # тёмная береговая линия
+        b = b * (1 - edge) + np.array([12, 22, 44], np.float32) * edge
+        lm = 1 - a_
+        b += grain(b.shape[:2])[..., None] * lm                       # мелкое зерно суши — чёткость вблизи
+        fs = up((fsoft[y0:y1, x0:x1] * 255).astype(np.uint8), Image.BILINEAR).astype(np.float32) / 255
+        rv = up((RV[y0:y1, x0:x1] * 255).astype(np.uint8), Image.BILINEAR).astype(np.float32) / 255
+        rv = np.clip((rv - 0.3) * 1.8, 0, 1)                           # чёткий край реки
+        o = paint(b, fs, rv, x0, y0, 2)
+        ox, oy = (tx - x0) * 2, (ty - y0) * 2
+        o = o[oy:oy + 2 * min(T, H0 - ty), ox:ox + 2 * min(T, W0 - tx)]
+        Image.fromarray(o.astype(np.uint8)).save(f'{hid}/{tx // T}_{ty // T}.jpg', quality=84, optimize=True, progressive=True)
+        tiles.append([tx // T, ty // T])
+import json
+json.dump({'T': T, 'tiles': tiles}, open(hid + '/index.json', 'w'))
+print('плиток 2×:', len(tiles))
 # широкая маска гор (для режима «хребты своего цвета» — без заливки державы) — в синий канал ids.png
 massif = ((Hm > 0.38) | (nd.binary_dilation(eu_mtn, iterations=3) if EU else False)) & zone
 idp = sys.argv[1] + '/ids.png'
