@@ -724,15 +724,18 @@ if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') 
 }).catch(() => { });
 // облака идут вокруг того места, куда смотрит игрок: «область облаков» = видимая часть карты с запасом;
 // облако, ушедшее за неё по ветру, снова рождается с наветренной (западной) стороны и плавно проявляется
-const WIND = [9, 1.6];   // px карты в секунду
+const WIND = [12, 1.2];   // px карты в секунду
 let CSEED = 7; const crnd = () => (CSEED = (CSEED * 16807) % 2147483647) / 2147483647;
+// дорожки появления: каждые 50 px высоты карты (≈58 дорожек); новое облако встаёт на случайную дорожку у западного края экрана
+const LANE = 50;
 function newCloud(c, x0, y0, x1, y1, upwind) {
   const n = CA.meta.n, parts = [], k = 2 + Math.floor(crnd() * 3), sz = 150 + crnd() * 130;
   for (let j = 0; j < k; j++) parts.push({ s: Math.floor(crnd() * n), dx: j ? (crnd() - 0.5) * sz * 1.2 : 0, dy: j ? (crnd() - 0.5) * sz * 0.45 : 0, w: sz * (j ? 0.45 + crnd() * 0.5 : 1), fl: crnd() < 0.5, fv: crnd() < 0.3 });
   parts.sort((p, q) => p.dy - q.dy);
-  c.parts = parts; c.w = sz * 1.9; c.v = 0.6 + crnd() * 0.7; c.age = 0;
-  if (upwind) { c.x = x0 - c.w * (0.6 + crnd()); c.y = y0 + crnd() * (y1 - y0); }
-  else { c.x = x0 + crnd() * (x1 - x0); c.y = y0 + crnd() * (y1 - y0); }
+  c.parts = parts; c.w = sz * 1.9; c.v = 0.6 + crnd() * 0.7; c.age = 0; c.kill = false;
+  const l0 = Math.ceil(y0 / LANE), l1 = Math.floor(y1 / LANE);
+  c.y = (l0 + Math.floor(crnd() * Math.max(1, l1 - l0 + 1))) * LANE + (crnd() - 0.5) * 20;
+  c.x = upwind ? x0 - c.w * 0.5 - crnd() * 160 : x0 + crnd() * (x1 - x0);
   return c;
 }
 function cloudFrame(now) {
@@ -746,21 +749,23 @@ function cloudFrame(now) {
   if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
   const x = cv.getContext('2d'), v = UI.view, z = v.z, M = MAPINFO;
   x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
-  // видимость от приближения: на отдалении плотные, вблизи почти прозрачные (не мешают рассматривать карту)
   const zs = z * M.W / 5298, fade = clamp(1.12 - zs * 0.42, 0.08, 1), shf = clamp(1.1 - zs * 0.3, 0.25, 1);
-  // область облаков: видимое + запас; количество — по площади (≈ одно облако на 520×520 px карты)
-  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z, mw = (vx1 - vx0) * 0.5 + 300, mh = (vy1 - vy0) * 0.5 + 200;
-  const ax0 = vx0 - mw, ay0 = vy0 - mh, ax1 = vx1 + mw, ay1 = vy1 + mh;
-  const want = clamp(Math.round((ax1 - ax0) * (ay1 - ay0) / (520 * 520)), 4, 46);
-  while (CL.list.length < want) CL.list.push(newCloud({}, ax0, ay0, ax1, ay1, false));
-  if (CL.list.length > want) CL.list.length = want;
+  // область облаков = экран + 300 px карты с каждой стороны; плотность ≈ одно облако на 430×430 px карты
+  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
+  const ax0 = vx0 - 300, ay0 = vy0 - 300, ax1 = vx1 + 300, ay1 = vy1 + 300;
+  const want = clamp(Math.round((ax1 - ax0) * (ay1 - ay0) / (430 * 430)), 4, 60);
+  const onScreen = c => c.x + c.w * 0.7 > vx0 && c.x - c.w * 0.7 < vx1 && c.y + c.w * 0.5 > vy0 && c.y - c.w * 0.5 < vy1;
+  const live = CL.list.filter(c => !c.kill).length;
+  for (let i = live; i < want; i++) CL.list.push(newCloud({}, ax0, ay0, ax1, ay1, false));
+  if (live > want) { let extra = live - want; for (const c of CL.list) if (extra > 0 && !c.kill && !onScreen(c)) { c.kill = true; extra--; } }
+  CL.list = CL.list.filter(c => !(c.kill && !onScreen(c)));   // лишние убираем только за экраном — на глазах ничего не пропадает
   const m = CA.meta, sw = m.w, shh = m.h;
   // параллакс: облака выше земли — при сдвиге карты смещаются чуть сильнее своих теней
   const cxs = Wd / 2, cys = Hd / 2, PAR = 1.1;
   for (const c of CL.list) {
     c.x += WIND[0] * c.v * dt; c.y += WIND[1] * c.v * dt; c.age += dt;
-    if (c.x - c.w > ax1 || c.y - c.w > ay1) newCloud(c, ax0, ay0, ax1, ay1, true);            // ушло по ветру — новое с запада
-    else if (c.x + c.w < ax0 - 400 || c.y + c.w < ay0 - 400 || c.x - c.w > ax1 + 400) newCloud(c, ax0, ay0, ax1, ay1, false);   // карту сдвинули далеко
+    const out = c.x - c.w * 0.7 > ax1 || c.x + c.w * 0.7 < ax0 - 600 || c.y - c.w * 0.5 > ay1 || c.y + c.w * 0.5 < ay0;
+    if (out && !onScreen(c)) { if (c.kill) continue; newCloud(c, c.x > vx0 ? vx0 : ax0, ay0, ax1, ay1, c.x > vx0); }   // ушло по ветру или карту сдвинули — новое у западного края экрана
     const born = clamp(c.age / 3, 0, 1);
     if (c.x + c.w + 120 < vx0 - 200 || c.x - c.w - 120 > vx1 + 200 || c.y + c.w + 160 < vy0 - 200 || c.y - c.w > vy1 + 200) continue;
     for (const pass of [0, 1]) {
