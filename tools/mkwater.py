@@ -97,7 +97,9 @@ def pick(mask, cell, keep, rr):
     return xs[s] + rr.random(len(s)) - 0.5, ys[s] + rr.random(len(s)) - 0.5
 r2 = np.random.default_rng(7)
 # горы: сетка со сдвигом рядов, вероятность растёт с высотой (как в скрипте автора)
-SPG, SIZEK, TH = 11.0, 0.9, 0.42
+# вариант значков: '' — крупные и реже (map_wc), '2' — мельче и гуще (map_wc2); запуск: VAR=2 python3 mkwater.py ..
+VAR = os.environ.get('VAR', '')
+SPG, SIZEK, TH = (11.0, 0.9, 0.42) if VAR != '2' else (7.5, 0.72, 0.38)
 gm = (hsm >= TH) & land & (nd.distance_transform_edt(land) >= 4) & bigland2   # не на крошечных островах и не на самом берегу
 mx, my = pick(gm, int(SPG * 0.75), np.clip((hsm - TH) / (1 - TH) * 1.15, 0, 1), r2)
 mh = hsm[np.clip(my.astype(int), 0, H - 1), np.clip(mx.astype(int), 0, W - 1)]
@@ -124,8 +126,8 @@ MP = dict(x=mx, y=my, h=mh, s=ms, wk=mwk,
           pk=r2.uniform(-0.3, 0.2, n), bumps=nd.gaussian_filter1d(r2.normal(0, 1, (n, 25)), 1.5, axis=1),
           vx=r2.uniform(0.08, 0.25, n), vm=r2.uniform(-0.04, 0.04, n), vy=r2.uniform(0.35, 0.55, n))
 # деревья: лиственные — кроны-кружки, хвойные — ёлки
-tx, ty = pick(forest & land & (dland >= 3.5), 5, 0.85, r2)   # реже и не на самом берегу
-TP = dict(x=tx, y=ty, con=conifer[np.clip(ty.astype(int), 0, H - 1), np.clip(tx.astype(int), 0, W - 1)], r=r2.uniform(1.7, 2.5, len(tx)), j=r2.uniform(-0.06, 0.06, len(tx)))
+tx, ty = pick(forest & land & (dland >= 3.5), 5 if VAR != '2' else 4, 0.85 if VAR != '2' else 0.9, r2)   # реже и не на самом берегу
+TP = dict(x=tx, y=ty, con=conifer[np.clip(ty.astype(int), 0, H - 1), np.clip(tx.astype(int), 0, W - 1)], r=r2.uniform(1.7, 2.5, len(tx)) * (1 if VAR != '2' else 0.72), j=r2.uniform(-0.06, 0.06, len(tx)))
 # штрихи волн в открытом море
 wx, wy = pick(WL & (dist > 26), 46, 0.55, r2)
 WV = dict(x=wx, y=wy, l=r2.uniform(5, 8, len(wx)))
@@ -217,13 +219,13 @@ out = paint(B0.copy(), 0, 0, 1, RV)
 # маска нарисованных значков для игры: на политической карте цвет державы над ними прозрачнее (горы 255, леса 165, реки 180)
 rel = np.zeros((H, W), np.uint8)
 rel[OBJ['t']] = 165; rel[RV > 0.18] = 180; rel[OBJ['m']] = 255
-Image.fromarray(rel).save(OUTD + '/relief_wc.png', optimize=True)
-Image.fromarray((out * 255).astype(np.uint8)).save(OUTD + '/map_wc.jpg', quality=90, optimize=True, progressive=True)
+Image.fromarray(rel).save(OUTD + f'/relief_wc{VAR}.png', optimize=True)
+Image.fromarray((out * 255).astype(np.uint8)).save(OUTD + f'/map_wc{VAR}.jpg', quality=90, optimize=True, progressive=True)
 print('map_wc.jpg готово, гор', len(MP['x']), 'деревьев', len(TP['x']))
 if os.environ.get('ONLY1'): sys.exit(0)
 # ---------- плитки 2× ----------
 T, MG = 512, 12
-hid = OUTD + '/hi_wc'; os.makedirs(hid, exist_ok=True)
+hid = OUTD + f'/hi_wc{VAR}'; os.makedirs(hid, exist_ok=True)
 _, (iy, ix) = nd.distance_transform_edt(WL, return_indices=True); landfill = B0[iy, ix]
 _, (iy, ix) = nd.distance_transform_edt(~WP, return_indices=True); waterfill = B0[iy, ix]
 del iy, ix

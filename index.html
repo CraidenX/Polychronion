@@ -165,7 +165,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 62, "date": "07.11.2026 16:47"};
+const GAME_VERSION = {"v": 63, "date": "07.11.2026 17:11"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2383,7 +2383,9 @@ function loadProgress() {
 }
 // стиль подложки: акварель (по умолчанию) или прежняя «снимок»; выбор — в меню, запоминается
 const MAPSTYLE = (() => { try { return localStorage.getItem('poly_style') || 'wc'; } catch (e) { return 'wc'; } })();
-const MAPSRC = MAPSTYLE === 'wc' ? 'map_wc.jpg' : 'map.jpg', HIDIR = MAPSTYLE === 'wc' ? 'hi_wc' : 'hi';
+const WCV = MAPSTYLE === 'wc2' ? '2' : '', ISWC = MAPSTYLE === 'wc' || MAPSTYLE === 'wc2';
+const MAPSRC = ISWC ? `map_wc${WCV}.jpg` : 'map.jpg', HIDIR = ISWC ? `hi_wc${WCV}` : 'hi';
+const STYLENAMES = { wc: 'акварель, крупные значки', wc2: 'акварель, мелкие значки', sat: 'прежний' };
 if (!HEADLESS) PRE.p = { img: prefetch(MAPSRC, 'img'), ids: prefetch('ids.png', 'ids') };
 /* --- версия игры: номер сборки; раз в минуту проверяем, не вышла ли новая --- */
 function versionText(v) { return v ? `версия ${v.v} · ${v.date}` : ''; }
@@ -2499,8 +2501,8 @@ function initMap() {
         const mtn = new Uint8Array(ids.length), outer = new Uint8Array(ids.length);
         for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : b >= 170 && b <= 190 ? 2 : b >= 162 && b <= 168 ? 3 : 0; if (b >= 100 && b < 160) outer[k] = b - 99; }   // 1 — горы, 2 — река
         PIX.mtn = mtn; PIX.outer = outer;
-        if (MAPSTYLE === 'wc') {   // акварель: прозрачнее цвет державы ровно там, где нарисованы горы, леса и реки
-          const rm = new Image(); rm.onload = () => { try { const c2 = document.createElement('canvas'); c2.width = rm.width; c2.height = rm.height; const x2 = c2.getContext('2d'); x2.drawImage(rm, 0, 0); const q = x2.getImageData(0, 0, rm.width, rm.height).data; for (let k2 = 0; k2 < mtn.length; k2++) { const b = q[k2 * 4]; mtn[k2] = b > 200 ? 1 : b >= 170 && b <= 190 ? 2 : b >= 162 && b <= 168 ? 3 : 0; } if (G) { drawOverlay(); PIX.vtKey = ''; scheduleVector(); } } catch (e) { } }; rm.src = 'relief_wc.png';
+        if (ISWC) {   // акварель: прозрачнее цвет державы ровно там, где нарисованы горы, леса и реки
+          const rm = new Image(); rm.onload = () => { try { const c2 = document.createElement('canvas'); c2.width = rm.width; c2.height = rm.height; const x2 = c2.getContext('2d'); x2.drawImage(rm, 0, 0); const q = x2.getImageData(0, 0, rm.width, rm.height).data; for (let k2 = 0; k2 < mtn.length; k2++) { const b = q[k2 * 4]; mtn[k2] = b > 200 ? 1 : b >= 170 && b <= 190 ? 2 : b >= 162 && b <= 168 ? 3 : 0; } if (G) { drawOverlay(); PIX.vtKey = ''; scheduleVector(); } } catch (e) { } }; rm.src = `relief_wc${WCV}.png`;
         }
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
         const np = M.provs.length + 1, bb = new Int32Array(np * 4);
@@ -2961,25 +2963,44 @@ function setMapMode(m) { UI.mapMode = m; const b = $('zmode'); if (b) { b.classL
 const CL = { on: true, sprites: [], list: [], last: 0 };
 try { CL.on = localStorage.getItem('poly_clouds') !== 'off'; } catch (e) { }
 function cloudSprite(seed) {
+  // пушистое облако: несколько крупных «тел» + много мелких клубов по верхнему краю; низ плоский и чуть серее
   let s = seed; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  const w = 440, h = 240, c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
-  const puffs = []; const n = 9 + Math.floor(r() * 6);
-  for (let i = 0; i < n; i++) { const t = i / (n - 1); puffs.push([100 + t * (w - 200) + (r() - 0.5) * 30, h * 0.58 - Math.sin(t * Math.PI) * (20 + r() * 30) + (r() - 0.5) * 16, 26 + r() * 30 + Math.sin(t * Math.PI) * 18]); }
-  for (const [px, py, pr] of puffs) {   // тень снизу каждого клуба
-    const g = x.createRadialGradient(px, py + pr * 0.35, pr * 0.2, px, py + pr * 0.35, pr); g.addColorStop(0, 'rgba(150,158,176,.55)'); g.addColorStop(1, 'rgba(150,158,176,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py + pr * 0.35, pr, 0, 7); x.fill();
+  r(); r(); const kind = Math.floor(r() * 4);                                   // 0 — кучевое, 1 — вытянутое, 2 — башенка, 3 — клочки
+  const w = 300, h = 200, c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
+  const span = [0.6, 0.82, 0.42, 0.7][kind] * w * (0.8 + r() * 0.35), dome = [0.5, 0.3, 0.85, 0.35][kind] * (0.7 + r() * 0.6), base = h * 0.7;
+  // 1–3 «горба» в разных местах и разной высоты — облака не похожи друг на друга
+  const hn = 1 + Math.floor(r() * 3), hs = Array.from({ length: hn }, () => [w / 2 + (r() - 0.5) * span * 0.7, 0.45 + r() * 0.75, span * (0.18 + r() * 0.25)]);
+  const HUMP = px => 0.35 + hs.reduce((m, [c, a, wd]) => Math.max(m, a * Math.exp(-(((px - c) / wd) ** 2))), 0);
+  const puffs = [];
+  // тело: клубы вплотную вдоль основания, к середине крупнее и выше (купол)
+  const R0 = [26, 20, 28, 18][kind];
+  for (let px = w / 2 - span / 2; px <= w / 2 + span / 2; px += R0 * (0.55 + r() * 0.25)) {
+    const t = (px - w / 2) / (span / 2), f = Math.max(0, 1 - t * t) * HUMP(px);
+    const pr = R0 * (0.55 + 0.75 * f) * (0.85 + r() * 0.3);
+    puffs.push([px + (r() - 0.5) * 6, base - pr * 0.55 - f * dome * 40 + (r() - 0.5) * 6, pr]);
   }
-  for (const [px, py, pr] of puffs) {   // светлые клубы
-    const g = x.createRadialGradient(px - pr * 0.25, py - pr * 0.3, pr * 0.1, px, py, pr); g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(0.6, 'rgba(246,247,250,.8)'); g.addColorStop(1, 'rgba(240,242,248,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py, pr, 0, 7); x.fill();
+  // мелкие клубы по верхнему краю — «пушистость»
+  const body = puffs.slice(), small = 30 + Math.floor(r() * 25);
+  for (let i = 0; i < small; i++) {
+    const p = body[Math.floor(r() * body.length)], a = -Math.PI * (0.12 + r() * 0.76), d = p[2] * (0.7 + r() * 0.25), pr = p[2] * (0.22 + r() * 0.3);
+    const yy = p[1] + Math.sin(a) * d; if (yy + pr * 0.3 > base) continue; puffs.push([p[0] + Math.cos(a) * d, yy, pr]);
   }
-  const sh = document.createElement('canvas'); sh.width = w; sh.height = h; const y = sh.getContext('2d');   // тень облака на земле
-  for (const [px, py, pr] of puffs) { const g = y.createRadialGradient(px, py, pr * 0.2, px, py, pr * 1.1); g.addColorStop(0, 'rgba(20,24,40,.5)'); g.addColorStop(1, 'rgba(20,24,40,0)'); y.fillStyle = g; y.beginPath(); y.arc(px, py, pr * 1.1, 0, 7); y.fill(); }
+  if (kind === 3) for (let i = 0; i < 5; i++) { const px = w / 2 + (r() - 0.5) * span * 1.3, pr = 7 + r() * 8; puffs.push([px, base - pr - r() * 14, pr]); }
+  x.save(); x.beginPath(); x.rect(0, 0, w, base + 4); x.clip();     // плоское дно
+  for (const [px, py, pr] of puffs) { const g = x.createRadialGradient(px, py + pr * 0.4, pr * 0.15, px, py + pr * 0.4, pr * 1.05); g.addColorStop(0, 'rgba(158,166,186,.5)'); g.addColorStop(1, 'rgba(158,166,186,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py + pr * 0.4, pr * 1.05, 0, 7); x.fill(); }
+  for (const [px, py, pr] of puffs) { const g = x.createRadialGradient(px - pr * 0.3, py - pr * 0.35, pr * 0.05, px, py, pr); g.addColorStop(0, 'rgba(255,255,255,.98)'); g.addColorStop(0.55, 'rgba(250,251,253,.85)'); g.addColorStop(0.85, 'rgba(240,243,248,.35)'); g.addColorStop(1, 'rgba(236,240,246,0)'); x.fillStyle = g; x.beginPath(); x.arc(px, py, pr, 0, 7); x.fill(); }
+  x.restore();
+  const g2 = x.createLinearGradient(0, base - 30, 0, base + 4); g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, 'rgba(120,130,152,.28)');   // серое дно
+  x.globalCompositeOperation = 'source-atop'; x.fillStyle = g2; x.fillRect(0, 0, w, h); x.globalCompositeOperation = 'source-over';
+  const sh = document.createElement('canvas'); sh.width = w; sh.height = h; const y = sh.getContext('2d');
+  for (const [px, py, pr] of puffs) { if (pr < 12) continue; const g = y.createRadialGradient(px, py, pr * 0.2, px, py, pr * 1.15); g.addColorStop(0, 'rgba(20,24,40,.45)'); g.addColorStop(1, 'rgba(20,24,40,0)'); y.fillStyle = g; y.beginPath(); y.arc(px, py, pr * 1.15, 0, 7); y.fill(); }
   return { c, sh };
 }
 function cloudsInit() {
   if (CL.sprites.length || !MAPINFO) return;
-  for (let i = 0; i < 6; i++) CL.sprites.push(cloudSprite(1261 + i * 977));
+  for (let i = 0; i < 16; i++) CL.sprites.push(cloudSprite(1261 + i * 977));
   let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  for (let i = 0; i < 16; i++) CL.list.push({ x: r() * MAPINFO.W, y: r() * MAPINFO.H, w: 340 + r() * 340, sp: CL.sprites[i % 6], v: 0.6 + r() * 0.6 });
+  for (let i = 0; i < 26; i++) CL.list.push({ x: r() * MAPINFO.W, y: r() * MAPINFO.H, w: 120 + r() * 170, sp: CL.sprites[i % 16], v: 0.6 + r() * 0.7, fl: r() < 0.5 });
 }
 function cloudFrame(now) {
   requestAnimationFrame(cloudFrame);
@@ -2999,10 +3020,13 @@ function cloudFrame(now) {
   for (const c of CL.list) {
     c.x += 9 * c.v * dt; c.y += 1.6 * c.v * dt;               // ветер с запада
     if (c.x > M.W + 200) c.x = -c.w - 200; if (c.y > M.H + 150) c.y = -150;
-    const h = c.w * 240 / 440;
+    const h = c.w * 200 / 300;
     if (c.x + c.w + 80 < vx0 || c.x - 80 > vx1 || c.y + h + 120 < vy0 || c.y > vy1) continue;
-    x.globalAlpha = 0.22 * fade; x.drawImage(c.sp.sh, c.x + 70, c.y + 110, c.w, h);
-    x.globalAlpha = 0.78 * fade; x.drawImage(c.sp.c, c.x, c.y, c.w, h);
+    const fx = c.fl ? -1 : 1;   // половина облаков зеркальна — больше разнообразия
+    x.save(); x.translate(c.x + c.w / 2, c.y); x.scale(fx, 1);
+    x.globalAlpha = 0.2 * fade; x.drawImage(c.sp.sh, -c.w / 2 + 40 * fx, 70, c.w, h);
+    x.globalAlpha = 0.85 * fade; x.drawImage(c.sp.c, -c.w / 2, 0, c.w, h);
+    x.restore();
   }
   x.globalAlpha = 1;
 }
@@ -3302,7 +3326,7 @@ eventHook = (ev, opts) => new Promise(res => {
 });
 function showMenu() {
   modal(`<h2>Меню</h2><div class="small muted" style="margin:-6px 0 8px">${typeof GAME_VERSION !== 'undefined' ? esc(versionText(GAME_VERSION)) : ''}</div><div class="btnrow" style="flex-direction:column">
-   <button id="mStyle">Стиль карты: ${MAPSTYLE === 'wc' ? 'акварель' : 'прежний'} (сменить — страница перезагрузится, игра сохранится)</button>
+   <button id="mStyle">Стиль карты: ${STYLENAMES[MAPSTYLE] || MAPSTYLE} (сменить — страница перезагрузится, игра сохранится)</button>
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
@@ -3320,7 +3344,7 @@ function showMenu() {
   $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
   $('mCl').onclick = () => { CL.on = !CL.on; try { localStorage.setItem('poly_clouds', CL.on ? 'on' : 'off'); } catch (e) { } showMenu(); };
-  $('mStyle').onclick = () => { save(); try { localStorage.setItem('poly_style', MAPSTYLE === 'wc' ? 'sat' : 'wc'); } catch (e) { } location.reload(); };
+  $('mStyle').onclick = () => { save(); try { localStorage.setItem('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); } catch (e) { } location.reload(); };
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
   $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; try { localStorage.setItem('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
