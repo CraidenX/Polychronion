@@ -81,6 +81,11 @@ w = np.clip(hmix * 0.9, 0, 0.5)   # подножия чуть землистее
 land_out = land_out * (1 - w) + mcol * w
 land_out *= shade[..., None]
 out = np.where(landm[..., None], np.clip(land_out, 0, 255), out).astype(np.int32)
+# реки (Natural Earth, mkrivers.py): синие линии под пиками
+if os.path.exists(SP + 'umap/rivers.npy'):
+    rv = np.load(SP + 'umap/rivers.npy').astype(np.float32)[..., None] / 255
+    rcol = np.array([38, 76, 120], np.float32)
+    out = np.clip(out.astype(np.float32) * (1 - rv * 0.9) + rcol * rv * 0.9, 0, 255).astype(np.int32)
 # рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
 sys.path.insert(0, SP)
 from peaks import draw_peaks
@@ -92,6 +97,9 @@ if os.path.exists(idp):
     I = np.asarray(Image.open(idp).convert('RGB')).copy()
     b = I[..., 2]; keep_outer = (b >= 100) & (b < 160)
     b[~keep_outer] = 0; b[massif & ~keep_outer & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)] = 255
+    if os.path.exists(SP + 'umap/rivers.npy'):   # реки: B=180 — видны сквозь цвет державы
+        rvm = (np.load(SP + 'umap/rivers.npy') > 45) & ~keep_outer & ((I[..., 0].astype(int) << 8 | I[..., 1]) > 0)
+        b[rvm] = 180
     I[..., 2] = b; Image.fromarray(I).save(idp, optimize=True)
 im = Image.fromarray(out.astype(np.uint8))
 W, H = a.shape[1], a.shape[0]

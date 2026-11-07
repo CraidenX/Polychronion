@@ -2,7 +2,7 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 165, mapMode: 'pol', sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 135, mapMode: 'pol', sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
 try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 190; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
@@ -232,7 +232,7 @@ function initMap() {
         const d = cx.getImageData(0, 0, im.width, im.height).data;
         const ids = new Uint16Array(im.width * im.height);
         const mtn = new Uint8Array(ids.length), outer = new Uint8Array(ids.length);
-        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : 0; if (b >= 100 && b < 160) outer[k] = b - 99; }
+        for (let k = 0; k < ids.length; k++) { ids[k] = (d[k * 4] << 8) | d[k * 4 + 1]; const b = d[k * 4 + 2]; mtn[k] = b > 200 ? 1 : b >= 170 && b <= 190 ? 2 : 0; if (b >= 100 && b < 160) outer[k] = b - 99; }   // 1 — горы, 2 — река
         PIX.mtn = mtn; PIX.outer = outer;
         PIX.ids = ids; PIX.w = im.width; PIX.h = im.height; PIX.s = M.idsScale || 2;
         const np = M.provs.length + 1, bb = new Int32Array(np * 4);
@@ -405,7 +405,7 @@ function drawOverlay() {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i]; if (!v) continue;
         if (pr[v] < 0 || pOwn[v] < 0) continue;
         const m = PIX.mtn && PIX.mtn[i] && !pFree[v], c = pCol[v], o = (y * tw + x) * 4;
-        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? UI.ridgeA : 190);
+        d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? (PIX.mtn[i] === 2 ? 45 : UI.ridgeA) : 190);
       }
     }
     ctx.putImageData(PIX.buf, 0, 0);
@@ -540,7 +540,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? UI.ridgeA : 190); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v || pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? (mt[i] === 2 ? 45 : UI.ridgeA) : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
@@ -964,7 +964,7 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
-   <button id="mRidge">${UI.ridgeA === 165 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
+   <button id="mRidge">${UI.ridgeA === 135 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
@@ -979,7 +979,7 @@ function showMenu() {
   $('mNames').onclick = exportNames;
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 165 ? 190 : 165; try { localStorage.setItem('poly_ridge', UI.ridgeA === 165 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 135 ? 190 : 135; try { localStorage.setItem('poly_ridge', UI.ridgeA === 135 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
