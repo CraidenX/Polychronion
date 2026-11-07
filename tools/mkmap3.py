@@ -66,7 +66,7 @@ Hm = (0.55 + din / 5 * 0.45) * fall * (0.75 + rough * 0.9)
 Hm = np.clip(Hm, 0, 1.2).astype(np.float32)
 hills = (noise(40) * 0.5 + noise(14) * 0.35) * 0.025                                   # пологие холмы равнин
 Ht = np.where(landm, Hm + hills, 0).astype(np.float32)
-Z = 22.0
+Z = 9.0
 gy_, gx_ = np.gradient(nd.gaussian_filter(Ht, 0.7) * Z)
 L = np.array([-0.62, -0.62, 0.48]); L /= np.linalg.norm(L)
 nz = 1 / np.sqrt(gx_ ** 2 + gy_ ** 2 + 1)
@@ -77,15 +77,14 @@ hmix = np.clip((Hm - 0.1) / 0.95, 0, 1)[..., None]
 foot, rock, peak = np.array([124, 114, 92], np.float32), np.array([128, 112, 92], np.float32), np.array([178, 170, 156], np.float32)
 mcol = np.where(hmix < 0.6, foot + (rock - foot) * (hmix / 0.6), rock + (peak - rock) * ((hmix - 0.6) / 0.4))
 land_out = out.astype(np.float32)
-w = np.clip(hmix * 1.3, 0, 0.85)
+w = np.clip(hmix * 0.9, 0, 0.5)   # подножия чуть землистее
 land_out = land_out * (1 - w) + mcol * w
 land_out *= shade[..., None]
 out = np.where(landm[..., None], np.clip(land_out, 0, 255), out).astype(np.int32)
-# слой рельефа для игры (кладётся поверх цветов держав): 128 — ровно, светлее/темнее — склоны; вершины чуть светлее
-rel = np.clip(128 * np.clip(shade, 0.5, 1.45) + hmix[..., 0] * 10, 0, 255)
-rel[~landm] = 128
-rel[~nd.binary_dilation(zone, iterations=40)] = 128   # за краем зоны рельеф уже в подложке — не удваиваем
-Image.fromarray(rel.astype(np.uint8), 'L').resize((W0 // 2, H0 // 2), Image.BILINEAR).save(sys.argv[1] + '/relief.jpg', quality=82, optimize=True)
+# рисованные пики по хребтам (дальние — раньше, ближние перекрывают)
+sys.path.insert(0, SP)
+from peaks import draw_peaks
+out = draw_peaks(out, allm & landm, np.random.default_rng(1261), bg=bgm & ~zone)
 # широкая маска гор (для режима «хребты своего цвета» — без заливки державы) — в синий канал ids.png
 massif = (Hm > 0.38) & zone
 idp = sys.argv[1] + '/ids.png'

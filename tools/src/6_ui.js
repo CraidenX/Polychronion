@@ -2,9 +2,9 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 190, relief: true, reliefA: 1, sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 165, mapMode: 'pol', sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
-try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 0; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; UI.relief = localStorage.getItem('poly_relief') !== 'off'; } catch (e) { }
+try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 190; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
 // перевал: [цвет пунктира, цвет подложки]
 const PASSCOL = { black: ['#140c10', 'rgba(240,226,190,.75)'], red: ['#d21c1c', 'rgba(255,240,215,.7)'], brown: ['#4a2408', 'rgba(240,214,160,.8)'] };
@@ -107,7 +107,7 @@ const SFX = (() => {
 if (!HEADLESS) document.addEventListener('click', e => { if (e.target.closest && e.target.closest('button') && !e.target.closest('.nosfx')) SFX.play('click'); }, true);
 
 /* --- заранее загружаем карту (с самого титульного экрана), со шкалой загрузки --- */
-const PRE = { got: {}, total: { img: 1700000, ids: 470000, rel: 180000 }, p: null, ready: false, imgOk: false };
+const PRE = { got: {}, total: { img: 2000000, ids: 470000 }, p: null, ready: false, imgOk: false };
 function prefetch(url, key) {
   if (typeof fetch === 'undefined' || location.protocol === 'file:') return Promise.resolve(url);
   return fetch(url).then(r => {
@@ -123,7 +123,7 @@ function prefetch(url, key) {
 }
 function loadProgress() {
   if (HEADLESS) return;
-  const got = (PRE.got.img || 0) + (PRE.got.ids || 0) + (PRE.got.rel || 0), tot = PRE.total.img + PRE.total.ids + PRE.total.rel;
+  const got = (PRE.got.img || 0) + (PRE.got.ids || 0), tot = PRE.total.img + PRE.total.ids;
   const pct = Math.min(100, Math.round(got / tot * 100)), done = PRE.ready && PRE.imgOk;
   const txt = got >= tot ? 'Подготовка карты…' : `Загрузка карты: ${pct}%`;
   const tf = document.getElementById('tfill'); if (tf) tf.style.width = pct + '%';
@@ -132,9 +132,7 @@ function loadProgress() {
   const ml = document.getElementById('maploading');
   if (ml) { ml.querySelector('.lfill').style.width = pct + '%'; ml.querySelector('.ltxt').textContent = txt; ml.classList.toggle('done', done); }
 }
-if (!HEADLESS) PRE.p = { img: prefetch('map.jpg', 'img'), ids: prefetch('ids.png', 'ids'), rel: prefetch('relief.jpg', 'rel') };
-// слой рельефа (отмывка гор): кладётся поверх цветов держав
-if (!HEADLESS) PRE.p.rel.then(u => { const im = new Image(); im.onload = () => { PIX.rel = im; if (typeof scheduleVector === 'function') scheduleVector(); }; im.src = u; });
+if (!HEADLESS) PRE.p = { img: prefetch('map.jpg', 'img'), ids: prefetch('ids.png', 'ids') };
 
 /* --- названия: базовые, свои (переименованные игроком) и динамические (зависят от хозяина) --- */
 let BASE_RNAME = null, BASE_PNAME = null;
@@ -300,7 +298,8 @@ function setupPanZoom() {
     const t = e.target.closest && e.target.closest('.ar'), a = G && G.armies.find(x => x.id === (t ? +t.dataset.army : UI.selArmy));
     if (a && a.owner === 'byz' && (a.path.length || a.leg)) { a.path = []; SFX.play('click'); toast(`${a.name}: приказ отменён${a.leg ? ', войско возвращается' : ''}.`); renderAll(); }
   });
-  ['zin', 'zout', 'zfit', 'zsearch'].forEach(id => $(id).addEventListener('pointerdown', e => e.stopPropagation()));
+  $('zmode').onclick = e => { e.stopPropagation(); setMapMode(UI.mapMode === 'geo' ? 'pol' : 'geo'); };
+  ['zin', 'zout', 'zfit', 'zsearch', 'zmode'].forEach(id => $(id).addEventListener('pointerdown', e => e.stopPropagation()));
   window.addEventListener('resize', () => { clampView(); applyView(); });
 }
 function provAt(clientX, clientY) {
@@ -533,7 +532,8 @@ function paintVector() {
     ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
-  if (PIX.ids && PIX.pCol && z >= 1.1) {
+  if (UI.mapMode === 'geo') { /* режим «Местность»: без заливки держав */ }
+  else if (PIX.ids && PIX.pCol && z >= 1.1) {
     const X0 = Math.floor(vx0), Y0 = Math.floor(vy0), X1 = Math.min(PIX.w, Math.ceil(vx1)), Y1 = Math.min(PIX.h, Math.ceil(vy1));
     const vw = X1 - X0, vh = Y1 - Y0, key = X0 + ',' + Y0 + ',' + vw + ',' + vh;
     if (!PIX.vt) PIX.vt = document.createElement('canvas');
@@ -546,8 +546,6 @@ function paintVector() {
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
     ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
-  // рельеф поверх цветов держав (как в EU4): светлые склоны светлее, теневые — темнее
-  if (PIX.rel && UI.relief) { const k = PIX.rel.naturalWidth / M.W; ctx.globalCompositeOperation = UI.reliefMode || 'soft-light'; ctx.globalAlpha = UI.reliefA; ctx.drawImage(PIX.rel, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; }
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   // границы
@@ -666,6 +664,9 @@ function renderArmies() {
     return `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''} ${a.leg ? 'moving' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${x}px;top:${y}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.path.length ? ' ➜' : ''}</div>`;
   }).join('');
 }
+
+// режимы карты: «Политическая» (цвета держав поверх местности) и «Местность» (горы, реки, моря без заливки)
+function setMapMode(m) { UI.mapMode = m; const b = $('zmode'); if (b) { b.classList.toggle('on', m === 'geo'); b.title = m === 'geo' ? 'Режим карты: местность (M — политическая)' : 'Режим карты: политическая (M — местность)'; } $('markers').classList.toggle('geo', m === 'geo'); PIX.vtKey = ''; VEC.cache = null; scheduleVector(); }
 
 /* --- часы: реальное время с паузой и тремя скоростями --- */
 // скорости как в Europa Universalis: день за 2 с, 1 с, 0,5 с, 0,2 с, 0,1 с
@@ -963,8 +964,7 @@ function showMenu() {
   modal(`<h2>Меню</h2><div class="btnrow" style="flex-direction:column">
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
-   <button id="mRel">${UI.relief ? 'Рельеф гор: включён (выключить — быстрее на слабых компьютерах)' : 'Рельеф гор: выключен (включить)'}</button>
-   <button id="mRidge">${UI.ridgeA ? 'Горы: в цвет владельца (показать природный цвет)' : 'Горы: природного цвета (красить в цвет владельца)'}</button>
+   <button id="mRidge">${UI.ridgeA === 165 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
@@ -979,15 +979,14 @@ function showMenu() {
   $('mNames').onclick = exportNames;
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRel').onclick = () => { UI.relief = !UI.relief; try { localStorage.setItem('poly_relief', UI.relief ? 'on' : 'off'); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA ? 0 : 190; try { localStorage.setItem('poly_ridge', UI.ridgeA ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
+  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 165 ? 190 : 165; try { localStorage.setItem('poly_ridge', UI.ridgeA === 165 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
 }
 function showHelp() {
   modal(`<h2>Как играть</h2>
-  <p><b>Цель.</b> Пройти от лета 1261 до 1347 года и встретить Чёрную смерть сильной державой. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
+  <p><b>Цель.</b> Пройти от лета 1261 до 1354 года. Летом 1347 года придёт Чёрная смерть — встретьте её сильной державой и переживите. Удар чумы мягче, если в казне есть деньги, в стране порядок, а крепости крепки. Потеря Константинополя — конец игры.</p>
   <p><b>Время</b> идёт само, по дням. Кнопки вверху: ❚❚ пауза, 1–5 — скорость: от дня за 2 секунды до 10 дней в секунду (клавиши: пробел, 1–5, + и −). Приказы можно отдавать и на паузе. Налоги, стройки, двор и события считаются раз в сезон (3 месяца). При важных событиях и вторжении врага игра сама встаёт на паузу (это можно выключить в меню).</p>
   <p><b>Карта.</b> Тяните мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем — на любую провинцию: войско пойдёт туда самым быстрым путём; Ctrl/Shift + щелчок добавляет точку маршрута (свой путь), правый щелчок отменяет приказ; войско проходит около 20 км в день, по морю — около 45, перевал добавляет ещё 15 дней. Пунктир — морские пути (нужен флот), коричневый пунктир — проливы. Коричневые хребты закрывают путь; пройти через них можно только по перевалу (светлая тропа), переход занимает сезон.</p>
   <p><b>Осады.</b> Войско во вражеской области осаждает её: через несколько сезонов (зависит от укреплений) гарнизон сдаётся. Можно штурмовать сразу — откроется экран боя.</p>
@@ -1025,7 +1024,7 @@ function fleetAction(k) {
 function showFinale() {
   const F = G.final || (G.final = finale());
   SFX.play('bell');
-  modal(`<h2>${G.over === 'konst' ? 'Город пал' : 'Чёрная смерть, 1347'}</h2>
+  modal(`<h2>${G.over === 'konst' ? 'Город пал' : 'После Чёрной смерти, 1354'}</h2>
    <p style="font-size:22px;color:var(--gold2)">«${esc(F.title)}» — ${F.score} из 100</p>
    ${F.ep.map(p => `<p>${esc(p)}</p>`).join('')}
    <table class="t small"><tr><td>Областей к концу</td><td>${F.regs} (больше всего: ${G.stats.peakRegions})</td></tr><tr><td>Побед / поражений</td><td>${G.stats.won} / ${G.stats.lost}</td></tr><tr><td>Казна</td><td>${fmt(G.treasury)}</td></tr><tr><td>Порядок / Церковь / Престиж</td><td>${Math.round(G.order)} / ${Math.round(G.church)} / ${Math.round(G.prestige)}</td></tr><tr><td>Смертность от чумы</td><td>${Math.round(F.mort * 100)}%</td></tr></table>
@@ -1177,7 +1176,7 @@ function showIntro() {
     modal(`<div class="small muted">Пролог · Лето 1261</div><h2>Город снова ромейский</h2>
     <p>${esc(INTRO_TEXT)}</p>
     <div class="note"><b>Как играть.</b> Время идёт само, по дням: кнопки ❚❚ и 1–5 вверху (или пробел, клавиши 1–5, + и −). Игра начинается на паузе. Тяните карту мышью, колесо — масштаб. Нажмите на флажок своего войска (с золотой рамкой), затем на любую провинцию — войско пойдёт туда самым быстрым путём. Ctrl или Shift + щелчок — продлить маршрут через выбранную провинцию (свой путь). Правый щелчок — отменить приказ. Пунктир — морские пути (нужен флот). Горы: через хребты не пройти, кроме как по перевалу (чёрный пунктир), а переход через перевал занимает на 15 дней дольше. Войско во вражеском регионе осаждает его; штурм открывает экран боя. Во вкладке «Двор» — герои с поручениями, в «Государстве» — налоги, монета, законы, уния, флот и наследник.</div>
-    <p class="small muted">Цель — дожить до 1347 года и встретить Чёрную смерть сильной державой. Потеря Константинополя — конец игры.</p>
+    <p class="small muted">Цель — дожить до 1354 года, встретив Чёрную смерть 1347 года сильной державой. Потеря Константинополя — конец игры.</p>
     <button class="main" id="introNext">Далее: кто будет править?</button>`);
     $('introNext').onclick = () => { closeModal(); res(); };
   });
@@ -1190,6 +1189,7 @@ function boot() {
   document.addEventListener('keydown', e => {
     if (!G || !$('modal').classList.contains('hidden') || !$('battle').classList.contains('hidden') || $('app').classList.contains('hidden')) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') setMapMode(UI.mapMode === 'geo' ? 'pol' : 'geo');
     if (e.key === ' ') { e.preventDefault(); setSpeed(UI.speed ? 0 : (UI.lastSpeed || 1)); }
     if (['1', '2', '3', '4', '5'].includes(e.key)) setSpeed(+e.key);
     if (e.key === '+' || e.key === '=') setSpeed(Math.min(5, (UI.speed || UI.lastSpeed || 0) + 1));

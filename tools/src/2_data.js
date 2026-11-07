@@ -18,7 +18,8 @@ const BAL = { // все ручки баланса в одном месте
 };
 const SEASONS = ['Весна', 'Лето', 'Осень', 'Зима'];
 const START = { year: 1261, season: 1 };
-const END = { year: 1347, season: 1 };
+const END = { year: 1354, season: 1 };   // итоги — после чумы (1347–1349) и первых лет восстановления
+const PLAGUE = { year: 1347, season: 1 };   // Чёрная смерть приходит в Город летом 1347 года
 
 const FACTIONS = {
   byz:      { name: 'Ромейская империя', short: 'Ромеи', color: '#7a2f8f', greek: true },

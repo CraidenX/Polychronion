@@ -432,6 +432,7 @@ async function seasonEnd() {
   if (!G.over) {
     G.turn++; G.season++; G.day = 0; if (G.season > 3) { G.season = 0; G.year++; }
     if (G.turn % 4 === 0) refreshCandidates();
+    if (!G.plague && nowNum() >= dateNum(PLAGUE.year, PLAGUE.season)) plagueStrike();
     if (nowNum() > dateNum(END.year, END.season)) G.over = 'plague';
   }
   syncProv();
@@ -458,18 +459,37 @@ async function endTurn() {
   } finally { busy = false; }
 }
 
+/* --- Чёрная смерть (лето 1347): мор по всей карте; у ромеев — тем мягче, чем лучше порядок, казна и укрепления --- */
+function plagueMort() {
+  const regs = myRegions();
+  const fortAvg = regs.length ? regs.reduce((s, r) => s + r.fort, 0) / regs.length : 0;
+  const tr = clamp(G.treasury / 300, -1, 1);
+  let mort = 0.40 - G.order / 100 * 0.12 - Math.max(0, tr) * 0.08 - fortAvg / 5 * 0.04 + (G.treasury < 0 ? 0.05 : 0) + (R('konst').pop > 140 ? 0.03 : 0);
+  return clamp(mort, 0.15, 0.5);
+}
+function plagueStrike() {
+  const mort = plagueMort();
+  let dead = 0;
+  for (const r of Object.values(G.regions)) {
+    const m = r.owner === 'byz' ? mort * (0.85 + rnd() * 0.3) : 0.3 * (0.7 + rnd() * 0.6);
+    const d = r.pop * m; r.pop = Math.max(3, r.pop - d); if (r.owner === 'byz') dead += d;
+    r.mood -= m * 20; r.garrison *= 1 - m * 0.6;
+  }
+  G.armies.forEach(a => a.units.forEach(u => { u.men = Math.max(10, Math.round(u.men * (1 - (a.owner === 'byz' ? mort : 0.3) * 0.7))); }));
+  G.order = clamp(G.order - mort * 40, 0, 100); G.treasury -= dead * 0.4;
+  G.plague = { mort, dead, year: G.year };
+  log(`Чёрная смерть! Генуэзские корабли из Каффы привезли мор в Город. Умерло около ${Math.round(mort * 100)}% жителей державы — ${fmt(dead)} тыс. человек. Соседей чума не пощадила.`, 'imp');
+}
+
 /* --- финал: Чёрная смерть и оценка --- */
 function finale() {
   const regs = myRegions();
   const pop = regs.reduce((s, r) => s + r.pop, 0);
-  const fortAvg = regs.length ? regs.reduce((s, r) => s + r.fort, 0) / regs.length : 0;
-  const tr = clamp(G.treasury / 300, -1, 1);
-  let mort = 0.40 - G.order / 100 * 0.12 - Math.max(0, tr) * 0.08 - fortAvg / 5 * 0.04 + (G.treasury < 0 ? 0.05 : 0) + (R('konst').pop > 140 ? 0.03 : 0);
-  mort = clamp(mort, 0.15, 0.5);
-  const dead = pop * mort;
+  const mort = G.plague ? G.plague.mort : plagueMort();
+  const dead = G.plague ? G.plague.dead : pop * mort;
   const konst = R('konst').owner === 'byz';
   const anat = regs.filter(r => ANATOLIA.includes(r.id)).length;
-  const after = { order: G.order - mort * 40, treasury: G.treasury - dead * 0.4 };
+  const after = G.plague ? { order: G.order, treasury: G.treasury } : { order: G.order - mort * 40, treasury: G.treasury - dead * 0.4 };
   let score = 0;
   if (konst && G.over !== 'konst') {
     const base = G.stats.startR || 16;
@@ -491,12 +511,12 @@ function finale() {
   if (!konst || G.over === 'konst') {
     ep.push('Константинополь пал. Династия Палеологов окончила свои дни на чужбине, а Святая София услышала чужую молитву на век раньше, чем в нашей истории.');
   } else {
-    ep.push(`Весной 1347 года генуэзские корабли из Каффы привезли в Город «чёрную смерть». Умерла примерно ${Math.round(mort * 100)}% жителей державы — около ${fmt(dead)} тысяч человек.` + (mort < 0.25 ? ' Полные амбары, порядок на улицах и карантин у ворот спасли многих.' : mort > 0.36 ? ' Пустая казна и смута сделали своё дело: мёртвых некому было хоронить.' : ''));
-    if (after.order > 45 && after.treasury > 0) ep.push('Держава выстояла. Опустевшие деревни заселили беженцы и переселенцы, и через поколение ромеи вновь говорили о возрождении.');
+    ep.push(`Летом 1347 года генуэзские корабли из Каффы привезли в Город «чёрную смерть». Умерла примерно ${Math.round(mort * 100)}% жителей державы — около ${fmt(dead)} тысяч человек.` + (mort < 0.25 ? ' Полные амбары, порядок на улицах и карантин у ворот спасли многих.' : mort > 0.36 ? ' Пустая казна и смута сделали своё дело: мёртвых некому было хоронить.' : ''));
+    if (after.order > 45 && after.treasury > 0) ep.push('К 1354 году держава выстояла. Опустевшие деревни заселили беженцы и переселенцы, и ромеи вновь заговорили о возрождении.');
     else if (after.order > 25) ep.push('Империя пережила мор, но стала тенью самой себя: несколько городов и островов, связанных лишь морем и памятью.');
     else ep.push('После чумы государство распалось на уделы. Деспоты и архонты правили сами по себе, а император оставался лишь хозяином Города.');
     if (anat >= 3) ep.push(`В Анатолии у ромеев осталось ${anat} областей. Османам так и не удалось закрепиться на берегах Мраморного моря.`);
-    else if (factionAlive('osman') && Object.values(G.regions).filter(r => r.owner === 'osman').length >= 3) ep.push('Османы владеют Вифинией. В 1354 году землетрясение разрушит стены Галлиполи, и турки перейдут в Европу — путь, которого Город уже не сможет им преградить.');
+    else if (factionAlive('osman') && Object.values(G.regions).filter(r => r.owner === 'osman').length >= 3) ep.push('Османы владеют Вифинией. В 1354 году землетрясение разрушило стены Галлиполи, и турки перешли в Европу — путь, которого Город уже не сможет им преградить.');
     else ep.push('Бейлики Анатолии продолжали грызться друг с другом; ни один из них не стал новой великой державой.');
     const serb = ['skopje', 'ohrid', 'serres', 'thessaly', 'epirus', 'dyrr'].filter(id => R(id).owner === 'serbia').length;
     if (serb >= 3) ep.push('Стефан Душан правит половиной Балкан и мечтает о короне в Святой Софии. Лишь его внезапная смерть в 1355 году спасёт ромеев от сербского императора.');
