@@ -101,10 +101,107 @@ const SFX = (() => {
   return {
     play(k) { try { const now = Date.now(); if (!on || !S[k] || (last[k] && now - last[k] < 350)) return; last[k] = now; S[k](); } catch (e) { } },
     get on() { return on; },
+    ctx() { return ctx; }, out() { return master; },
     toggle() { on = !on; try { localStorage.setItem('poly_sound', on ? 'on' : 'off'); } catch (e) { } if (on) S.select(); return on; },
   };
 })();
 if (!HEADLESS) document.addEventListener('click', e => { if (e.target.closest && e.target.closest('button') && !e.target.closest('.nosfx')) SFX.play('click'); }, true);
+
+/* --- звуки моря: прибой (накат → удар о камни → шипящий откат) и крики чаек. Синтез, без файлов.
+   Громкость — от того, сколько берега на экране и насколько близко камера; над сушей вдали от моря — тишина --- */
+const SEASND = (() => {
+  let on = true; try { on = localStorage.getItem('poly_seasnd') !== 'off'; } catch (e) { }
+  const st = { bus: null, buf: null, echo: null, nextWave: 0, nextGull: 0, lvl: 0 };
+  const R = Math.random;
+  function noiseBuf(c) {   // 6 с «розового» шума, бесшовная петля
+    const n = Math.floor(c.sampleRate * 6), fl = Math.floor(c.sampleRate * 0.25), b = c.createBuffer(2, n, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = new Float32Array(n + fl); let b0 = 0, b1 = 0, b2 = 0, s2 = 0;
+      for (let i = 0; i < n + fl; i++) { const w = R() * 2 - 1; b0 = 0.99765 * b0 + w * 0.099046; b1 = 0.963 * b1 + w * 0.2965164; b2 = 0.57 * b2 + w * 1.0526913; d[i] = b0 + b1 + b2 + w * 0.1848; if (i < n) s2 += d[i] * d[i]; }
+      const k = 0.3 / Math.sqrt(s2 / n), o = b.getChannelData(ch);
+      for (let i = 0; i < n; i++) o[i] = d[i] * k;
+      for (let i = 0; i < fl; i++) { const a = i / fl; o[i] = (d[i] * a + d[n + i] * (1 - a)) * k; }   // начало петли перетекает из «продолжения» конца
+    }
+    return b;
+  }
+  function bed(c, out) {   // ровный далёкий гул моря
+    const src = c.createBufferSource(); src.buffer = st.buf; src.loop = true;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 0.4;
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70;   // без инфразвукового «гула мотора»
+    const g = c.createGain(); g.gain.value = 0.24; src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(out); src.start(0, R() * 5);
+  }
+  function echo(c, out) {   // простор: короткое эхо с затуханием (для чаек)
+    const inp = c.createGain(), d = c.createDelay(1), fb = c.createGain(), lp = c.createBiquadFilter(), wet = c.createGain();
+    d.delayTime.value = 0.21; fb.gain.value = 0.32; lp.type = 'lowpass'; lp.frequency.value = 2200; wet.gain.value = 0.35;
+    inp.connect(out); inp.connect(d); d.connect(lp); lp.connect(fb); fb.connect(d); lp.connect(wet); wet.connect(out); return inp;
+  }
+  function wave(c, out, t, A, pan) {   // одна волна: нарастающий накат → удар → шипящий откат
+    const rise = 1.1 + R() * 1.1, fall = 2.6 + R() * 2.4, tc = t + rise;
+    const src = c.createBufferSource(); src.buffer = st.buf; src.loop = true;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.5;
+    const g = c.createGain(), p = c.createStereoPanner ? c.createStereoPanner() : null;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3 * A, tc - 0.04);
+    g.gain.linearRampToValueAtTime(1.0 * A, tc + 0.12); g.gain.setTargetAtTime(0.0001, tc + 0.18, fall / 2.6);
+    lp.frequency.setValueAtTime(260, t); lp.frequency.exponentialRampToValueAtTime(800, tc - 0.04);
+    lp.frequency.linearRampToValueAtTime(3800 + 2600 * A, tc + 0.14); lp.frequency.setTargetAtTime(650, tc + 0.35, fall / 2.2);
+    // пузырьки и шорох гальки на откате: быстрое неровное «дрожание» громкости
+    const am = c.createOscillator(), amg = c.createGain(), g2 = c.createGain();
+    am.type = 'triangle'; am.frequency.setValueAtTime(7 + R() * 5, t); amg.gain.setValueAtTime(0, t); amg.gain.setValueAtTime(0, tc + 0.3); amg.gain.linearRampToValueAtTime(0.28, tc + 0.9); amg.gain.setTargetAtTime(0, tc + 1.2, fall / 4);
+    g2.gain.value = 1; am.connect(amg); amg.connect(g2.gain);
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90;
+    src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(g2); if (p) { p.pan.value = pan; g2.connect(p); p.connect(out); } else g2.connect(out);
+    src.start(t, R() * 5); src.stop(tc + fall * 2.4); am.start(t); am.stop(tc + fall * 2.4);
+  }
+  function call(c, out, t, f0, dur, kind, vol, pan, bright) {   // один крик: пилообразный тон через «клюв» (полосовой фильтр) + хрипотца
+    const o = c.createOscillator(); o.type = 'sawtooth';
+    const F = o.frequency;
+    if (kind === 'kee') { F.setValueAtTime(f0 * 0.82, t); F.linearRampToValueAtTime(f0 * 1.22, t + dur * 0.16); F.exponentialRampToValueAtTime(f0 * 0.7, t + dur); }
+    else if (kind === 'ha') { F.setValueAtTime(f0 * 0.9, t); F.linearRampToValueAtTime(f0 * 1.08, t + dur * 0.35); F.linearRampToValueAtTime(f0 * 0.86, t + dur); }
+    else { F.setValueAtTime(f0 * 1.06, t); F.exponentialRampToValueAtTime(f0 * 0.9, t + dur); }
+    const am = c.createOscillator(), amg = c.createGain(), rough = c.createGain(); am.frequency.value = 42 + R() * 25; amg.gain.value = 0.32; rough.gain.value = 0.68; am.connect(amg); amg.connect(rough.gain);
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f0 * 2.1; bp.Q.value = 1.3;
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 650;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = bright;
+    const g = c.createGain(), p = c.createStereoPanner ? c.createStereoPanner() : null;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + Math.min(0.03, dur * 0.2)); g.gain.setValueAtTime(vol, t + dur * 0.55); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(rough); rough.connect(bp); bp.connect(hp); hp.connect(lp); lp.connect(g);
+    if (p) { p.pan.value = pan; g.connect(p); p.connect(out); } else g.connect(out);
+    o.start(t); o.stop(t + dur + 0.05); am.start(t); am.stop(t + dur + 0.05);
+  }
+  function gulls(c, out, t, near) {   // стайка: протяжные «кии-ау», «смех» или короткие крики крачки
+    const k = R(), pan = (R() - 0.5) * 1.6, dist = 0.45 + 0.55 * R(), vol = 0.085 * dist * (0.5 + 0.5 * near), bright = 2600 + 4200 * dist;
+    if (k < 0.5) { const n = 1 + Math.floor(R() * 3), f0 = 980 + R() * 260; for (let i = 0; i < n; i++) call(c, out, t + i * (0.55 + R() * 0.25), f0 * (1 + (R() - 0.5) * 0.06), 0.42 + R() * 0.12, 'kee', vol, pan, bright); }
+    else if (k < 0.8) { const n = 4 + Math.floor(R() * 4), f0 = 1250 + R() * 200; for (let i = 0; i < n; i++) call(c, out, t + i * 0.17, f0 * (1 - i * 0.03), 0.11, 'ha', vol * 0.9, pan, bright); }
+    else { const n = 2 + Math.floor(R() * 3), f0 = 2300 + R() * 300; for (let i = 0; i < n; i++) call(c, out, t + i * (0.14 + R() * 0.1), f0, 0.06, 'kip', vol * 0.7, pan, bright); }
+  }
+  // сколько берега видно: сетка точек экрана — где рядом и море, и суша
+  function level() {
+    if (!G || UI.tab !== 'map' || $('app').classList.contains('hidden') || document.hidden || !WV.md || !MAPINFO) return [0, 0];
+    const v = UI.view, z = v.z, w = $('mapwrap'), W = w.clientWidth, H = w.clientHeight, NX = 24, NY = 15, r = Math.min(W / NX, H / NY) * 0.6;
+    const m = (a, b) => seaAt((a - v.x) / z, (b - v.y) / z) > 127;
+    let sea = 0, coast = 0;
+    for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      const sx = (i + 0.5) * W / NX, sy = (j + 0.5) * H / NY, c0 = m(sx, sy); if (c0) sea++;
+      if (c0 !== m(sx + r, sy) || c0 !== m(sx - r, sy) || c0 !== m(sx, sy + r) || c0 !== m(sx, sy - r)) coast++;
+    }
+    const n = NX * NY, zs = z * MAPINFO.W / 5298;
+    return [clamp(coast / n * 3.5 + sea / n * 0.3, 0, 1) * clamp(0.3 + 0.45 * zs, 0.3, 1), clamp(coast / n * 4, 0, 1) * clamp((zs - 0.6) / 1.2, 0, 1)];
+  }
+  if (!HEADLESS) setInterval(() => {
+    const c = SFX.ctx(); if (!c || c.state !== 'running') return;
+    if (!st.bus) { st.bus = c.createGain(); st.bus.gain.value = 0; st.bus.connect(SFX.out()); st.buf = noiseBuf(c); bed(c, st.bus); st.echo = echo(c, st.bus); st.nextGull = c.currentTime + 6 + R() * 10; }
+    const [lv, near] = on && SFX.on ? level() : [0, 0], now = c.currentTime;   // общие «Звуки» выключены — море тоже молчит
+    st.lvl = lv; st.bus.gain.setTargetAtTime(lv * 0.4, now, 0.7);
+    if (lv < 0.03) return;
+    if (now > st.nextWave - 0.5) { const t = Math.max(now + 0.05, st.nextWave); wave(c, st.bus, t, 0.45 + 0.55 * R(), (R() - 0.5) * 1.2); st.nextWave = t + 4.2 + R() * 4.5; }
+    if (now > st.nextGull) { if (near > 0.15) gulls(c, st.echo, now + 0.1, near); st.nextGull = now + 12 + R() * 28; }
+  }, 250);
+  return {
+    get on() { return on; },
+    toggle() { on = !on; try { localStorage.setItem('poly_seasnd', on ? 'on' : 'off'); } catch (e) { } return on; },
+    _syn: { noiseBuf, bed, echo, wave, gulls, st },
+  };
+})();
 
 /* --- заранее загружаем карту (с самого титульного экрана), со шкалой загрузки --- */
 const PRE = { got: {}, total: { img: 3300000, ids: 600000 }, p: null, ready: false, imgOk: false };
@@ -838,25 +935,33 @@ if (!HEADLESS) { const im = new Image(); im.onload = () => { try {
   const PH = 128, L2 = new Float32Array(256 * PH);
   const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
   for (let pi = 0; pi < PH; pi++) {
-    const p = pi / PH, u = p / 0.65;
+    const p = 1 - (pi + 0.5) / PH, u = p / 0.65;   // фаза в кадре убывает со временем → берём 1 − фаза, чтобы волна шла К берегу
     const sA = 4.3 - 3.6 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, u))), iA = u <= 1 ? 0.42 * ss(0, 0.3, u) * (0.7 + 0.3 * u) * (1 - ss(0.78, 1, u)) : 0, wA = 0.55 + 0.25 * Math.min(1, u);   // волна подходит к берегу и тает у кромки (дальше — всплески)
     for (let di = 0; di < 256; di++) {
       const dd = di / 40 - 1, eA = (dd - sA) / wA;   // расстояние со знаком: <0 — суша
       L2[di * PH + pi] = (iA * Math.exp(-eA * eA) + 0.06 * Math.exp(-(dd * dd) / 0.55))   // + едва заметная тихая кромка * (1 - ss(3.6, 5.2, dd)) * ss(-0.15, 0.3, dd);   // к краю полосы и к суше — плавно в ноль
     }
   }
-  // места всплесков: у самой кромки, не чаще чем через 4 пикселя (≈8 px карты)
-  const seen = new Set(), sp = [];
-  for (let k = 0; k < W * H; k++) {
-    if (!band[k]) continue; const dd = df[k] / 40 - 1; if (dd < 0.15 || dd > 0.95) continue;
-    const X = k % W, Y = (k - X) / W, key = (X >> 2) + ',' + (Y >> 2); if (seen.has(key)) continue; seen.add(key);
-    sp.push(X * 2 + 1, Y * 2 + 1, ang[k], str[k], nz[k]);
+  // удар волны о берег (всплеск): BF — короткая вспышка у самой кромки, BO — пена, которая откатывается в море и тает.
+  // Таблицы [расстояние(256) × возраст(64)], возраст 0..BDUR секунд
+  const BDUR = 2.4, BF = new Float32Array(256 * 64), BO = new Float32Array(256 * 64);
+  for (let ai = 0; ai < 64; ai++) {
+    const t = (ai + 0.5) / 64, sp = 1 - Math.pow(1 - t, 2), c0 = 0.25 + 1.5 * sp, wd = 0.45 + 0.75 * t;
+    const fl = t < 0.16 ? ss(0, 0.025, t) * Math.pow(1 - t / 0.16, 1.5) : 0, fo = ss(0, 0.05, t) * Math.pow(1 - t, 1.5);
+    for (let di = 0; di < 256; di++) {
+      const dd = di / 40 - 1, edge = ss(-0.9, -0.1, dd);   // чуть забегает на камни, дальше — нет
+      BF[di * 64 + ai] = 0.95 * fl * Math.exp(-Math.pow((dd - 0.2) / 0.6, 2)) * edge;
+      BO[di * 64 + ai] = 0.8 * fo * Math.exp(-Math.pow((dd - c0) / wd, 2)) * edge * (1 - ss(3.8, 5.2, dd));
+    }
   }
-  const SPL = { n: sp.length / 5, d: Float32Array.from(sp) };
-  // тайлы по 64 px карты — быстро находить видимые
-  SPL.cell = 64; SPL.cw = Math.ceil(W * 2 / 64); SPL.idx = new Map();
-  for (let i = 0; i < SPL.n; i++) { const c = Math.floor(SPL.d[i * 5] / 64) + Math.floor(SPL.d[i * 5 + 1] / 64) * SPL.cw; let a = SPL.idx.get(c); if (!a) SPL.idx.set(c, a = []); a.push(i); }
-  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, df, band, nz, ang, str, sea, L2, PH, SA: new Float32Array(256), cv: document.createElement('canvas'), SPL });
+  // GN — крупный плавный шум (где именно в этот раз ударит волна), LN — мелкий «кружевной» шум пены; оба бесшовные 256×256
+  const pnoise = (gs, seed) => { let q = seed; const r = () => (q = (q * 16807) % 2147483647) / 2147483647, o = new Float32Array(65536);
+    for (const [g, w] of gs) { const a = new Float32Array(g * g); for (let i = 0; i < a.length; i++) a[i] = r(); const cs = 256 / g;
+      for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) { const fx = x / cs, fy = y / cs, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = ss(0, 1, fx - x0), ty = ss(0, 1, fy - y0), Q = (i, j) => a[(j % g) * g + (i % g)];
+        o[y * 256 + x] += w * ((Q(x0, y0) * (1 - tx) + Q(x0 + 1, y0) * tx) * (1 - ty) + (Q(x0, y0 + 1) * (1 - tx) + Q(x0 + 1, y0 + 1) * tx) * ty); } }
+    let mn = 1e9, mx = -1e9; for (const v of o) { mn = Math.min(mn, v); mx = Math.max(mx, v); } for (let i = 0; i < o.length; i++) o[i] = (o[i] - mn) / (mx - mn); return o; };
+  const GN = pnoise([[32, 1], [64, 0.35]], 9001), LN = pnoise([[64, 0.6], [128, 1]], 4243);
+  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, df, band, nz, ang, str, sea, L2, PH, SA: new Float32Array(256), cv: document.createElement('canvas'), BF, BO, BDUR, GN, LN });
 } catch (e) { } }; FM.im = im; }
 function foamLoad() { if (!FM.started && WV.md) { FM.started = true; FM.im.src = 'foam.png'; } }
 function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
@@ -870,6 +975,7 @@ function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
   const tide = 0.82 + 0.18 * Math.sin(T * 2 * Math.PI / 80);
   const SA = FM.SA; for (let b = 0; b < 256; b++) { const a = b / 255 * 2 * Math.PI, f = (1 - Math.cos(a - th)) / 2; SA[b] = (0.2 + 0.8 * Math.pow(f, 1.6)) * tide; }   // берег навстречу волне — сильнее
   const LAM = 60, PER = 8, PH = FM.PH, L2 = FM.L2, T0 = T / PER;
+  const BF = FM.BF, BO = FM.BO, BD = FM.BDUR, GN = FM.GN, LN = FM.LN;
   const W = FM.W, TS = FM.TS, DF = FM.df, NZ = FM.nz, AN = FM.ang, ST = FM.str, SE = FM.sea, KK = FM.KK || (FM.KK = new Float32Array(FM.W * FM.H));
   if (K > 1)   // сила прибоя по пикселям — для плавной интерполяции между соседями
     for (let ty = Math.floor(hy / TS); ty <= Math.floor((hy1 - 1) / TS); ty++) for (let tx = Math.floor(hx / TS); tx <= Math.floor((hx1 - 1) / TS); tx++) {
@@ -882,59 +988,35 @@ function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
       const k = a[q], X = k % W, Y = (k - X) / W; if (X < hx || X >= hx1 || Y < hy || Y >= hy1) continue;
       const n = NZ[k], kk = SA[AN[k]] * (0.45 + 0.0022 * ST[k]) * (0.72 + 0.0022 * n), nph = n * 0.0011;
       if (K === 1) {
-        if (!FM.band[k]) continue;
         let ph = (X * c + Y * s) / LAM - T0 + nph; ph -= Math.floor(ph);   // фронт волны идёт по ветру — вдоль берега прибой «бежит»
-        const v = L2[DF[k] * PH + ((ph * PH) | 0)] * kk, o = ((Y - hy) * w + (X - hx)) * 4;
+        let v = L2[DF[k] * PH + ((ph * PH) | 0)] * kk;
+        // всплеск: волна дошла до кромки (фаза 0,35) — в этом цикле бьёт не везде, а пятнами (шум GN, у каждого цикла — свой кусок шума)
+        let q = 0.35 - ((X * c + Y * s) / LAM - T0 + nph); const cyc = Math.floor(q); q -= cyc; const ag = q * PER;
+        if (ag < BD) { const g = GN[((Y + ((cyc * 91) & 255)) & 255) * 256 + ((X + ((cyc * 37) & 255)) & 255)], m = kk > 1 ? 1 : kk, thr = 0.72 - 0.3 * m;
+          if (g > thr) { const t = ag / BD, bi = DF[k] * 64 + ((t * 64) | 0); v += (g - thr > 0.1 ? 1 : (g - thr) / 0.1) * (0.5 + 0.5 * m) * (BF[bi] + BO[bi] * (1 - 0.4 * (0.2 + 0.7 * t))); } }
+        const o = ((Y - hy) * w + (X - hx)) * 4;
         out[o] = 240; out[o + 1] = 248; out[o + 2] = 252; out[o + 3] = v > 1 ? 255 : v * 255; continue;
       }
+      const ph0 = (X * c + Y * s) / LAM - T0 + nph;
       // вблизи — K×K подпикселей: расстояние и «море/суша» плавно интерполируются → гладкие кромки
       for (let sy = 0; sy < K; sy++) for (let sx = 0; sx < K; sx++) {
         const fx = X + (sx + 0.5) / K - 0.5, fy = Y + (sy + 0.5) / K - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0, i0 = y0 * W + x0;
         const d00 = DF[i0], d10 = DF[i0 + 1], d01 = DF[i0 + W], d11 = DF[i0 + W + 1];
         const dd = (d00 * (1 - ax) + d10 * ax) * (1 - ay) + (d01 * (1 - ax) + d11 * ax) * ay;
         let v = 0;
-        if (dd < 250) { let ph = (fx * c + fy * s) / LAM - T0 + nph; ph -= Math.floor(ph); const ki = (KK[i0] * (1 - ax) + KK[i0 + 1] * ax) * (1 - ay) + (KK[i0 + W] * (1 - ax) + KK[i0 + W + 1] * ax) * ay; v = L2[(dd | 0) * PH + ((ph * PH) | 0)] * ki; }
+        if (dd < 250) { let ph = (fx * c + fy * s) / LAM - T0 + nph; ph -= Math.floor(ph); const ki = (KK[i0] * (1 - ax) + KK[i0 + 1] * ax) * (1 - ay) + (KK[i0 + W] * (1 - ax) + KK[i0 + W + 1] * ax) * ay; v = L2[(dd | 0) * PH + ((ph * PH) | 0)] * ki;
+          // всплеск — по подпикселям (плавные края пятен): возраст удара и пятнистый шум GN интерполируются
+          let q = 0.35 - (ph0 + (fx - X) * c / LAM + (fy - Y) * s / LAM); const cyc = Math.floor(q); q -= cyc; const ag = q * PER;
+          if (ag < BD) {
+            const gx = fx + ((cyc * 37) & 255), gy = fy + ((cyc * 91) & 255), gx0 = Math.floor(gx), gy0 = Math.floor(gy), bx = gx - gx0, by = gy - gy0, r0 = (gy0 & 255) * 256, r1 = ((gy0 + 1) & 255) * 256, c0 = gx0 & 255, c1 = (gx0 + 1) & 255;
+            const g = (GN[r0 + c0] * (1 - bx) + GN[r0 + c1] * bx) * (1 - by) + (GN[r1 + c0] * (1 - bx) + GN[r1 + c1] * bx) * by, m = ki > 1 ? 1 : ki, thr = 0.72 - 0.3 * m;
+            if (g > thr) { const t = ag / BD, bi = (dd | 0) * 64 + ((t * 64) | 0); v += (g - thr > 0.16 ? 1 : (g - thr) / 0.16) * (0.5 + 0.5 * m) * (BF[bi] + BO[bi] * (1 - (0.2 + 0.7 * t) * (1 - LN[(((fy * 4) | 0) & 255) * 256 + (((fx * 4) | 0) & 255)]))); }
+          } }
         const o = (((Y - hy) * K + sy) * CWk + (X - hx) * K + sx) * 4; out[o] = 240; out[o + 1] = 248; out[o + 2] = 252; out[o + 3] = v > 1 ? 255 : v * 255;
       }
     }
   }
   cx.putImageData(FM.img, 0, 0);
-}
-// всплеск: когда волна доходит до кромки, в случайных местах (на наветренных берегах чаще) — короткая вспышка брызг
-let SPD = null;
-function splashDot() { const c = document.createElement('canvas'); c.width = c.height = 32; const x = c.getContext('2d'), g = x.createRadialGradient(16, 16, 0, 16, 16, 16); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.45, 'rgba(250,253,255,.75)'); g.addColorStop(1, 'rgba(240,248,252,0)'); x.fillStyle = g; x.fillRect(0, 0, 32, 32); return c; }
-function splashes(x, v, z, dpr, vx0, vy0, vx1, vy1, T) {
-  const S = FM.SPL; if (!S) return; if (!SPD) SPD = splashDot();
-  const zs = z * MAPINFO.W / 5298; if (zs < 0.55) return;
-  const th = Math.atan2(WIND[1], WIND[0]) + 0.45 * Math.sin(T / 190), c = Math.cos(th), s = Math.sin(th), LAM = 60, PER = 8, T0 = T / PER, DUR = 1.4;
-  const tide = 0.82 + 0.18 * Math.sin(T * 2 * Math.PI / 80), D = S.d, fr = t => t - Math.floor(t);
-  const hash = (a, b) => fr(Math.sin(a * 12.9898 + b * 78.233) * 43758.5453);
-  const skip = zs < 0.9 ? 3 : zs < 1.5 ? 2 : 1;   // вдали — реже
-  for (let cy = Math.floor((vy0 - 8) / S.cell); cy <= Math.floor((vy1 + 8) / S.cell); cy++) for (let cx = Math.floor((vx0 - 8) / S.cell); cx <= Math.floor((vx1 + 8) / S.cell); cx++) {
-    const list = S.idx.get(cx + cy * S.cw); if (!list) continue;
-    for (const i of list) {
-      if (i % skip) continue;
-      const X = D[i * 5], Y = D[i * 5 + 1], a = D[i * 5 + 2] / 255 * 2 * Math.PI, st = D[i * 5 + 3] / 255, n = D[i * 5 + 4];
-      // момент удара волны в этой точке — по той же фазе, что и прибой (плюс случайная задержка до 0,7 с)
-      const raw = (X / 2 * c + Y / 2 * s) / LAM - T0 + n * 0.0011 - 0.6, cyc = Math.floor(raw), jit = hash(i, 7.1) * 0.7;
-      const age = (raw - cyc) * PER - jit; if (age < 0 || age > DUR) continue;
-      const f = (1 - Math.cos(a - th)) / 2, sa = (0.2 + 0.8 * Math.pow(f, 1.6)) * tide * (0.45 + 0.55 * st);   // наветренный и открытый берег — чаще и сильнее
-      if (hash(i, cyc) > sa * 0.75) continue;   // каждый раз — другие места
-      const t = age / DUR, fade = Math.pow(1 - t, 1.6) * Math.min(1, age / 0.12), k = dpr * z, P = 0.8 + 0.7 * sa;
-      const sx = dpr * v.x + X * k, sy = dpr * v.y + Y * k;
-      // облачко брызг расширяется и тает
-      const r0 = (1.2 + 2.6 * (1 - Math.pow(1 - t, 2))) * P * k;
-      x.globalAlpha = Math.min(0.75, 0.5 * fade * P); x.drawImage(SPD, sx - r0, sy - r0, r0 * 2, r0 * 2);
-      // капли разлетаются в сторону моря и вдоль берега, замедляясь
-      const nd = 4 + ((hash(i, 3.3) * 4) | 0);
-      for (let j = 0; j < nd; j++) {
-        const h1 = hash(i * 7 + j, 1.7), h2 = hash(i * 7 + j, 2.9), da = a + (h1 - 0.5) * 2.6, dist = (1.5 + 4.5 * h2) * P * (1 - Math.pow(1 - t, 3)) * k;
-        const rr = (0.35 + 0.45 * hash(i * 7 + j, 4.1)) * P * k * (1 - 0.4 * t);
-        x.globalAlpha = 0.8 * fade; x.drawImage(SPD, sx + Math.cos(da) * dist - rr, sy + Math.sin(da) * dist - rr, rr * 2, rr * 2);
-      }
-    }
-  }
-  x.globalAlpha = 1;
 }
 function waveFrame(now) {
   requestAnimationFrame(waveFrame);
@@ -989,7 +1071,6 @@ function waveFrame(now) {
       x.drawImage(FM.cv, FM.hx * 2, FM.hy * 2, FM.cv.width * 2 / FM.K, FM.cv.height * 2 / FM.K);
       x.setTransform(1, 0, 0, 1, 0, 0);
     }
-    splashes(x, v, z, dpr, vx0, vy0, vx1, vy1, T);
   }
   if (WV.on) {
     // 2) зыбь: редкие тонкие линии медленно проявляются, плывут по ветру и тают (цикл 20–30 с)
@@ -1308,6 +1389,7 @@ function showMenu() {
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
+   <button id="mSea">${SEASND.on ? 'Звуки моря (прибой, чайки): включены' : 'Звуки моря (прибой, чайки): выключены'}</button>
    <button id="mNames">Скачать мои названия (файл)</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
   $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
@@ -1315,6 +1397,7 @@ function showMenu() {
   $('mGfx').onclick = showGfxMenu;
   $('mAuto').onclick = () => { G.autoBattle = !G.autoBattle; closeModal(); renderAll(); };
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
+  $('mSea').onclick = () => { SEASND.toggle(); showMenu(); };
   $('mNames').onclick = exportNames;
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
   $('mHelp').onclick = showHelp;
