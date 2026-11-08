@@ -778,64 +778,159 @@ function cloudFrame(now) {
 }
 if (!HEADLESS) requestAnimationFrame(cloudFrame);
 
-/* --- волны: гребешки над морем (как на старых картах) — появляются и тают, медленно идут по ветру --- */
-const WV = { on: true, pts: null, spr: null, last: 0, t: 0 };
-try { WV.on = localStorage.getItem('poly_waves') !== 'off'; } catch (e) { }
-function waveSprites() {   // 4 формы гребешка: светлая дуга + тёмная тень под ней
-  const out = [];
-  for (let f = 0; f < 4; f++) {
-    const c = document.createElement('canvas'); c.width = 64; c.height = 24; const x = c.getContext('2d'); x.lineCap = 'round';
-    const k = [1, 0.8, 1.15, 0.9][f], humps = f % 2 ? 2 : 1;
-    for (const [col, dy, lw] of [['rgba(6,24,44,.6)', 2.6, 3.4], ['rgba(240,248,252,1)', 0, 3]]) {
-      x.strokeStyle = col; x.lineWidth = lw; x.beginPath();
-      for (let h = 0; h < humps; h++) { const w = 44 / humps, x0 = 10 + h * w; x.moveTo(x0, 15 + dy); x.quadraticCurveTo(x0 + w * 0.5, (15 - 9 * k) + dy, x0 + w, 15 + dy); }
-      x.stroke();
-    }
-    out.push(c);
+/* --- живое море: блики-рябь, гребни с пеной и брызгами, искры солнца, прибой у берегов ---
+   всё рисуется на отдельном холсте и в конце обрезается маской открытого моря (sea.png): реки и озёра не трогаем */
+const WV = { on: true, foam: true, pts: null, spr: null, last: 0, t: 0, mask: null, md: null, mw: 0, mh: 0, rip: null };
+try { WV.on = localStorage.getItem('poly_waves') !== 'off'; WV.foam = localStorage.getItem('poly_foam') !== 'off'; } catch (e) { }
+if (!HEADLESS) { const im = new Image(); im.onload = () => { try { const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0); const d = x.getImageData(0, 0, c.width, c.height).data; WV.md = new Uint8Array(c.width * c.height); for (let k = 0; k < WV.md.length; k++) WV.md[k] = d[k * 4 + 3]; WV.mw = c.width; WV.mh = c.height; WV.mask = im; } catch (e) { } }; im.src = 'sea.png'; }
+const seaAt = (x, y) => { const X = Math.round(x / 2), Y = Math.round(y / 2); return X >= 0 && Y >= 0 && X < WV.mw && Y < WV.mh ? WV.md[Y * WV.mw + X] : 0; };
+function rippleTile() {   // бесшовная плитка ряби: тонкие светлые извилистые блики (сумма синусоид с целыми частотами)
+  const N = 256, c = document.createElement('canvas'); c.width = N; c.height = N; const x = c.getContext('2d'), im = x.createImageData(N, N);
+  const W = [[3, 1, 0.3], [1, 4, 1.7], [5, -2, 2.9], [-2, 5, 0.8], [7, 3, 4.1], [4, -6, 5.3]];
+  for (let y = 0; y < N; y++) for (let X = 0; X < N; X++) {
+    let v = 0; for (const [fx, fy, ph] of W) v += Math.sin(2 * Math.PI * (fx * X + fy * y) / N + ph);
+    const a = Math.max(0, Math.abs(v) < 0.35 ? 1 - Math.abs(v) / 0.35 : 0);   // узкие линии там, где сумма ≈ 0
+    const o = (y * N + X) * 4; im.data[o] = 230; im.data[o + 1] = 244; im.data[o + 2] = 250; im.data[o + 3] = a * 150;
   }
-  return out;
+  x.putImageData(im, 0, 0); return c;
 }
-function wavesInit() {
-  if (WV.pts || !PIX.ids || !PIX.outer) return;
-  const W = PIX.w, H = PIX.h, ids = PIX.ids, ot = PIX.outer, S = PIX.s || 1;
-  const water = (x, y) => x >= 0 && y >= 0 && x < W && y < H && !ids[y * W + x] && !ot[y * W + x];
-  let s = 99; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  const pts = [], step = 34;
-  for (let gy = step / 2; gy < H; gy += step) for (let gx = step / 2; gx < W; gx += step) {
-    const x = Math.round(gx + (r() - 0.5) * step * 0.8), y = Math.round(gy + (r() - 0.5) * step * 0.8);
-    let ok = true; for (const [dx, dy] of [[0, 0], [-12, 0], [12, 0], [0, -8], [0, 8], [-8, -6], [8, 6]]) if (!water(x + dx, y + dy)) { ok = false; break; }
-    if (ok) pts.push({ x: x * S, y: y * S, ph: r() * 6.28, sp: 0.35 + r() * 0.4, f: Math.floor(r() * 4), sz: 0.8 + r() * 0.5, lod: Math.floor(r() * 4) });
+function crestSprite(seed, broken) {   // гребень волны: тёмная тень, бирюзовое тело, белая пенная шапка, брызги; broken — разбитый в пену
+  let s = seed; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const W = 120, H = 52, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  const len = 70 + r() * 30, x0 = (W - len) / 2, bow = 10 + r() * 8, y0 = 34;
+  const pt = t => [x0 + t * len, y0 - Math.sin(t * Math.PI) * bow];
+  if (!broken) {
+    x.lineCap = 'round';
+    x.strokeStyle = 'rgba(4,22,40,.45)'; x.lineWidth = 7; x.beginPath(); for (let t = 0; t <= 1.001; t += 0.05) { const [a, b] = pt(t); t ? x.lineTo(a, b + 4) : x.moveTo(a, b + 4); } x.stroke();
+    x.strokeStyle = 'rgba(60,130,150,.7)'; x.lineWidth = 6; x.beginPath(); for (let t = 0; t <= 1.001; t += 0.05) { const [a, b] = pt(t); t ? x.lineTo(a, b + 1.5) : x.moveTo(a, b + 1.5); } x.stroke();
   }
-  WV.pts = pts; WV.spr = waveSprites();
+  // пена: кружки вдоль гребня, толще в середине
+  for (let i = 0; i < (broken ? 26 : 34); i++) {
+    const t = r(), [a, b] = pt(t), th = Math.sin(t * Math.PI);
+    const rr = (broken ? 1 + r() * 2 : 1.4 + th * 2.6 * (0.6 + r() * 0.6));
+    const dx = broken ? (r() - 0.5) * 14 : (r() - 0.5) * 2, dy = broken ? (r() - 0.3) * 12 : -r() * 2;
+    x.fillStyle = `rgba(250,253,255,${broken ? 0.55 + r() * 0.35 : 0.9})`; x.beginPath(); x.arc(a + dx, b + dy, rr, 0, 7); x.fill();
+  }
+  for (let i = 0; i < (broken ? 6 : 8); i++) { const t = 0.2 + r() * 0.6, [a, b] = pt(t); x.fillStyle = 'rgba(255,255,255,.75)'; x.beginPath(); x.arc(a + (r() - 0.5) * 10, b - 4 - r() * 9, 0.7 + r() * 0.9, 0, 7); x.fill(); }   // брызги
+  return c;
+}
+function sparkSprite() { const c = document.createElement('canvas'); c.width = c.height = 32; const x = c.getContext('2d'); const g = x.createRadialGradient(16, 16, 0, 16, 16, 8); g.addColorStop(0, 'rgba(255,255,240,1)'); g.addColorStop(1, 'rgba(255,255,240,0)'); x.fillStyle = g; x.fillRect(0, 0, 32, 32); x.strokeStyle = 'rgba(255,255,235,.9)'; x.lineWidth = 1.4; x.beginPath(); x.moveTo(16, 2); x.lineTo(16, 30); x.moveTo(2, 16); x.lineTo(30, 16); x.stroke(); return c; }
+function wavesInit() {
+  if (WV.pts || !WV.md || !MAPINFO) return;
+  let s = 99; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const pts = [], step = 60, M = MAPINFO;
+  for (let gy = step / 2; gy < M.H; gy += step) for (let gx = step / 2; gx < M.W; gx += step) {
+    const x = gx + (r() - 0.5) * step * 0.8, y = gy + (r() - 0.5) * step * 0.8;
+    let ok = true; for (const [dx, dy] of [[0, 0], [-26, 0], [26, 0], [0, -16], [0, 16], [-18, -12], [18, 12]]) if (seaAt(x + dx, y + dy) < 250) { ok = false; break; }
+    if (ok) pts.push({ x, y, ph: r(), sp: 0.07 + r() * 0.06, f: Math.floor(r() * 6), sz: 0.75 + r() * 0.55, rot: (r() - 0.5) * 0.35, lod: Math.floor(r() * 4), gl: r() < 0.25 });
+  }
+  WV.pts = pts;
+  WV.spr = { crest: [0, 1, 2, 3, 4, 5].map(i => crestSprite(311 + i * 97, false)), br: [0, 1, 2, 3, 4, 5].map(i => crestSprite(911 + i * 97, true)), spark: sparkSprite() };
+  WV.rip = rippleTile();
+}
+/* --- прибой: полосы пены по заранее посчитанному расстоянию до берега (foam.png, половинное разрешение) --- */
+const FM = { ok: false };
+if (!HEADLESS) { const im = new Image(); im.onload = () => { try {
+  const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height).data, W = c.width, H = c.height, TS = 32, tw = Math.ceil(W / TS);
+  const tiles = new Map(), dist = new Uint8Array(W * H), nz = new Uint8Array(W * H);
+  for (let k = 0; k < W * H; k++) { if (!d[k * 4 + 3]) continue; dist[k] = d[k * 4]; nz[k] = d[k * 4 + 1]; const t = Math.floor((k % W) / TS) + Math.floor(Math.floor(k / W) / TS) * tw; let a = tiles.get(t); if (!a) tiles.set(t, a = []); a.push(k); }
+  for (const [t, a] of tiles) tiles.set(t, Int32Array.from(a));
+  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, nz, cv: document.createElement('canvas') });
+} catch (e) { } }; im.src = 'foam.png'; }
+function foamUpdate(vx0, vy0, vx1, vy1, T) {
+  const hx = Math.max(0, Math.floor(vx0 / 2) - 2), hy = Math.max(0, Math.floor(vy0 / 2) - 2), hx1 = Math.min(FM.W, Math.ceil(vx1 / 2) + 2), hy1 = Math.min(FM.H, Math.ceil(vy1 / 2) + 2);
+  const w = hx1 - hx, h = hy1 - hy; if (w <= 0 || h <= 0) return;
+  const cv = FM.cv; if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; FM.img = null; }
+  const cx = cv.getContext('2d'); if (!FM.img) FM.img = cx.createImageData(w, h);
+  const out = FM.img.data; out.fill(0); FM.hx = hx; FM.hy = hy;
+  // таблицы на этот кадр: полосы прибоя по расстоянию (индекс = расстояние × 28) и мерцание кромки по «шуму»
+  const ph = [0, 1].map(i => (T * 0.1 + i / 2) % 1), LD = FM.LD || (FM.LD = new Float32Array(256)), LS = FM.LS || (FM.LS = new Float32Array(256)), LN = FM.LN || (FM.LN = new Float32Array(256));
+  for (let di = 0; di < 256; di++) {
+    const dd = di / 28; let v = 0;
+    for (const f of ph) { const e = (dd - (4.6 * (1 - f) + 0.8)) / 0.55; v += Math.sin(Math.PI * f) * 0.5 * Math.exp(-e * e); }
+    LD[di] = v; LS[di] = Math.exp(-(dd * dd) / 0.7);
+  }
+  const sh = 0.4 + 0.15 * Math.sin(T * 1.6);
+  for (let ni = 0; ni < 256; ni++) { const n = ni / 255; LN[ni] = (sh + 0.2 * Math.sin(T * 2.3 + n * 9)); }
+  const W = FM.W, TS = FM.TS, DI = FM.dist, NZ = FM.nz;
+  for (let ty = Math.floor(hy / TS); ty <= Math.floor((hy1 - 1) / TS); ty++) for (let tx = Math.floor(hx / TS); tx <= Math.floor((hx1 - 1) / TS); tx++) {
+    const a = FM.tiles.get(tx + ty * FM.tw); if (!a) continue;
+    for (let q = 0; q < a.length; q++) {
+      const k = a[q], X = k % W, Y = (k - X) / W; if (X < hx || X >= hx1 || Y < hy || Y >= hy1) continue;
+      const di = DI[k], ni = NZ[k];
+      const v = (LD[di] + LS[di] * LN[ni]) * (0.3 + 0.8 * ni / 255);   // пена рваная, а не сплошная
+      if (v < 0.03) continue;
+      const o = ((Y - hy) * w + (X - hx)) * 4; out[o] = 238; out[o + 1] = 247; out[o + 2] = 252; out[o + 3] = v > 1 ? 255 : v * 255;
+    }
+  }
+  cx.putImageData(FM.img, 0, 0);
 }
 function waveFrame(now) {
   requestAnimationFrame(waveFrame);
   const cv = $('wavecv'); if (!cv) return;
-  const show = WV.on && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
+  const show = (WV.on || WV.foam) && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
   if (!show) { if (cv.width) cv.width = 0; WV.last = now; return; }
   if (now - WV.last < 40) return;
   const dt = Math.min(0.2, (now - WV.last) / 1000); WV.last = now; WV.t += dt;
   wavesInit(); if (!WV.pts) return;
   const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
-  if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
-  const x = cv.getContext('2d'), v = UI.view, z = v.z;
-  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
-  const zs = z * MAPINFO.W / 5298;
-  const lod = zs < 0.4 ? 1 : zs < 0.7 ? 2 : 4;                     // на отдалении — реже
-  const scr = clamp(26 * zs, 13, 44), a0 = clamp(0.55 + zs * 0.2, 0.55, 0.9);   // размер на экране, px
-  const vx0 = -v.x / z - 40, vy0 = -v.y / z - 40, vx1 = vx0 + Wd / z + 80, vy1 = vy0 + Hd / z + 80, T = WV.t;
-  for (const p of WV.pts) {
-    if (p.lod >= lod) continue;
-    const drift = Math.sin(T * 0.13 * p.sp + p.ph) * 6;            // покачивание по ветру
-    const px = p.x + drift, py = p.y;
-    if (px < vx0 || px > vx1 || py < vy0 || py > vy1) continue;
-    const life = Math.sin(T * p.sp + p.ph); if (life <= 0.1) continue;   // гребешок вырастает и тает
-    const a = (life - 0.1) / 0.9;
-    const w = scr * p.sz * (0.7 + 0.3 * a), h = w * 24 / 64;
-    x.globalAlpha = a * a0;
-    x.drawImage(WV.spr[p.f], dpr * (v.x + px * z) - w * dpr / 2, dpr * (v.y + py * z) - h * dpr / 2 - a * 2 * dpr, w * dpr, h * dpr);
+  const CW = Math.round(Wd * dpr), CH = Math.round(Hd * dpr);
+  if (cv.width !== CW || cv.height !== CH) { cv.width = CW; cv.height = CH; cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
+  const x = cv.getContext('2d'), v = UI.view, z = v.z, T = WV.t, M = MAPINFO;
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
+  const zs = z * M.W / 5298;
+  const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
+  // медленный слой (блики, прибой, маска моря) — в отдельный холст ~8 раз в секунду; между обновлениями только сдвигается вместе с картой
+  if (!WV.slow) WV.slow = document.createElement('canvas');
+  const SL = WV.slow;
+  if (SL.width !== CW || SL.height !== CH) { SL.width = CW; SL.height = CH; WV.st = 0; }
+  const moving = performance.now() - (UI.lastMove || 0) < 150;
+  if (now - (WV.st || 0) > (moving ? 260 : zs < 0.8 ? 220 : 120)) {
+    WV.st = now; WV.sv = { x: v.x, y: v.y, z };
+    const x = SL.getContext('2d'), mapT = () => x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
+    x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
+    if (WV.on) {
+    // 1) блики-рябь: два слоя плитки, плывут в разные стороны — переливаются
+      const ra = clamp((zs - 0.35) * 0.35, 0, 0.2);
+      if (ra > 0.01) {
+        const pat = x.createPattern(WV.rip, 'repeat');
+        for (const [sx, sy, sc, a] of [[7, 3, 0.62, 1], [-5, 6, 0.45, 0.75]]) {
+          mapT(); x.translate((T * sx) % (256 * sc), (T * sy) % (256 * sc)); x.scale(sc, sc);
+          x.globalAlpha = ra * a; x.fillStyle = pat; const m = 256; x.fillRect((vx0 - T * sx) / sc - m, (vy0 - T * sy) / sc - m, (vx1 - vx0) / sc + 2 * m, (vy1 - vy0) / sc + 2 * m);
+        }
+        x.globalAlpha = 1;
+      }
+    }
+    // 4) прибой: полосы пены накатывают к берегу и тают у кромки (расстояние до берега — foam.png)
+  if (WV.foam && FM.ok && zs > 0.4) {
+    foamUpdate(vx0, vy0, vx1, vy1, T);
+    if (FM.cv && FM.cv.width) { mapT(); x.imageSmoothingEnabled = true; x.drawImage(FM.cv, FM.hx * 2, FM.hy * 2, FM.cv.width * 2, FM.cv.height * 2); }
   }
-  x.globalAlpha = 1;
+  // маска открытого моря: всё, что вне моря (суша, реки, озёра), стираем
+  if (WV.mask) { x.globalCompositeOperation = 'destination-in'; x.globalAlpha = 1; mapT(); x.imageSmoothingEnabled = true; x.drawImage(WV.mask, 0, 0, M.W, M.H); x.globalCompositeOperation = 'source-over'; }
+  }
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
+  if (WV.sv) { const s = WV.sv, kz = z / s.z; x.imageSmoothingEnabled = true; x.drawImage(SL, dpr * (v.x - s.x * kz), dpr * (v.y - s.y * kz), CW * kz, CH * kz); }
+  if (WV.on) {
+    // 2) гребни: рождаются, катятся по ветру, разбиваются в пену и тают; 3) искры солнца
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    const lod = zs < 0.4 ? 1 : zs < 0.7 ? 2 : 4, scr = clamp(44 * zs, 22, 80), a0 = clamp(0.6 + zs * 0.15, 0.6, 0.95);
+    for (const p of WV.pts) {
+      if (p.lod >= lod) continue;
+      const ph = (T * p.sp + p.ph) % 1, travel = ph * 26;   // путь гребня за жизнь, px карты
+      const px = p.x + travel - 13, py = p.y + ph * 3;
+      if (px < vx0 - 60 || px > vx1 + 60 || py < vy0 - 40 || py > vy1 + 40) continue;
+      const sx = dpr * (v.x + px * z), sy = dpr * (v.y + py * z), w = scr * p.sz * dpr, h = w * 52 / 120;
+      const grow = clamp(ph / 0.15, 0, 1), brk = clamp((ph - 0.55) / 0.2, 0, 1), fade = 1 - clamp((ph - 0.75) / 0.25, 0, 1);
+      x.save(); x.translate(sx, sy); x.rotate(p.rot); x.scale(1, 0.55 + 0.45 * grow);
+      if (brk < 1) { x.globalAlpha = a0 * grow * (1 - brk); x.drawImage(WV.spr.crest[p.f], -w / 2, -h * 0.65, w, h); }
+      if (brk > 0) { x.globalAlpha = a0 * brk * fade; x.drawImage(WV.spr.br[p.f], -w / 2 * (1 + 0.15 * brk), -h * 0.65, w * (1 + 0.15 * brk), h); }
+      x.restore();
+      if (p.gl && zs > 0.5) { const g = Math.pow(Math.max(0, Math.sin((T * 1.3 + p.ph * 40) % 6.283)), 40); if (g > 0.05) { const ss = 14 * dpr * (0.6 + g); x.globalAlpha = g * 0.9; x.drawImage(WV.spr.spark, sx + 30 * dpr - ss / 2, sy - 20 * dpr - ss / 2, ss, ss); } }
+    }
+    x.globalAlpha = 1;
+  }
 }
 if (!HEADLESS) requestAnimationFrame(waveFrame);
 
@@ -1133,33 +1228,45 @@ eventHook = (ev, opts) => new Promise(res => {
 });
 function showMenu() {
   modal(`<h2>Меню</h2><div class="small muted" style="margin:-6px 0 8px">${typeof GAME_VERSION !== 'undefined' ? esc(versionText(GAME_VERSION)) : ''}</div><div class="btnrow" style="flex-direction:column">
-   <button id="mStyle">Стиль карты: ${STYLENAMES[MAPSTYLE] || MAPSTYLE} (сменить — страница перезагрузится, игра сохранится)</button>
    <button id="mSave">Сохранить</button><button id="mLoad">Загрузить сохранение</button>
+   <button id="mGfx">Графика ▸</button>
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
-   <button id="mRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
-   <button id="mWv">${WV.on ? 'Волны: включены (выключить)' : 'Волны: выключены (включить)'}</button>
-   <button id="mCl">${CL.on ? 'Облака: включены (выключить)' : 'Облака: выключены (включить)'}</button>
-   <button id="mSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
-   <button id="mPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
-   <button id="mNames">Скачать мои названия (файл)</button>
    <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
+   <button id="mNames">Скачать мои названия (файл)</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
   $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
   $('mLoad').onclick = () => { if (load()) { closeModal(); renderAll(); toast('Загружено.'); } else toast('Сохранения нет.'); };
+  $('mGfx').onclick = showGfxMenu;
   $('mAuto').onclick = () => { G.autoBattle = !G.autoBattle; closeModal(); renderAll(); };
   $('mSnd').onclick = () => { SFX.toggle(); showMenu(); };
-  $('mSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; try { localStorage.setItem('poly_sborder', UI.sborder); } catch (e) { } VEC.cache = null; scheduleVector(); showMenu(); };
   $('mNames').onclick = exportNames;
-  $('mWv').onclick = () => { WV.on = !WV.on; try { localStorage.setItem('poly_waves', WV.on ? 'on' : 'off'); } catch (e) { } showMenu(); };
-  $('mCl').onclick = () => { CL.on = !CL.on; try { localStorage.setItem('poly_clouds', CL.on ? 'on' : 'off'); } catch (e) { } showMenu(); };
-  $('mStyle').onclick = () => { save(); try { localStorage.setItem('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); } catch (e) { } location.reload(); };
   $('mAP').onclick = () => { UI.autoPause = !UI.autoPause; try { localStorage.setItem('poly_autopause', UI.autoPause ? 'on' : 'off'); } catch (e) { } showMenu(); };
-  $('mPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; try { localStorage.setItem('poly_passcol', UI.passcol); } catch (e) { } scheduleVector(); showMenu(); };
-  $('mRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; try { localStorage.setItem('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); } catch (e) { } drawOverlay(); PIX.vtKey = ''; scheduleVector(); showMenu(); };
   $('mHelp').onclick = showHelp;
   $('mNew').onclick = () => { if (confirm('Начать новую игру? Текущая партия будет потеряна.')) { closeModal(); startNew(); } };
   $('mClose').onclick = closeModal;
+}
+// все настройки внешнего вида — в одном окне
+function showGfxMenu() {
+  const onoff = v => v ? 'включены' : 'выключены';
+  modal(`<h2>Графика</h2><div class="btnrow" style="flex-direction:column">
+   <button id="gStyle">Стиль карты: ${STYLENAMES[MAPSTYLE] || MAPSTYLE} (сменить — страница перезагрузится, игра сохранится)</button>
+   <button id="gRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
+   <button id="gSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
+   <button id="gPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
+   <button id="gCl">Облака: ${onoff(CL.on)}</button>
+   <button id="gWv">Волны и блики на море: ${onoff(WV.on)}</button>
+   <button id="gFm">Пена у берегов: ${onoff(WV.foam)}</button>
+   <button id="gBack">← Назад</button><button id="gClose" class="main">Закрыть</button></div>`);
+  const st = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
+  $('gStyle').onclick = () => { save(); st('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); location.reload(); };
+  $('gRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; st('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); drawOverlay(); PIX.vtKey = ''; scheduleVector(); showGfxMenu(); };
+  $('gSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; st('poly_sborder', UI.sborder); VEC.cache = null; scheduleVector(); showGfxMenu(); };
+  $('gPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; st('poly_passcol', UI.passcol); scheduleVector(); showGfxMenu(); };
+  $('gCl').onclick = () => { CL.on = !CL.on; st('poly_clouds', CL.on ? 'on' : 'off'); showGfxMenu(); };
+  $('gWv').onclick = () => { WV.on = !WV.on; st('poly_waves', WV.on ? 'on' : 'off'); showGfxMenu(); };
+  $('gFm').onclick = () => { WV.foam = !WV.foam; st('poly_foam', WV.foam ? 'on' : 'off'); showGfxMenu(); };
+  $('gBack').onclick = showMenu; $('gClose').onclick = closeModal;
 }
 function showHelp() {
   modal(`<h2>Как играть</h2>
