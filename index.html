@@ -166,7 +166,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 71, "date": "08.11.2026 15:05"};
+const GAME_VERSION = {"v": 72, "date": "08.11.2026 15:17"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -3088,15 +3088,25 @@ if (!HEADLESS) { const im = new Image(); im.onload = () => { try {
   const PH = 128, L2 = new Float32Array(256 * PH);
   const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
   for (let pi = 0; pi < PH; pi++) {
-    const p = pi / PH, u = p / 0.65, q = (p - 0.55) / 0.45;
-    const sA = 4.3 - 3.6 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, u))), iA = u <= 1 ? 0.42 * ss(0, 0.3, u) * (0.7 + 0.3 * u) : 0, wA = 0.55 + 0.25 * Math.min(1, u);   // волна подходит к берегу
-    const cW = 0.6 + 0.8 * Math.max(0, q), iW = q > 0 ? 0.62 * ss(0, 0.15, q) * Math.pow(1 - Math.min(1, q), 1.4) : 0, wW = 0.5 + 0.9 * Math.max(0, q);   // разбивается и откатывается пеной
+    const p = pi / PH, u = p / 0.65;
+    const sA = 4.3 - 3.6 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, u))), iA = u <= 1 ? 0.42 * ss(0, 0.3, u) * (0.7 + 0.3 * u) * (1 - ss(0.78, 1, u)) : 0, wA = 0.55 + 0.25 * Math.min(1, u);   // волна подходит к берегу и тает у кромки (дальше — всплески)
     for (let di = 0; di < 256; di++) {
-      const dd = di / 40 - 1, eA = (dd - sA) / wA, eW = (dd - cW) / wW;   // расстояние со знаком: <0 — суша
-      L2[di * PH + pi] = (iA * Math.exp(-eA * eA) + iW * Math.exp(-eW * eW) + 0.13 * Math.exp(-(dd * dd) / 0.55)) * (1 - ss(3.6, 5.2, dd)) * ss(-0.15, 0.3, dd);   // к краю полосы и к суше — плавно в ноль
+      const dd = di / 40 - 1, eA = (dd - sA) / wA;   // расстояние со знаком: <0 — суша
+      L2[di * PH + pi] = (iA * Math.exp(-eA * eA) + 0.06 * Math.exp(-(dd * dd) / 0.55))   // + едва заметная тихая кромка * (1 - ss(3.6, 5.2, dd)) * ss(-0.15, 0.3, dd);   // к краю полосы и к суше — плавно в ноль
     }
   }
-  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, df, band, nz, ang, str, sea, L2, PH, SA: new Float32Array(256), cv: document.createElement('canvas') });
+  // места всплесков: у самой кромки, не чаще чем через 4 пикселя (≈8 px карты)
+  const seen = new Set(), sp = [];
+  for (let k = 0; k < W * H; k++) {
+    if (!band[k]) continue; const dd = df[k] / 40 - 1; if (dd < 0.15 || dd > 0.95) continue;
+    const X = k % W, Y = (k - X) / W, key = (X >> 2) + ',' + (Y >> 2); if (seen.has(key)) continue; seen.add(key);
+    sp.push(X * 2 + 1, Y * 2 + 1, ang[k], str[k], nz[k]);
+  }
+  const SPL = { n: sp.length / 5, d: Float32Array.from(sp) };
+  // тайлы по 64 px карты — быстро находить видимые
+  SPL.cell = 64; SPL.cw = Math.ceil(W * 2 / 64); SPL.idx = new Map();
+  for (let i = 0; i < SPL.n; i++) { const c = Math.floor(SPL.d[i * 5] / 64) + Math.floor(SPL.d[i * 5 + 1] / 64) * SPL.cw; let a = SPL.idx.get(c); if (!a) SPL.idx.set(c, a = []); a.push(i); }
+  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, df, band, nz, ang, str, sea, L2, PH, SA: new Float32Array(256), cv: document.createElement('canvas'), SPL });
 } catch (e) { } }; FM.im = im; }
 function foamLoad() { if (!FM.started && WV.md) { FM.started = true; FM.im.src = 'foam.png'; } }
 function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
@@ -3139,6 +3149,42 @@ function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
     }
   }
   cx.putImageData(FM.img, 0, 0);
+}
+// всплеск: когда волна доходит до кромки, в случайных местах (на наветренных берегах чаще) — короткая вспышка брызг
+let SPD = null;
+function splashDot() { const c = document.createElement('canvas'); c.width = c.height = 32; const x = c.getContext('2d'), g = x.createRadialGradient(16, 16, 0, 16, 16, 16); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.45, 'rgba(250,253,255,.75)'); g.addColorStop(1, 'rgba(240,248,252,0)'); x.fillStyle = g; x.fillRect(0, 0, 32, 32); return c; }
+function splashes(x, v, z, dpr, vx0, vy0, vx1, vy1, T) {
+  const S = FM.SPL; if (!S) return; if (!SPD) SPD = splashDot();
+  const zs = z * MAPINFO.W / 5298; if (zs < 0.55) return;
+  const th = Math.atan2(WIND[1], WIND[0]) + 0.45 * Math.sin(T / 190), c = Math.cos(th), s = Math.sin(th), LAM = 60, PER = 8, T0 = T / PER, DUR = 1.4;
+  const tide = 0.82 + 0.18 * Math.sin(T * 2 * Math.PI / 80), D = S.d, fr = t => t - Math.floor(t);
+  const hash = (a, b) => fr(Math.sin(a * 12.9898 + b * 78.233) * 43758.5453);
+  const skip = zs < 0.9 ? 3 : zs < 1.5 ? 2 : 1;   // вдали — реже
+  for (let cy = Math.floor((vy0 - 8) / S.cell); cy <= Math.floor((vy1 + 8) / S.cell); cy++) for (let cx = Math.floor((vx0 - 8) / S.cell); cx <= Math.floor((vx1 + 8) / S.cell); cx++) {
+    const list = S.idx.get(cx + cy * S.cw); if (!list) continue;
+    for (const i of list) {
+      if (i % skip) continue;
+      const X = D[i * 5], Y = D[i * 5 + 1], a = D[i * 5 + 2] / 255 * 2 * Math.PI, st = D[i * 5 + 3] / 255, n = D[i * 5 + 4];
+      // момент удара волны в этой точке — по той же фазе, что и прибой (плюс случайная задержка до 0,7 с)
+      const raw = (X / 2 * c + Y / 2 * s) / LAM - T0 + n * 0.0011 - 0.6, cyc = Math.floor(raw), jit = hash(i, 7.1) * 0.7;
+      const age = (raw - cyc) * PER - jit; if (age < 0 || age > DUR) continue;
+      const f = (1 - Math.cos(a - th)) / 2, sa = (0.2 + 0.8 * Math.pow(f, 1.6)) * tide * (0.45 + 0.55 * st);   // наветренный и открытый берег — чаще и сильнее
+      if (hash(i, cyc) > sa * 0.75) continue;   // каждый раз — другие места
+      const t = age / DUR, fade = Math.pow(1 - t, 1.6) * Math.min(1, age / 0.12), k = dpr * z, P = 0.8 + 0.7 * sa;
+      const sx = dpr * v.x + X * k, sy = dpr * v.y + Y * k;
+      // облачко брызг расширяется и тает
+      const r0 = (1.2 + 2.6 * (1 - Math.pow(1 - t, 2))) * P * k;
+      x.globalAlpha = Math.min(0.75, 0.5 * fade * P); x.drawImage(SPD, sx - r0, sy - r0, r0 * 2, r0 * 2);
+      // капли разлетаются в сторону моря и вдоль берега, замедляясь
+      const nd = 4 + ((hash(i, 3.3) * 4) | 0);
+      for (let j = 0; j < nd; j++) {
+        const h1 = hash(i * 7 + j, 1.7), h2 = hash(i * 7 + j, 2.9), da = a + (h1 - 0.5) * 2.6, dist = (1.5 + 4.5 * h2) * P * (1 - Math.pow(1 - t, 3)) * k;
+        const rr = (0.35 + 0.45 * hash(i * 7 + j, 4.1)) * P * k * (1 - 0.4 * t);
+        x.globalAlpha = 0.8 * fade; x.drawImage(SPD, sx + Math.cos(da) * dist - rr, sy + Math.sin(da) * dist - rr, rr * 2, rr * 2);
+      }
+    }
+  }
+  x.globalAlpha = 1;
 }
 function waveFrame(now) {
   requestAnimationFrame(waveFrame);
@@ -3193,6 +3239,7 @@ function waveFrame(now) {
       x.drawImage(FM.cv, FM.hx * 2, FM.hy * 2, FM.cv.width * 2 / FM.K, FM.cv.height * 2 / FM.K);
       x.setTransform(1, 0, 0, 1, 0, 0);
     }
+    splashes(x, v, z, dpr, vx0, vy0, vx1, vy1, T);
   }
   if (WV.on) {
     // 2) зыбь: редкие тонкие линии медленно проявляются, плывут по ветру и тают (цикл 20–30 с)
