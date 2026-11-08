@@ -820,37 +820,72 @@ function wavesInit() {
   WV.spr = { swell: [0, 1, 2, 3, 4, 5].map(i => swellSprite(311 + i * 97)) };
   WV.rip = rippleTile();
 }
-/* --- прибой: полосы пены по заранее посчитанному расстоянию до берега (foam.png, половинное разрешение) --- */
+/* --- прибой (foam.png, половинное разрешение): R — расстояние до берега (у маленьких островов «сжато»), G — шум,
+   B — направление от берега в море, A — открытость берега. Волны идут по ветру: наветренный берег получает сильный прибой,
+   подветренный — слабый, бухты тише открытых берегов. Обновляется каждый кадр — без рывков. --- */
 const FM = { ok: false };
 if (!HEADLESS) { const im = new Image(); im.onload = () => { try {
   const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0);
   const d = x.getImageData(0, 0, c.width, c.height).data, W = c.width, H = c.height, TS = 32, tw = Math.ceil(W / TS);
-  const tiles = new Map(), dist = new Uint8Array(W * H), nz = new Uint8Array(W * H);
-  for (let k = 0; k < W * H; k++) { if (!d[k * 4 + 3]) continue; dist[k] = d[k * 4]; nz[k] = d[k * 4 + 1]; const t = Math.floor((k % W) / TS) + Math.floor(Math.floor(k / W) / TS) * tw; let a = tiles.get(t); if (!a) tiles.set(t, a = []); a.push(k); }
+  const tiles = new Map(), dist = new Uint8Array(W * H), nz = new Uint8Array(W * H), ang = new Uint8Array(W * H), str = new Uint8Array(W * H);
+  for (let k = 0; k < W * H; k++) { if (!d[k * 4 + 3]) continue; dist[k] = d[k * 4]; nz[k] = d[k * 4 + 1]; ang[k] = d[k * 4 + 2]; str[k] = d[k * 4 + 3]; const t = Math.floor((k % W) / TS) + Math.floor(Math.floor(k / W) / TS) * tw; let a = tiles.get(t); if (!a) tiles.set(t, a = []); a.push(k); }
+  // поле для плавной интерполяции: суша 0, полоса — расстояние, дальнее море 255; плюс пиксели суши у самой полосы (для гладкой кромки)
+  const df = new Uint8Array(W * H), band = new Uint8Array(W * H), sea = WV.md && WV.mw === W ? WV.md : null;
+  for (let k = 0; k < W * H; k++) band[k] = d[k * 4 + 3] ? 1 : 0;
+  for (let k = 0; k < W * H; k++) df[k] = d[k * 4 + 3] ? d[k * 4] : (sea && sea[k] > 127 ? 255 : 0);
   for (const [t, a] of tiles) tiles.set(t, Int32Array.from(a));
-  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, nz, cv: document.createElement('canvas') });
-} catch (e) { } }; im.src = 'foam.png'; }
-function foamUpdate(vx0, vy0, vx1, vy1, T) {
-  const hx = Math.max(0, Math.floor(vx0 / 2) - 2), hy = Math.max(0, Math.floor(vy0 / 2) - 2), hx1 = Math.min(FM.W, Math.ceil(vx1 / 2) + 2), hy1 = Math.min(FM.H, Math.ceil(vy1 / 2) + 2);
+  // форма набегающей волны: L2[расстояние(256) × фаза(128)]
+  const PH = 128, L2 = new Float32Array(256 * PH);
+  const ss = (a, b, t) => { t = Math.min(1, Math.max(0, (t - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let pi = 0; pi < PH; pi++) {
+    const p = pi / PH, u = p / 0.65, q = (p - 0.55) / 0.45;
+    const sA = 4.3 - 3.6 * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, u))), iA = u <= 1 ? 0.42 * ss(0, 0.3, u) * (0.7 + 0.3 * u) : 0, wA = 0.55 + 0.25 * Math.min(1, u);   // волна подходит к берегу
+    const cW = 0.6 + 0.8 * Math.max(0, q), iW = q > 0 ? 0.62 * ss(0, 0.15, q) * Math.pow(1 - Math.min(1, q), 1.4) : 0, wW = 0.5 + 0.9 * Math.max(0, q);   // разбивается и откатывается пеной
+    for (let di = 0; di < 256; di++) {
+      const dd = di / 40 - 1, eA = (dd - sA) / wA, eW = (dd - cW) / wW;   // расстояние со знаком: <0 — суша
+      L2[di * PH + pi] = (iA * Math.exp(-eA * eA) + iW * Math.exp(-eW * eW) + 0.13 * Math.exp(-(dd * dd) / 0.55)) * (1 - ss(3.6, 5.2, dd)) * ss(-0.15, 0.3, dd);   // к краю полосы и к суше — плавно в ноль
+    }
+  }
+  Object.assign(FM, { ok: true, W, H, TS, tw, tiles, dist, df, band, nz, ang, str, sea, L2, PH, SA: new Float32Array(256), cv: document.createElement('canvas') });
+} catch (e) { } }; FM.im = im; }
+function foamLoad() { if (!FM.started && WV.md) { FM.started = true; FM.im.src = 'foam.png'; } }
+function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
+  const hx = Math.max(0, Math.floor(vx0 / 2) - 2), hy = Math.max(0, Math.floor(vy0 / 2) - 2), hx1 = Math.min(FM.W - 1, Math.ceil(vx1 / 2) + 2), hy1 = Math.min(FM.H - 1, Math.ceil(vy1 / 2) + 2);
   const w = hx1 - hx, h = hy1 - hy; if (w <= 0 || h <= 0) return;
-  const cv = FM.cv; if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; FM.img = null; }
-  const cx = cv.getContext('2d'); if (!FM.img) FM.img = cx.createImageData(w, h);
-  const out = FM.img.data; out.fill(0); FM.hx = hx; FM.hy = hy;
-  // таблицы на этот кадр: полосы прибоя по расстоянию (индекс = расстояние × 28) и мерцание кромки по «шуму»
-  // одна тонкая полоса у берега: медленно набегает и отступает (период ~7 с), яркость «дышит»
-  const LD = FM.LD || (FM.LD = new Float32Array(256)), LS = FM.LS || (FM.LS = new Float32Array(256)), LN = FM.LN || (FM.LN = new Float32Array(256));
-  const br = 0.5 + 0.5 * Math.sin(T * 0.9), pos = 0.9 + 0.8 * (0.5 + 0.5 * Math.sin(T * 0.9 - 1.2));
-  for (let di = 0; di < 256; di++) { const dd = di / 28, e = (dd - pos) / 0.7; LD[di] = (0.3 + 0.25 * br) * Math.exp(-e * e); LS[di] = 0.22 * Math.exp(-(dd * dd) / 0.5); }
-  for (let ni = 0; ni < 256; ni++) LN[ni] = 1;
-  const W = FM.W, TS = FM.TS, DI = FM.dist, NZ = FM.nz;
+  const cv = FM.cv, CWk = w * K, CHk = h * K; if (cv.width !== CWk || cv.height !== CHk) { cv.width = CWk; cv.height = CHk; FM.img = null; }
+  const cx = cv.getContext('2d'); if (!FM.img) FM.img = cx.createImageData(CWk, CHk);
+  const out = FM.img.data, key = hx + ',' + hy + ',' + K; if (FM.key !== key) { out.fill(0); FM.key = key; } FM.hx = hx; FM.hy = hy; FM.K = K;
+  // волны идут по ветру (как облака), направление медленно гуляет ±25°, общий «прилив» — сила то нарастает, то спадает
+  const th = Math.atan2(WIND[1], WIND[0]) + 0.45 * Math.sin(T / 190), c = Math.cos(th), s = Math.sin(th);
+  const tide = 0.82 + 0.18 * Math.sin(T * 2 * Math.PI / 80);
+  const SA = FM.SA; for (let b = 0; b < 256; b++) { const a = b / 255 * 2 * Math.PI, f = (1 - Math.cos(a - th)) / 2; SA[b] = (0.2 + 0.8 * Math.pow(f, 1.6)) * tide; }   // берег навстречу волне — сильнее
+  const LAM = 60, PER = 8, PH = FM.PH, L2 = FM.L2, T0 = T / PER;
+  const W = FM.W, TS = FM.TS, DF = FM.df, NZ = FM.nz, AN = FM.ang, ST = FM.str, SE = FM.sea, KK = FM.KK || (FM.KK = new Float32Array(FM.W * FM.H));
+  if (K > 1)   // сила прибоя по пикселям — для плавной интерполяции между соседями
+    for (let ty = Math.floor(hy / TS); ty <= Math.floor((hy1 - 1) / TS); ty++) for (let tx = Math.floor(hx / TS); tx <= Math.floor((hx1 - 1) / TS); tx++) {
+      const a = FM.tiles.get(tx + ty * FM.tw); if (!a) continue;
+      for (let q = 0; q < a.length; q++) { const k = a[q]; KK[k] = SA[AN[k]] * (0.45 + 0.0022 * ST[k]) * (0.72 + 0.0022 * NZ[k]); }
+    }
   for (let ty = Math.floor(hy / TS); ty <= Math.floor((hy1 - 1) / TS); ty++) for (let tx = Math.floor(hx / TS); tx <= Math.floor((hx1 - 1) / TS); tx++) {
     const a = FM.tiles.get(tx + ty * FM.tw); if (!a) continue;
     for (let q = 0; q < a.length; q++) {
       const k = a[q], X = k % W, Y = (k - X) / W; if (X < hx || X >= hx1 || Y < hy || Y >= hy1) continue;
-      const di = DI[k], ni = NZ[k];
-      const v = (LD[di] + LS[di]) * (0.6 + 0.5 * ni / 255);   // чуть неровная, но спокойная
-      if (v < 0.03) continue;
-      const o = ((Y - hy) * w + (X - hx)) * 4; out[o] = 238; out[o + 1] = 247; out[o + 2] = 252; out[o + 3] = v > 1 ? 255 : v * 255;
+      const n = NZ[k], kk = SA[AN[k]] * (0.45 + 0.0022 * ST[k]) * (0.72 + 0.0022 * n), nph = n * 0.0011;
+      if (K === 1) {
+        if (!FM.band[k]) continue;
+        let ph = (X * c + Y * s) / LAM - T0 + nph; ph -= Math.floor(ph);   // фронт волны идёт по ветру — вдоль берега прибой «бежит»
+        const v = L2[DF[k] * PH + ((ph * PH) | 0)] * kk, o = ((Y - hy) * w + (X - hx)) * 4;
+        out[o] = 240; out[o + 1] = 248; out[o + 2] = 252; out[o + 3] = v > 1 ? 255 : v * 255; continue;
+      }
+      // вблизи — K×K подпикселей: расстояние и «море/суша» плавно интерполируются → гладкие кромки
+      for (let sy = 0; sy < K; sy++) for (let sx = 0; sx < K; sx++) {
+        const fx = X + (sx + 0.5) / K - 0.5, fy = Y + (sy + 0.5) / K - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0, i0 = y0 * W + x0;
+        const d00 = DF[i0], d10 = DF[i0 + 1], d01 = DF[i0 + W], d11 = DF[i0 + W + 1];
+        const dd = (d00 * (1 - ax) + d10 * ax) * (1 - ay) + (d01 * (1 - ax) + d11 * ax) * ay;
+        let v = 0;
+        if (dd < 250) { let ph = (fx * c + fy * s) / LAM - T0 + nph; ph -= Math.floor(ph); const ki = (KK[i0] * (1 - ax) + KK[i0 + 1] * ax) * (1 - ay) + (KK[i0 + W] * (1 - ax) + KK[i0 + W + 1] * ax) * ay; v = L2[(dd | 0) * PH + ((ph * PH) | 0)] * ki; }
+        const o = (((Y - hy) * K + sy) * CWk + (X - hx) * K + sx) * 4; out[o] = 240; out[o + 1] = 248; out[o + 2] = 252; out[o + 3] = v > 1 ? 255 : v * 255;
+      }
     }
   }
   cx.putImageData(FM.img, 0, 0);
@@ -860,7 +895,7 @@ function waveFrame(now) {
   const cv = $('wavecv'); if (!cv) return;
   const show = (WV.on || WV.foam) && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
   if (!show) { if (cv.width) cv.width = 0; WV.last = now; return; }
-  if (now - WV.last < 40) return;
+  if (now - WV.last < 33) return;
   const dt = Math.min(0.2, (now - WV.last) / 1000); WV.last = now; WV.t += dt;
   wavesInit(); if (!WV.pts) return;
   const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
@@ -870,7 +905,7 @@ function waveFrame(now) {
   x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
   const zs = z * M.W / 5298;
   const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
-  // медленный слой (блики, прибой, маска моря) — в отдельный холст ~8 раз в секунду; между обновлениями только сдвигается вместе с картой
+  // медленный слой (мягкий свет + маска моря) — в отдельный холст ~8 раз в секунду; между обновлениями только сдвигается вместе с картой
   if (!WV.slow) WV.slow = document.createElement('canvas');
   const SL = WV.slow;
   if (SL.width !== CW || SL.height !== CH) { SL.width = CW; SL.height = CH; WV.st = 0; }
@@ -891,23 +926,31 @@ function waveFrame(now) {
         x.globalAlpha = 1;
       }
     }
-    // 3) прибой: одна тонкая полоса у берега медленно набегает и отступает (расстояние до берега — foam.png)
-  if (WV.foam && FM.ok && zs > 0.4) {
-    foamUpdate(vx0, vy0, vx1, vy1, T);
-    if (FM.cv && FM.cv.width) { mapT(); x.imageSmoothingEnabled = true; x.drawImage(FM.cv, FM.hx * 2, FM.hy * 2, FM.cv.width * 2, FM.cv.height * 2); }
-  }
   // маска открытого моря: всё, что вне моря (суша, реки, озёра), стираем
   if (WV.mask) { x.globalCompositeOperation = 'destination-in'; x.globalAlpha = 1; mapT(); x.imageSmoothingEnabled = true; x.drawImage(WV.mask, 0, 0, M.W, M.H); x.globalCompositeOperation = 'source-over'; }
   }
   x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
   if (WV.sv) { const s = WV.sv, kz = z / s.z; x.imageSmoothingEnabled = true; x.drawImage(SL, dpr * (v.x - s.x * kz), dpr * (v.y - s.y * kz), CW * kz, CH * kz); }
+  // 3) прибой — каждый кадр (плавно)
+  if (WV.foam) foamLoad();
+  if (WV.foam && FM.ok && zs > 0.4) {
+    WV.fc = (WV.fc || 0) + 1;
+    const K = z * dpr > 3.2 ? 3 : z * dpr > 1.7 ? 2 : 1;   // вблизи пена считается в 2–3 раза подробнее — гладкие кромки
+    const key = Math.max(0, Math.floor(vx0 / 2) - 2) + ',' + Math.max(0, Math.floor(vy0 / 2) - 2) + ',' + K;
+    if (zs >= 0.8 || WV.fc % 2 === 0 || FM.key !== key) foamUpdate(vx0, vy0, vx1, vy1, T, K);   // вдали — через кадр
+    if (FM.cv && FM.cv.width) {
+      x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'low';
+      x.drawImage(FM.cv, FM.hx * 2, FM.hy * 2, FM.cv.width * 2 / FM.K, FM.cv.height * 2 / FM.K);
+      x.setTransform(1, 0, 0, 1, 0, 0);
+    }
+  }
   if (WV.on) {
     // 2) зыбь: редкие тонкие линии медленно проявляются, плывут по ветру и тают (цикл 20–30 с)
     x.setTransform(1, 0, 0, 1, 0, 0);
     const lod = zs < 0.4 ? 1 : zs < 0.7 ? 2 : 4, a0 = clamp(0.3 + zs * 0.12, 0.3, 0.55);
     for (const p of WV.pts) {
       if (p.lod >= lod) continue;
-      const ph = (T * p.sp + p.ph) % 1, px = p.x + ph * 22 - 11, py = p.y;
+      const ph = (T * p.sp + p.ph) % 1, px = p.x + (ph * 22 - 11), py = p.y + (ph * 22 - 11) * WIND[1] / WIND[0];
       if (px < vx0 - 80 || px > vx1 + 80 || py < vy0 - 30 || py > vy1 + 30) continue;
       const a = Math.sin(Math.PI * ph); if (a < 0.05) continue;
       const w = clamp(62 * p.sz * z, 34, 170) * dpr, h = w * 24 / 160;
