@@ -166,7 +166,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 75, "date": "23.11.2026 23:11"};
+const GAME_VERSION = {"v": 76, "date": "23.11.2026 23:31"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2400,7 +2400,7 @@ const SEASND = (() => {
   const pick = (a, k) => { let i = Math.floor(R() * a.length); if (i === st[k] && a.length > 1) i = (i + 1) % a.length; st[k] = i; return a[i]; };   // не повторять одну запись подряд
   function gull(c, out, near) { const d = 0.55 + 0.45 * R(); play(c, out, pick(st.lib.gull, 'lastG'), 1.2 * d * (0.6 + 0.4 * near), (R() - 0.5) * 1.5, 3000 + 6000 * d); }
   function raptor(c, out) { const d = 0.4 + 0.6 * R(); play(c, out, pick(st.lib.raptor, 'lastR'), 0.75 * d, (R() - 0.5) * 1.6, 2500 + 6000 * d); }
-  function gust(c, out) { play(c, out, st.lib.gust[Math.floor(R() * st.lib.gust.length)], 0.5 + 0.3 * R(), (R() - 0.5) * 1.2, 0); }
+  function gust(c, out) { play(c, out, st.lib.gust[Math.floor(R() * st.lib.gust.length)], 0.35 + 0.2 * R(), (R() - 0.5) * 1.2, 0); }
   // что видно на экране: сетка точек — где рядом и море, и суша (берег), и где горы
   function level() {
     if (!G || UI.tab !== 'map' || $('app').classList.contains('hidden') || document.hidden || !WV.md || !MAPINFO) return [0, 0, 0];
@@ -2554,7 +2554,7 @@ let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
 // Попиксельная карта провинций: ids.png (номер провинции в цвете пикселя). Если браузер не даёт прочитать
 // пиксели (файл открыт с диска), остаётся запасная грубая сетка регионов.
 const PIX = { ids: null, w: 0, h: 0, s: 2, buf: null, provReg: null };
-const MAXZ = 6;   // запас приближения — под будущие объекты на карте
+const MAXZ = 16;   // запас приближения — под будущие объекты на карте
 function initMap() {
   const M = MAPINFO;
   ID_BY_IDX = M.ids;
@@ -2618,7 +2618,7 @@ function clampView() { const w = $('mapwrap').clientWidth, h = $('mapwrap').clie
 function applyView() {
   const z = UI.view.z, k = MAPINFO.W / 4000; // подписи держат читаемый размер при отдалении
 
-  $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.3, 2.2).toFixed(3));
+  $('markers').style.setProperty('--s', clamp(1.2 / (z * k), 0.03, 2.2).toFixed(4));   // вблизи значки не растут вместе с картой — войско ≈ ширине реки при сильном приближении
   $('markers').classList.toggle('far', z * k < 0.5 && REGION_DEFS.length > 40);
   $('markers').classList.toggle('near', z * k >= 1.5);
   const tp = $('ptip'); if (tp) tp.classList.add('hidden');
@@ -3281,11 +3281,76 @@ function foamUpdate(vx0, vy0, vx1, vy1, T, K) {
   }
   cx.putImageData(FM.img, 0, 0);
 }
+/* --- живая поверхность моря (WebGL, видеокарта): пологая зыбь со светотенью бежит по ветру + сетка солнечных бликов,
+   яркая на мелководье у берегов. Маска моря — sea.png; без WebGL остаётся прежнее «дыхание» света и линии зыби --- */
+const SGL = { ok: false, tried: false };
+function seaGLInit() {
+  if (SGL.tried || !WV.mask) return; SGL.tried = true;
+  try {
+    const cv = document.createElement('canvas'); cv.id = 'seagl'; cv.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:1';
+    $('mapwrap').insertBefore(cv, $('wavecv'));
+    const gl = cv.getContext('webgl', { premultipliedAlpha: true, preserveDrawingBuffer: true, alpha: true, antialias: false }); if (!gl) return;
+    const FS = `precision highp float;
+uniform vec2 uRes; uniform vec4 uView; uniform vec2 uMap; uniform float uT; uniform vec2 uWind; uniform sampler2D uSea, uSeaB;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return v; }
+void main(){
+  vec2 sp = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uView.w, mp = (sp - uView.xy) / uView.z;
+  float sea = texture2D(uSea, mp / uMap).a; if (sea < 0.01) { gl_FragColor = vec4(0.0); return; }
+  float shallow = clamp(1.0 - texture2D(uSeaB, mp / uMap).a, 0.0, 1.0), z = uView.z, T = uT;
+  vec3 L = normalize(vec3(-0.55, -0.6, 0.6));
+  // зыбь: 10 пологих волн разной длины, почти по ветру (две — встречная старая зыбь); мелкие на экране гасим — без муара
+  vec2 g = vec2(0.0); float base = atan(uWind.y, uWind.x);
+  for (int i = 0; i < 10; i++) {
+    float fi = float(i), lam = 10.0 + 4.5 * fi + 4.0 * hash(vec2(fi, 3.0));
+    float ang = base + (hash(vec2(fi, 7.0)) - 0.5) * 1.8 + (i > 7 ? 1.25 : 0.0);
+    vec2 d = vec2(cos(ang), sin(ang)); float k = 6.2832 / lam;
+    g += 0.085 * smoothstep(6.0, 14.0, lam * z) * (0.6 + 0.4 * hash(vec2(fi, 11.0))) * cos(dot(d, mp) * k - sqrt(3.3 * k) * T + 6.2832 * hash(vec2(fi, 5.0))) * d;
+  }
+  g *= 0.25 + 1.2 * smoothstep(0.3, 0.7, fbm(mp / 85.0 + uWind * T * 0.025));   // группы волн: где-то зыбь, где-то гладь
+  float sw = (dot(normalize(vec3(-g, 1.0)), L) - L.z) * 3.0 * smoothstep(0.45, 1.1, z);   // издали зыбь гаснет — без полосатого муара
+  // блики (каустика): у берегов ярче, в открытом море едва видны
+  vec2 p = mod(mp / 34.0 * 6.2832, 6.2832) - 250.0, q = p; float c = 1.0;
+  for (int n = 0; n < 4; n++) { float t = T * 0.22 * (1.0 - (3.5 / float(n + 1))); q = p + vec2(cos(t - q.x) + sin(t + q.y), sin(t - q.y) + cos(t + q.x));
+    c += 1.0 / length(vec2(p.x / (sin(q.x + t) / 0.005), p.y / (cos(q.y + t) / 0.005))); }
+  c = 1.17 - pow(c / 4.0, 1.4);
+  float ca = clamp(pow(abs(c), 8.0), 0.0, 1.0) * (0.08 + smoothstep(0.05, 0.45, shallow)) * smoothstep(2.5, 6.0, z * 34.0 / 6.0);
+  float Li = clamp(max(sw, 0.0) * 0.24 + ca * 0.5, 0.0, 0.7) * sea, Dk = min(1.0, max(-sw, 0.0)) * 0.2 * sea;
+  gl_FragColor = vec4(vec3(0.90, 0.96, 0.99) * Li + vec3(0.02, 0.10, 0.20) * Dk * (1.0 - Li), Li + Dk * (1.0 - Li));
+}`;
+    const sh = (t, src) => { const o = gl.createShader(t); gl.shaderSource(o, src); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, 'attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }')); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error('link'); gl.useProgram(pr);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const ap = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 2, gl.FLOAT, false, 0, 0);
+    const tex = (src, unit) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+      for (const [k, v] of [[gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); };
+    tex(WV.mask, 0);
+    const bc = document.createElement('canvas'); bc.width = WV.mask.width; bc.height = WV.mask.height; const bx = bc.getContext('2d'); bx.filter = 'blur(7px)'; bx.drawImage(WV.mask, 0, 0); tex(bc, 1);
+    const U = {}; for (const n of ['uRes', 'uView', 'uMap', 'uT', 'uWind', 'uSea', 'uSeaB']) U[n] = gl.getUniformLocation(pr, n);
+    gl.uniform1i(U.uSea, 0); gl.uniform1i(U.uSeaB, 1);
+    Object.assign(SGL, { ok: true, cv, gl, U });
+  } catch (e) { SGL.ok = false; }
+}
+function seaGLDraw(T, dpr, Wd, Hd, show) {
+  if (!SGL.ok) return false; const cv = SGL.cv, gl = SGL.gl, U = SGL.U;
+  if (!show) { if (cv.width) cv.width = 0; return true; }
+  const W = Math.round(Wd * dpr), H = Math.round(Hd * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
+  const v = UI.view, wl = Math.hypot(WIND[0], WIND[1]);
+  gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform2f(U.uRes, W, H); gl.uniform4f(U.uView, v.x, v.y, v.z, dpr); gl.uniform2f(U.uMap, MAPINFO.W, MAPINFO.H);
+  gl.uniform1f(U.uT, T); gl.uniform2f(U.uWind, WIND[0] / wl, WIND[1] / wl);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); return true;
+}
 function waveFrame(now) {
   requestAnimationFrame(waveFrame);
   const cv = $('wavecv'); if (!cv) return;
   const show = (WV.on || WV.foam) && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
-  if (!show) { if (cv.width) cv.width = 0; WV.last = now; return; }
+  if (!show) { if (cv.width) cv.width = 0; WV.last = now; seaGLDraw(0, 1, 0, 0, false); return; }
   if (now - WV.last < 33) return;
   const dt = Math.min(0.2, (now - WV.last) / 1000); WV.last = now; WV.t += dt;
   wavesInit(); if (!WV.pts) return;
@@ -3296,6 +3361,9 @@ function waveFrame(now) {
   x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
   const zs = z * M.W / 5298;
   const vx0 = -v.x / z, vy0 = -v.y / z, vx1 = vx0 + Wd / z, vy1 = vy0 + Hd / z;
+  // живая поверхность моря на видеокарте; если получилось — прежние «дыхание света» и линии зыби не нужны
+  if (WV.on) seaGLInit();
+  const gl = WV.on && seaGLDraw(T, dpr, Wd, Hd, true); if (!WV.on && SGL.ok) seaGLDraw(0, 1, 0, 0, false);
   // медленный слой (мягкий свет + маска моря) — в отдельный холст ~8 раз в секунду; между обновлениями только сдвигается вместе с картой
   if (!WV.slow) WV.slow = document.createElement('canvas');
   const SL = WV.slow;
@@ -3305,7 +3373,7 @@ function waveFrame(now) {
     WV.st = now; WV.sv = { x: v.x, y: v.y, z };
     const x = SL.getContext('2d'), mapT = () => x.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
     x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.clearRect(0, 0, CW, CH);
-    if (WV.on) {
+    if (WV.on && !gl) {
     // 1) «дыхание» света: два слоя крупных мягких пятен медленно плывут в разные стороны
       const ra = clamp(0.35 + zs * 0.12, 0.35, 0.6);
       if (ra > 0.01) {
@@ -3335,7 +3403,7 @@ function waveFrame(now) {
       x.setTransform(1, 0, 0, 1, 0, 0);
     }
   }
-  if (WV.on) {
+  if (WV.on && !gl) {
     // 2) зыбь: редкие тонкие линии медленно проявляются, плывут по ветру и тают (цикл 20–30 с)
     x.setTransform(1, 0, 0, 1, 0, 0);
     const lod = zs < 0.4 ? 1 : zs < 0.7 ? 2 : 4, a0 = clamp(0.3 + zs * 0.12, 0.3, 0.55);

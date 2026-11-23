@@ -61,8 +61,8 @@ for i, t0 in enumerate(gull_windows(load('user_gulls.mp3', '', 22050), 22050)):
     y = xg[int(t0 * SR):int((t0 + 3) * SR)]
     save(norm_rms(fades(y, 0.4, 0.6), -22), f'gull{i + 1}.mp3', 80); meta['gull'].append(f'gull{i + 1}.mp3')
 # ветер в горах: ровный фон (петля) и отдельные порывы
-save(norm_rms(load('wind_mild.wav', 'highpass=f=60,lowpass=f=5000'), -24), 'wind.mp3', 64); meta['wind'] = 'wind.mp3'
-save(norm_rms(fades(load('wind_short.wav', 'highpass=f=80'), 0.3, 0.8), -22), 'gust1.mp3', 64); meta['gust'] = ['gust1.mp3']
+save(norm_rms(load('wind_mild.wav', 'highpass=f=60,lowpass=f=900,lowpass=f=900'), -24), 'wind.mp3', 64); meta['wind'] = 'wind.mp3'   # без свиста: только мягкий гул
+save(norm_rms(fades(load('wind_short.wav', 'highpass=f=80,lowpass=f=1100,lowpass=f=1100'), 0.8, 1.5), -24), 'gust1.mp3', 64); meta['gust'] = ['gust1.mp3']   # порыв — плавный, без свиста
 # хищные птицы: крики орла режем по паузам + скопа
 def phrases(x, gap=0.25, minlen=0.25):
     fr = int(0.02 * SR); e = np.array([np.sqrt(np.mean(x[i:i + fr] ** 2)) for i in range(0, len(x) - fr, fr)])
