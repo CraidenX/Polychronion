@@ -166,7 +166,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 74, "date": "08.11.2026 21:27"};
+const GAME_VERSION = {"v": 75, "date": "23.11.2026 23:11"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2357,12 +2357,12 @@ const SFX = (() => {
 })();
 if (!HEADLESS) document.addEventListener('click', e => { if (e.target.closest && e.target.closest('button') && !e.target.closest('.nosfx')) SFX.play('click'); }, true);
 
-/* --- звуки моря: настоящие записи из свободных библиотек (папка sounds/, авторы — sounds/CREDITS.txt; готовит tools/mksounds.py):
-   ровный плеск воды о камни (петля), отдельные волны о берег (раз в 8–15 с) и крики чаек (только вблизи берега).
-   Громкость — от того, сколько берега на экране и насколько близко камера; над сушей вдали от моря — тишина --- */
+/* --- звуки природы: настоящие записи (папка sounds/, авторы — sounds/CREDITS.txt; готовит tools/mksounds.py).
+   Море: ровный плеск волн (петля) и чайки — громкость от того, сколько берега на экране и насколько близко камера.
+   Горы: ветер (петля), редкие порывы и крики хищных птиц — громкость от того, сколько гор на экране. Вдали от того и другого — тишина --- */
 const SEASND = (() => {
   let on = true; try { on = localStorage.getItem('poly_seasnd') !== 'off'; } catch (e) { }
-  const st = { bus: null, lib: null, loading: false, nextWave: 0, nextGull: 0, lastW: -1, lastG: -1 };
+  const st = { sea: null, mt: null, lib: null, loading: false, nextGull: 0, nextGust: 0, nextRaptor: 0, lastG: -1, lastR: -1 };
   const R = Math.random;
   // петля без шва: срезаем края (паузы mp3) и плавно сводим конец записи с её началом
   function loopify(c, b, F) {
@@ -2376,16 +2376,18 @@ const SEASND = (() => {
     }
     return o;
   }
-  // звуки грузятся (~0,8 МБ) только когда звук уже включён — после первого клика игрока
+  function loop(c, buf, gain, out) { const s = c.createBufferSource(), g = c.createGain(); s.buffer = buf; s.loop = true; g.gain.value = gain; s.connect(g); g.connect(out); s.start(0, R() * 10); }
+  // звуки грузятся (~1,2 МБ) только когда звук уже включён — после первого клика игрока
   async function loadLib(c) {
     st.loading = true;
     try {
       const m = await (await fetch('sounds/sounds.json')).json();
       const get = f => fetch('sounds/' + f).then(r => r.arrayBuffer()).then(b => new Promise((ok, no) => c.decodeAudioData(b, ok, no)));
-      const lib = { wave: await Promise.all(m.wave.map(get)), gull: await Promise.all(m.gull.map(get)), flow: loopify(c, await get(m.flow), 2) };
-      const s = c.createBufferSource(), g = c.createGain(); s.buffer = lib.flow; s.loop = true; g.gain.value = 0.55; s.connect(g); g.connect(st.bus); s.start(0, R() * 10);
+      const lib = { gull: await Promise.all(m.gull.map(get)), gust: await Promise.all(m.gust.map(get)), raptor: await Promise.all(m.raptor.map(get)),
+        sea: loopify(c, await get(m.sea), 3), wind: loopify(c, await get(m.wind), 3) };
+      loop(c, lib.sea, 0.4, st.sea); loop(c, lib.wind, 0.4, st.mt);   // море — на ~18% тише прежнего плеска с волнами
       st.lib = lib;
-    } catch (e) { }   // нет файлов (например, игра открыта как файл с диска) — просто без звуков моря
+    } catch (e) { }   // нет файлов (например, игра открыта как файл с диска) — просто без звуков природы
   }
   function play(c, out, buf, vol, pan, lp, when = 0) {   // одна запись: чуть другая высота, своё место в стереопанораме, даль — глуше
     const s = c.createBufferSource(); s.buffer = buf; s.playbackRate.value = 0.94 + R() * 0.12;
@@ -2396,38 +2398,47 @@ const SEASND = (() => {
     s.start(c.currentTime + when);
   }
   const pick = (a, k) => { let i = Math.floor(R() * a.length); if (i === st[k] && a.length > 1) i = (i + 1) % a.length; st[k] = i; return a[i]; };   // не повторять одну запись подряд
-  function wave(c, out) { play(c, out, pick(st.lib.wave, 'lastW'), 0.45 * (0.6 + 0.4 * R()), (R() - 0.5) * 1.3, 6000); }
-  function gull(c, out, near) {   // иногда отвечает вторая чайка
-    const d = 0.5 + 0.5 * R(); play(c, out, pick(st.lib.gull, 'lastG'), 1.4 * d * (0.6 + 0.4 * near), (R() - 0.5) * 1.6, 2800 + 6000 * d);
-    if (R() < 0.3) { const d2 = 0.4 + 0.5 * R(); play(c, out, pick(st.lib.gull, 'lastG'), 1.15 * d2 * (0.6 + 0.4 * near), (R() - 0.5) * 1.6, 2600 + 5000 * d2, 0.6 + R() * 1.2); }
-  }
-  // сколько берега видно: сетка точек экрана — где рядом и море, и суша
+  function gull(c, out, near) { const d = 0.55 + 0.45 * R(); play(c, out, pick(st.lib.gull, 'lastG'), 1.2 * d * (0.6 + 0.4 * near), (R() - 0.5) * 1.5, 3000 + 6000 * d); }
+  function raptor(c, out) { const d = 0.4 + 0.6 * R(); play(c, out, pick(st.lib.raptor, 'lastR'), 0.75 * d, (R() - 0.5) * 1.6, 2500 + 6000 * d); }
+  function gust(c, out) { play(c, out, st.lib.gust[Math.floor(R() * st.lib.gust.length)], 0.5 + 0.3 * R(), (R() - 0.5) * 1.2, 0); }
+  // что видно на экране: сетка точек — где рядом и море, и суша (берег), и где горы
   function level() {
-    if (!G || UI.tab !== 'map' || $('app').classList.contains('hidden') || document.hidden || !WV.md || !MAPINFO) return [0, 0];
+    if (!G || UI.tab !== 'map' || $('app').classList.contains('hidden') || document.hidden || !WV.md || !MAPINFO) return [0, 0, 0];
     const v = UI.view, z = v.z, w = $('mapwrap'), W = w.clientWidth, H = w.clientHeight, NX = 24, NY = 15, r = Math.min(W / NX, H / NY) * 0.6;
-    const m = (a, b) => seaAt((a - v.x) / z, (b - v.y) / z) > 127;
-    let sea = 0, coast = 0;
+    const m = (a, b) => seaAt((a - v.x) / z, (b - v.y) / z) > 127, md = mtDensity(), ps = PIX.s || 2;
+    let sea = 0, coast = 0, hills = 0;
     for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
       const sx = (i + 0.5) * W / NX, sy = (j + 0.5) * H / NY, c0 = m(sx, sy); if (c0) sea++;
       if (c0 !== m(sx + r, sy) || c0 !== m(sx - r, sy) || c0 !== m(sx, sy + r) || c0 !== m(sx, sy - r)) coast++;
+      if (md && !c0) { const mx = Math.floor((sx - v.x) / z / ps / 16), my = Math.floor((sy - v.y) / z / ps / 16); if (mx >= 0 && my >= 0 && mx < md.w && my < md.h) hills += md.d[my * md.w + mx]; }
     }
-    const n = NX * NY, zs = z * MAPINFO.W / 5298;
-    return [clamp(coast / n * 3.5 + sea / n * 0.3, 0, 1) * clamp(0.3 + 0.45 * zs, 0.3, 1), clamp(coast / n * 4, 0, 1) * clamp((zs - 0.6) / 1.2, 0, 1)];
+    const n = NX * NY, zs = z * MAPINFO.W / 5298, zf = clamp(0.3 + 0.45 * zs, 0.3, 1);
+    return [clamp(coast / n * 3.5 + sea / n * 0.3, 0, 1) * zf, clamp(coast / n * 4, 0, 1) * clamp((zs - 0.6) / 1.2, 0, 1), clamp(hills / Math.max(n - sea, n * 0.25) * 1.6, 0, 1) * zf]   // горы — доля среди суши на экране;
+  }
+  // плотность гор по клеткам 16×16 пикселей маски рельефа (1 — значок горы), сглаженная и нормированная: 1 — сплошной хребет
+  function mtDensity() {
+    if (st.md !== undefined && st.mdSrc === PIX.mtn) return st.md;
+    const mt = PIX.mtn; st.mdSrc = mt; if (!mt) return st.md = null;
+    const W = PIX.w, H = PIX.h, w = Math.ceil(W / 16), h = Math.ceil(H / 16), a = new Float32Array(w * h), d = new Float32Array(w * h);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (mt[y * W + x] === 1) a[(y >> 4) * w + (x >> 4)]++;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let t = 0, c = 0; for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) { const X = x + i, Y = y + j; if (X >= 0 && Y >= 0 && X < w && Y < h) { t += a[Y * w + X]; c++; } } d[y * w + x] = Math.min(1, t / c / 256 / 0.18); }   // 18% пикселей под значками — уже «горы»
+    return st.md = { w, h, d };
   }
   if (!HEADLESS) setInterval(() => {
     const c = SFX.ctx(); if (!c || c.state !== 'running') return;
-    if (!st.bus) { st.bus = c.createGain(); st.bus.gain.value = 0; st.bus.connect(SFX.out()); st.nextWave = c.currentTime + 1.5; st.nextGull = c.currentTime + 5 + R() * 8; }
-    const [lv, near] = on && SFX.on ? level() : [0, 0], now = c.currentTime;   // общие «Звуки» выключены — море тоже молчит
-    if (!st.loading && lv > 0) loadLib(c);
-    st.bus.gain.setTargetAtTime(lv * 0.7, now, 0.8);
-    if (lv < 0.03 || !st.lib) return;
-    if (now > st.nextWave) { wave(c, st.bus); st.nextWave = now + 8 + R() * 7; }
-    if (now > st.nextGull) { if (near > 0.12) gull(c, st.bus, near); st.nextGull = now + 10 + R() * 22; }
+    if (!st.sea) { for (const k of ['sea', 'mt']) { st[k] = c.createGain(); st[k].gain.value = 0; st[k].connect(SFX.out()); } const t = c.currentTime; st.nextGull = t + 5 + R() * 8; st.nextGust = t + 8 + R() * 10; st.nextRaptor = t + 10 + R() * 15; }
+    const [lv, near, mv] = on && SFX.on ? level() : [0, 0, 0], now = c.currentTime;   // общие «Звуки» выключены — природа тоже молчит
+    if (!st.loading && (lv > 0 || mv > 0)) loadLib(c);
+    st.sea.gain.setTargetAtTime(lv * 0.7, now, 0.8); st.mt.gain.setTargetAtTime(mv * 0.7, now, 1.2);
+    if (!st.lib) return;
+    if (now > st.nextGull) { if (lv > 0.03 && near > 0.12) gull(c, st.sea, near); st.nextGull = now + 10 + R() * 22; }
+    if (now > st.nextGust) { if (mv > 0.25) gust(c, st.mt); st.nextGust = now + 14 + R() * 18; }
+    if (now > st.nextRaptor) { if (mv > 0.35) raptor(c, st.mt); st.nextRaptor = now + 20 + R() * 35; }
   }, 250);
   return {
     get on() { return on; },
     toggle() { on = !on; try { localStorage.setItem('poly_seasnd', on ? 'on' : 'off'); } catch (e) { } return on; },
-    _t: { loopify, play, wave, gull, st },
+    _t: { loopify, play, level, st },
   };
 })();
 
@@ -3641,7 +3652,7 @@ function showMenu() {
    <button id="mAuto">${G.autoBattle ? 'Бои: автоматически (включить ручные)' : 'Бои: вручную (включить автоматические)'}</button>
    <button id="mAP">${UI.autoPause ? 'Пауза при важных событиях: включена' : 'Пауза при важных событиях: выключена'}</button>
    <button id="mSnd">${SFX.on ? 'Звуки: включены (выключить)' : 'Звуки: выключены (включить)'}</button>
-   <button id="mSea">${SEASND.on ? 'Звуки моря (прибой, чайки): включены' : 'Звуки моря (прибой, чайки): выключены'}</button>
+   <button id="mSea">${SEASND.on ? 'Звуки природы (море, чайки, ветер в горах, птицы): включены' : 'Звуки природы (море, чайки, ветер в горах, птицы): выключены'}</button>
    <button id="mNames">Скачать мои названия (файл)</button>
    <button id="mHelp">Как играть</button><button id="mNew">Новая игра</button><button id="mClose" class="main">Закрыть</button></div>`);
   $('mSave').onclick = () => { save(); toast('Сохранено.'); closeModal(); };
@@ -3687,7 +3698,7 @@ function showHelp() {
   <p><b>Бой.</b> Выберите свой отряд, нажмите светлую клетку, чтобы пойти, или врага с красной рамкой, чтобы атаковать. Лучники стреляют на 3 клетки. Конница с разгона (2+ клетки) бьёт в полтора раза сильнее, но вязнет в лесу и против пехоты в обороне. Холмы и леса защищают. Отряд с низким духом бежит. Можно «Рассчитать автоматически».</p>
   <p><b>Двор</b> — до 7 героев с поручениями. <b>Государство</b> — налоги, монета, законы, уния, флот, стройки, наследник, войны.</p>
   <p class="small muted">Клавиши: пробел — пауза, 1–5 — скорость, / — поиск, Esc — снять выбор.</p>
-  <p class="small muted">Звуки моря — настоящие записи из свободных библиотек OpenGameArt и Wikimedia Commons (CC0 и общественное достояние): волны — jasinski и transitking, чайки — rango-mango и avphillips, плеск о камни — earthcalling.</p>
+  <p class="small muted">Звуки природы — записи: море и чайки — присланные автором игры; ветер — bashar3a и remaxim (OpenGameArt, CC0); хищные птицы — qubodup (CC BY 3.0) и antumdeluge (CC BY-SA 4.0), OpenGameArt.</p>
   <button class="main" onclick="closeModal()">Понятно</button>`);
 }
 function toggleLaw(k) {

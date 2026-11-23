@@ -1,8 +1,8 @@
-Звуки моря в «Полихронионе» — из свободных библиотек:
+Звуки окружения в «Полихронионе»:
 
-jasinski (Freesound), подготовил qubodup — CC0 — https://opengameart.org/content/beach-ocean-waves
-transitking (Freesound), подготовил qubodup — CC0 — https://opengameart.org/content/water-waves
-rango-mango — CC0 — https://opengameart.org/content/solo-seagull-sound-effects
-avphillips — Public domain — https://commons.wikimedia.org/wiki/File:Gull_1.ogg
-avphillips — Public domain — https://commons.wikimedia.org/wiki/File:Gull_2.ogg
-earthcalling — Public domain — https://commons.wikimedia.org/wiki/File:Water_over_rocks_as_tide_recedes.ogg
+— — прислал автор игры — «the sea is slightly rough»
+— — прислал автор игры — «calm sea and seagulls»
+bashar3a — CC0 — https://opengameart.org/content/mild-wind-background-noise
+remaxim — CC0 — https://opengameart.org/content/short-wind-sound
+qubodup — CC BY 3.0 — https://opengameart.org/content/bald-eagle-screams
+antumdeluge — CC BY-SA 4.0 — https://opengameart.org/content/osprey-sound
