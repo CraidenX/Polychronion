@@ -133,6 +133,34 @@ TP = dict(x=tx, y=ty, con=conifer[np.clip(ty.astype(int), 0, H - 1), np.clip(tx.
 # штрихи волн в открытом море
 wx, wy = pick(WL & (dist > 26), 46, 0.55, r2)
 WV = dict(x=wx, y=wy, l=r2.uniform(5, 8, len(wx)))
+# ---------- значки для игры: игра вблизи рисует горы и деревья сама (резко на любом масштабе) ----------
+# icons{VAR}.bin: заголовок (n гор, n деревьев), горы по 48 байт, деревья по 6 байт; trees.png — атлас крон (как в подложке).
+def look(c):   # то же «освещение», что в конце paint(): насыщенность и контраст
+    c = np.asarray(c, np.float32); l = c.mean(-1, keepdims=True); c = l + (c - l) * 1.18; c = (c - 0.52) * 1.2 + 0.5
+    return np.clip(np.clip(c, 0, 1) ** 1.06, 0, 1)
+def export_icons():
+    import struct
+    n = len(MP['x']); ts = np.linspace(-1, 1, 25); buf = bytearray(struct.pack('<II', n, len(TP['x'])))
+    for i in range(n):
+        X, Y, s_ = MP['x'][i], MP['y'][i], MP['s'][i]; pk = MP['pk'][i]
+        dd_ = np.where(ts < pk, (pk - ts) / (1 + pk), (ts - pk) / (1 - pk)); prof = 1 - np.abs(dd_) ** 0.8
+        bm = MP['bumps'][i]; prof = np.clip(prof * (1 + 0.22 * bm / (np.abs(bm).max() + 1e-9)), 0, None)
+        b = B0[int(np.clip(Y - s_ * 0.35, 0, H - 1)), int(np.clip(X, 0, W - 1))]
+        lt = look(b * 0.1 + np.clip(b * 0.55 + PAPER * 0.45 + 0.03, 0, 1) * 0.9); dk = look(b * 0.1 + b * 0.66 * np.array([0.92, 0.86, 0.82]) * 0.9)
+        buf += struct.pack('<HHhhhhhhB', max(0, int(X * 8)), max(0, int(Y * 8)), int(s_ * 100), int(MP['wk'][i] * 1000), int(pk * 1000), int(MP['vx'][i] * 1000), int(MP['vm'][i] * 1000), int(MP['vy'][i] * 1000), 1 if MP['h'][i] > 0.8 else 0)
+        buf += bytes((lt * 255).astype(np.uint8)) + bytes((dk * 255).astype(np.uint8)) + bytes(np.clip(prof * 200, 0, 255).astype(np.uint8))
+    for i in range(len(TP['x'])):
+        X, Y = TP['x'][i], TP['y'][i]
+        buf += struct.pack('<HHBB', max(0, int(X * 8)), max(0, int(Y * 8)), int(TP['r'][i] * 100), (1 if TP['con'][i] else 0) | ((int(X * 7 + Y * 13) % len(TS.SPR['c' if TP['con'][i] else 'd'])) << 1))   # номер рисунка — как в подложке
+    open(OUTD + f'/icons{VAR}.bin', 'wb').write(buf)
+    N = TS.N; at = Image.new('RGBA', (N * 10, N * 2), (0, 0, 0, 0))
+    for r_, kind in enumerate(('d', 'c')):
+        for j, sp in enumerate(TS.SPR[kind]): at.alpha_composite(sp, (j * N, r_ * N))
+    a = np.asarray(at).astype(np.float32) / 255; a[..., :3] = look(a[..., :3])
+    Image.fromarray((a * 255).astype(np.uint8), 'RGBA').save(OUTD + '/trees.png', optimize=True)   # одинаков для обоих вариантов
+    print('значки для игры: гор', n, 'деревьев', len(TP['x']), len(buf) // 1024, 'КБ')
+export_icons()
+if os.environ.get('ICONS_ONLY'): sys.exit(0)
 def sub(P, x0, y0, x1, y1, mg):
     s = (P['x'] >= x0 - mg) & (P['x'] < x1 + mg) & (P['y'] >= y0 - mg) & (P['y'] < y1 + mg)
     return {kk: v[s] for kk, v in P.items()}

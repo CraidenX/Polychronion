@@ -304,6 +304,8 @@ let regionGrid = null, borderSegs = null, ID_BY_IDX = null;
 // Попиксельная карта провинций: ids.png (номер провинции в цвете пикселя). Если браузер не даёт прочитать
 // пиксели (файл открыт с диска), остаётся запасная грубая сетка регионов.
 const PIX = { ids: null, w: 0, h: 0, s: 2, buf: null, provReg: null };
+// любое «PIX.vtKey = ''» (смена владельцев, режима карты, стиля гор) заодно сбрасывает чёткий слой
+{ let vk = PIX.vtKey; PIX.shInv = 1; Object.defineProperty(PIX, 'vtKey', { get: () => vk, set: v => { if (v === '') PIX.shInv++; vk = v; } }); }
 const MAXZ = 16;   // запас приближения — под будущие объекты на карте
 function initMap() {
   const M = MAPINFO;
@@ -500,7 +502,9 @@ function drawOverlay() {
   const pFree = new Uint8Array(NP + 1);
   for (let k = 0; k < NP; k++) if (G.prov && G.prov[k] === 'free') { pFree[k + 1] = 1; pCol[k + 1] = [40, 40, 40]; }
   PIX.pColD = pCol.map(c => c && [c[0] * 0.5 | 0, c[1] * 0.5 | 0, c[2] * 0.5 | 0]);
-  PIX.pCol = pCol; PIX.pOwn = pOwn; PIX.pFree = pFree; PIX.vtKey = '';
+  PIX.pCol = pCol; PIX.pOwn = pOwn; PIX.pFree = pFree;
+  const sig = pCol.map(c => c ? c.join(',') : '').join(';') + '|' + pFree.join('');   // заливку пересчитываем, только если цвета правда изменились
+  if (sig !== PIX.colSig) { PIX.colSig = sig; PIX.vtKey = ''; }
   if (PIX.ids) {
     // раскраска для отдалённого вида: вполовину разрешения (выборка каждого второго пикселя карты провинций)
     const tw = cv.width, th = cv.height, W = PIX.w, ids = PIX.ids, pr = PIX.provReg, st = W / tw;
@@ -633,6 +637,50 @@ function vecCache() {
   st(C.e, 'rgba(18,12,18,.95)', 1.4); if (SBORDER[UI.sborder]) st(C.s, SBORDER[UI.sborder], 1.4);
   return VEC.cache = cv;
 }
+/* --- значки вблизи: горы и деревья акварельной подложки, нарисованные игрой заново (icons{WCV}.bin + trees.png, готовит mkwater.py) —
+   те же места, формы и цвета, но резкие на любом масштабе и непрозрачные. Грузятся (~0,4–0,8 МБ) при первом сильном приближении --- */
+const ICO = { st: 0 };
+function icoLoad() {
+  if (ICO.st || !ISWC || HEADLESS || location.protocol === 'file:') return; ICO.st = 1;
+  Promise.all([fetch(`icons${WCV}.bin`).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }),
+    new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = 'trees.png'; })]).then(([buf, im]) => {
+    const dv = new DataView(buf), nm = dv.getUint32(0, true), nt = dv.getUint32(4, true); let o = 8;
+    const rgb = q => `rgb(${dv.getUint8(q)},${dv.getUint8(q + 1)},${dv.getUint8(q + 2)})`, CELL = 64, cw = Math.ceil(MAPINFO.W / CELL) + 1;
+    const mg = new Map(), tg = new Map(), put = (g, x, y, v) => { const k = Math.floor(y / CELL) * cw + Math.floor(x / CELL); let a = g.get(k); if (!a) g.set(k, a = []); a.push(v); };
+    for (let i = 0; i < nm; i++, o += 48) {
+      const m = { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, s: dv.getInt16(o + 4, true) / 100, wk: dv.getInt16(o + 6, true) / 1000, pk: dv.getInt16(o + 8, true) / 1000,
+        vx: dv.getInt16(o + 10, true) / 1000, vm: dv.getInt16(o + 12, true) / 1000, vy: dv.getInt16(o + 14, true) / 1000, snow: dv.getUint8(o + 16), lt: rgb(o + 17), dk: rgb(o + 20), prof: [] };
+      for (let j = 0; j < 25; j++) m.prof.push(dv.getUint8(o + 23 + j) / 200);
+      put(mg, m.x, m.y, m);
+    }
+    for (let i = 0; i < nt; i++, o += 6) { const b = dv.getUint8(o + 5); put(tg, dv.getUint16(o, true) / 8, dv.getUint16(o + 2, true) / 8, { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, r: dv.getUint8(o + 4) / 100, con: b & 1, idx: b >> 1 }); }
+    Object.assign(ICO, { st: 2, mg, tg, CELL, cw, atlas: im, N: im.width / 10 });
+    PIX.vtKey = ''; scheduleVector();
+  }).catch(() => { ICO.st = 3; });
+}
+// нарисовать значки участка [X0..X1)×[Y0..Y1) на холст c в масштабе S (порядок — сверху вниз, как в подложке: сначала деревья, потом горы)
+function icoDraw(c, X0, Y0, X1, Y1, S) {
+  const get = g => { const out = []; for (let cy = Math.floor((Y0 - 30) / ICO.CELL); cy <= Math.floor((Y1 + 30) / ICO.CELL); cy++) for (let cx = Math.floor((X0 - 30) / ICO.CELL); cx <= Math.floor((X1 + 30) / ICO.CELL); cx++) { const a = g.get(cy * ICO.cw + cx); if (a) for (const v of a) out.push(v); } return out.sort((p, q) => p.y - q.y); };
+  c.save(); c.setTransform(S, 0, 0, S, -X0 * S, -Y0 * S); c.lineJoin = 'round'; c.lineCap = 'round';
+  const N = ICO.N;
+  for (const t of get(ICO.tg)) {
+    const r = t.r, px = Math.max(3, r * 4.2);
+    c.globalAlpha = 0.2; c.fillStyle = '#2a2418'; c.beginPath(); c.ellipse(t.x + r * 0.8, t.y + r * 0.4, r * 1.1, r * 0.5, 0, 0, 2 * Math.PI); c.fill();   // тень вправо-вниз
+    c.globalAlpha = 1; c.drawImage(ICO.atlas, t.idx * N, t.con * N, N, N, t.x - px / 2, t.y - px * 0.72, px, px);
+  }
+  for (const m of get(ICO.mg)) {
+    const wd = m.s * m.wk, P = m.prof, pts = []; let ip = 0;
+    for (let i = 0; i < 25; i++) { pts.push([m.x + (-1 + i / 12) * wd / 2, m.y - m.s * P[i]]); if (P[i] > P[ip]) ip = i; }
+    const poly = (a, col) => { c.beginPath(); c.moveTo(a[0][0], a[0][1]); for (let i = 1; i < a.length; i++) c.lineTo(a[i][0], a[i][1]); c.closePath(); c.fillStyle = col; c.fill(); };
+    poly(pts, m.dk);
+    const vx = pts[ip][0] + m.vx * wd, vmid = [(pts[ip][0] + vx) / 2 + m.vm * wd, m.y - m.s * m.vy];
+    poly(pts.slice(0, ip + 1).concat([vmid, [vx, m.y]]), m.lt);
+    if (m.snow) { const cap = pts.filter(p => p[1] < m.y - m.s * 0.72); if (cap.length >= 2) { c.globalAlpha = 0.85; poly([cap[0]].concat(cap, [cap[cap.length - 1]]), '#f2f0eb'); c.globalAlpha = 1; } }
+    c.beginPath(); c.moveTo(pts[1][0], pts[1][1]); for (let i = 2; i < 24; i++) c.lineTo(pts[i][0], pts[i][1]);
+    c.strokeStyle = 'rgba(70,48,32,.6)'; c.lineWidth = 0.9; c.stroke();
+  }
+  c.restore();
+}
 // Гладкая заливка держав вблизи: участок карты [X0..X1)×[Y0..Y1) в S раз подробнее. Для каждой «категории» (суша державы,
 // река, значок горы, лес, внешние земли) берётся маска 0/1, слегка размывается и интерполируется по подпикселям, а затем
 // снова делается чёткой (крутой порог) — так кромки рек, берегов и гор становятся плавными кривыми, а не квадратами пикселей.
@@ -658,6 +706,10 @@ function sharpFill(X0, Y0, X1, Y1, S, geo) {   // geo — режим «Мест�
   const ow = (X1 - X0) * S, oh = (Y1 - Y0) * S, cv = (PIX.sk && PIX.sk.cv) || document.createElement('canvas');
   if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
   const cx = cv.getContext('2d'), im = cx.createImageData(ow, oh), d = im.data, e = 0.09, A0 = 205, AR = 20, AM = UI.ridgeA, AF = 115;
+  // свои значки (горы, деревья): в «Местности» — просто поверх подложки; на политической — под цветом державы (просвечивают, как раньше)
+  const useIco = ICO.st === 2 && (geo || UI.ridgeA < 190);
+  let ic = null;
+  if (useIco) { const t = PIX.icCv || (PIX.icCv = document.createElement('canvas')); t.width = ow; t.height = oh; const tc = t.getContext('2d'); icoDraw(tc, X0, Y0, X1, Y1, S); ic = tc.getImageData(0, 0, ow, oh).data; }
   const crisp = t => t <= 0.5 - e ? 0 : t >= 0.5 + e ? 1 : (t = (t - 0.5 + e) / (2 * e), t * t * (3 - 2 * t));
   for (let oy = 0; oy < oh; oy++) {
     const fy = (oy + 0.5) / S + 0.5, y0 = Math.floor(fy), ay = fy - y0;   // +1 запас −0,5 центр пикселя
@@ -670,17 +722,29 @@ function sharpFill(X0, Y0, X1, Y1, S, geo) {   // geo — режим «Мест�
       }
       if (f > 0) {
         // цвет — ближайшего пикселя державы (на стыке держав цвет меняется резко — его закрывает векторная граница)
-        let c = col[(ay < 0.5 ? j : j + rw) + (ax < 0.5 ? 0 : 1)]; if (c < 0) c = col[j] >= 0 ? col[j] : col[j + 1] >= 0 ? col[j + 1] : col[j + rw] >= 0 ? col[j + rw] : col[j + rw + 1];
+        // цвет — «голосование» четырёх соседних пикселей с весами по расстоянию: стык держав идёт плавной кривой, а не ступеньками
+        let c = col[j], c1 = col[j + 1], c2 = col[j + rw], c3 = col[j + rw + 1];
+        if (c !== c1 || c !== c2 || c !== c3) {
+          const w0 = (1 - ax) * (1 - ay), w1 = ax * (1 - ay), w2 = (1 - ax) * ay, w3 = ax * ay, cs = [c, c1, c2, c3], ws = [w0, w1, w2, w3]; let best = -1, bw = -1;
+          for (let q = 0; q < 4; q++) { const cq = cs[q]; if (cq < 0) continue; let t = 0; for (let r = 0; r < 4; r++) if (cs[r] === cq) t += ws[r]; if (t > bw) { bw = t; best = cq; } }
+          c = best;
+        }
         if (c < 0) continue;
         const cc = pc[c]; let a = A0;
         if (pf[c]) { const gx = X0 + ox / S, gy = Y0 + oy / S; a = ((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0; }
-        else { const mm = crisp(bl(Mb)), fo = crisp(bl(Fob)); a = a + (AF - a) * fo; a = a + (AM - a) * mm; }
+        else if (!useIco) { const mm = crisp(bl(Mb)), fo = crisp(bl(Fob)); a = a + (AF - a) * fo; a = a + (AM - a) * mm; }
+        if (ic && ic[o + 3]) {   // значок под цветом державы: цвет державы — полупрозрачный слой над резким значком
+          const ia = ic[o + 3] / 255, af = (AM / 255) * f, oa = af + ia * (1 - af);
+          d[o] = (cc[0] * af + ic[o] * ia * (1 - af)) / oa; d[o + 1] = (cc[1] * af + ic[o + 1] * ia * (1 - af)) / oa; d[o + 2] = (cc[2] * af + ic[o + 2] * ia * (1 - af)) / oa; d[o + 3] = oa * 255 * (a * f + (255 - a * f) * ia) / 255 / Math.max(1e-3, oa);
+          d[o + 3] = Math.min(255, (af + ia * (1 - af)) * 255); continue;
+        }
         d[o] = cc[0]; d[o + 1] = cc[1]; d[o + 2] = cc[2]; d[o + 3] = a * f;
       } else { const u = crisp(bl(Oub)); if (u > 0) { d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175 * u; } }
+      if (ic && ic[o + 3] && d[o + 3] === 0) { d[o] = ic[o]; d[o + 1] = ic[o + 1]; d[o + 2] = ic[o + 2]; d[o + 3] = ic[o + 3]; }   // «Местность» и края — значок как есть
     }
   }
   cx.putImageData(im, 0, 0);
-  PIX.sk = { cv, X0, Y0, X1, Y1, S, geo };
+  PIX.sk = { cv, X0, Y0, X1, Y1, S, geo, ico: useIco };
 }
 function drawVector() { vecInit(); if (VEC.segs && G) vecClassify(); paintVector(); }
 function paintVector() {
@@ -709,21 +773,25 @@ function paintVector() {
     if (z * dpr >= 1.15 && HI.idx) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
-  // вблизи — гладкая заливка с подпикселями (без «ступенек» рек и мыльных краёв); пересчёт дорогой — пока карту двигают, рисуем быстрый вариант
-  const shS = clamp(Math.round(z * dpr / 2.5), 2, 6), shGeo = UI.mapMode === 'geo', sk = PIX.sk;
-  const shFits = sk && sk.S === shS && sk.geo === shGeo && sk.ver === PIX.vtKey && vx0 >= sk.X0 && vy0 >= sk.Y0 && vx1 <= sk.X1 && vy1 <= sk.Y1;
-  const shMoving = performance.now() - (UI.lastMove || 0) < 140, shOn = PIX.ids && PIX.pCol && z * dpr >= 2.5 && (shFits || !shMoving);
-  if (PIX.ids && z * dpr >= 2.5 && !shOn) { clearTimeout(PIX.shT); PIX.shT = setTimeout(scheduleVector, 170); }
-  if (UI.mapMode === 'geo' && !shOn) { /* режим «Местность»: без заливки держав */ }
-  else if (shOn) {
-    const S = shS, G16 = 16;
-    const X0 = Math.max(0, Math.floor((vx0 - (vx1 - vx0) * 0.25) / G16) * G16), Y0 = Math.max(0, Math.floor((vy0 - (vy1 - vy0) * 0.25) / G16) * G16);
-    const X1 = Math.min(PIX.w, Math.ceil((vx1 + (vx1 - vx0) * 0.25) / G16) * G16), Y1 = Math.min(PIX.h, Math.ceil((vy1 + (vy1 - vy0) * 0.25) / G16) * G16);
-    const geo = shGeo, fits = shFits;
-    if (!fits) { sharpFill(X0, Y0, X1, Y1, S, geo); PIX.sk.ver = PIX.vtKey = 'sharp' + (PIX.sharpGen = (PIX.sharpGen || 0) + 1); }
-    const k = PIX.sk, [sx0, sy0] = toS(k.X0, k.Y0), [sx1, sy1] = toS(k.X1, k.Y1);
-    ctx.drawImage(k.cv, sx0, sy0, sx1 - sx0, sy1 - sy0);
-  }
+  // вблизи — гладкая заливка с подпикселями и резкими значками гор и лесов. Пересчёт дорогой: пока карту двигают, показываем
+  // последний готовый чёткий кадр (растянутый), а пересчитываем после остановки. Между 2,5× и 3,5× — плавный переход.
+  const zd = z * dpr, shS = clamp(Math.round(zd / 2), 2, 10), shGeo = UI.mapMode === 'geo', sk = PIX.sk;
+  if (zd >= 2.5) icoLoad();
+  const shSame = sk && sk.geo === shGeo && sk.ver === PIX.shInv && sk.ico === (ICO.st === 2 && (shGeo || UI.ridgeA < 190));
+  const shFits = shSame && sk.S === shS && vx0 >= sk.X0 && vy0 >= sk.Y0 && vx1 <= sk.X1 && vy1 <= sk.Y1;
+  const shMoving = performance.now() - (UI.lastMove || 0) < 140, shWant = PIX.ids && PIX.pCol && zd >= 2.5;
+  if (shWant && !shFits && !shMoving) {
+    const G16 = 16;
+    const X0 = Math.max(0, Math.floor((vx0 - (vx1 - vx0) * 0.3) / G16) * G16), Y0 = Math.max(0, Math.floor((vy0 - (vy1 - vy0) * 0.3) / G16) * G16);
+    const X1 = Math.min(PIX.w, Math.ceil((vx1 + (vx1 - vx0) * 0.3) / G16) * G16), Y1 = Math.min(PIX.h, Math.ceil((vy1 + (vy1 - vy0) * 0.3) / G16) * G16);
+    sharpFill(X0, Y0, X1, Y1, shS, shGeo); PIX.sk.ver = PIX.shInv;
+  } else if (shWant && !shFits) { clearTimeout(PIX.shT); PIX.shT = setTimeout(scheduleVector, 170); }
+  const skNow = PIX.sk, shReady = shWant && skNow && skNow.geo === shGeo && skNow.ver === PIX.shInv;
+  const shA = shReady ? clamp(zd - 2.5, 0, 1) : 0;   // доля чёткого слоя
+  const drawSharp = () => { if (!shA) return; const k = PIX.sk, [sx0, sy0] = toS(k.X0, k.Y0), [sx1, sy1] = toS(k.X1, k.Y1); ctx.globalAlpha = shA; ctx.imageSmoothingQuality = 'high'; ctx.drawImage(k.cv, sx0, sy0, sx1 - sx0, sy1 - sy0); ctx.globalAlpha = 1; };
+  const shFull = shA >= 1 && skNow.X0 <= vx0 && skNow.Y0 <= vy0 && skNow.X1 >= vx1 && skNow.Y1 >= vy1;
+  if (shFull) drawSharp();   // чёткий кадр закрывает весь экран
+  else if (UI.mapMode === 'geo') drawSharp();
   else if (PIX.ids && PIX.pCol && z >= 1.1) {
     const X0 = Math.floor(vx0), Y0 = Math.floor(vy0), X1 = Math.min(PIX.w, Math.ceil(vx1)), Y1 = Math.min(PIX.h, Math.ceil(vy1));
     const vw = X1 - X0, vh = Y1 - Y0, key = X0 + ',' + Y0 + ',' + vw + ',' + vh;
@@ -737,6 +805,7 @@ function paintVector() {
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
     ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
+  if (!shFull && UI.mapMode !== 'geo') drawSharp();   // переход и края: чёткий слой поверх быстрого
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   // границы
