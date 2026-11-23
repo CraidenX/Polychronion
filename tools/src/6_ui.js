@@ -633,6 +633,55 @@ function vecCache() {
   st(C.e, 'rgba(18,12,18,.95)', 1.4); if (SBORDER[UI.sborder]) st(C.s, SBORDER[UI.sborder], 1.4);
   return VEC.cache = cv;
 }
+// Гладкая заливка держав вблизи: участок карты [X0..X1)×[Y0..Y1) в S раз подробнее. Для каждой «категории» (суша державы,
+// река, значок горы, лес, внешние земли) берётся маска 0/1, слегка размывается и интерполируется по подпикселям, а затем
+// снова делается чёткой (крутой порог) — так кромки рек, берегов и гор становятся плавными кривыми, а не квадратами пикселей.
+function sharpFill(X0, Y0, X1, Y1, S, geo) {   // geo — режим «Местность»: только реки
+  const W = PIX.w, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, outer = PIX.outer, pf = PIX.pFree;
+  const rw = X1 - X0 + 2, rh = Y1 - Y0 + 2, n = rw * rh;   // с запасом в 1 пиксель по краям
+  const F = new Float32Array(n), Rv = new Float32Array(n), Mo = new Float32Array(n), Fo = new Float32Array(n), Ou = new Float32Array(n), col = new Int32Array(n).fill(-1);
+  for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) {
+    const gx = X0 + x - 1, gy = Y0 + y - 1, j = y * rw + x; if (gx < 0 || gy < 0 || gx >= W || gy >= PIX.h) continue;
+    const i = gy * W + gx, v = ids[i];
+    if (mt && mt[i] === 2) Rv[j] = 1;
+    if (geo) continue;
+    if (!v) { if (outer && outer[i]) Ou[j] = 1; continue; }
+    if (pr[v] < 0 || po[v] < 0) continue;
+    F[j] = 1; col[j] = v; const m = mt && mt[i] && !pf[v];
+    if (m) { if (mt[i] === 3) Fo[j] = 1; else if (mt[i] === 1) Mo[j] = 1; }
+  }
+  const blur = a => { const t = new Float32Array(n), o = new Float32Array(n);   // [1 2 1]⊗[1 2 1] / 16
+    for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) { const j = y * rw + x; t[j] = (a[j - (x > 0)] + 2 * a[j] + a[j + (x < rw - 1)]) / 4; }
+    for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) { const j = y * rw + x; o[j] = (t[j - (y > 0) * rw] + 2 * t[j] + t[j + (y < rh - 1) * rw]) / 4; }
+    return o; };
+  const Fb = blur(F), Rb = blur(Rv), Mb = blur(Mo), Fob = blur(Fo), Oub = blur(Ou);
+  const ow = (X1 - X0) * S, oh = (Y1 - Y0) * S, cv = (PIX.sk && PIX.sk.cv) || document.createElement('canvas');
+  if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
+  const cx = cv.getContext('2d'), im = cx.createImageData(ow, oh), d = im.data, e = 0.09, A0 = 205, AR = 20, AM = UI.ridgeA, AF = 115;
+  const crisp = t => t <= 0.5 - e ? 0 : t >= 0.5 + e ? 1 : (t = (t - 0.5 + e) / (2 * e), t * t * (3 - 2 * t));
+  for (let oy = 0; oy < oh; oy++) {
+    const fy = (oy + 0.5) / S + 0.5, y0 = Math.floor(fy), ay = fy - y0;   // +1 запас −0,5 центр пикселя
+    for (let ox = 0; ox < ow; ox++) {
+      const fx = (ox + 0.5) / S + 0.5, x0 = Math.floor(fx), ax = fx - x0, j = y0 * rw + x0;
+      const bl = a => (a[j] * (1 - ax) + a[j + 1] * ax) * (1 - ay) + (a[j + rw] * (1 - ax) + a[j + rw + 1] * ax) * ay;
+      const o = (oy * ow + ox) * 4, f = geo ? 0 : crisp(bl(Fb)), rv = crisp(bl(Rb));
+      if (rv > 0) {   // река — своим чётким цветом (а не размытой подложкой), с чуть более тёмной кромкой
+        const edge = 1 - Math.abs(rv * 2 - 1); d[o] = 56 - 22 * edge; d[o + 1] = 104 - 26 * edge; d[o + 2] = 150 - 30 * edge; d[o + 3] = 245 * rv; continue;
+      }
+      if (f > 0) {
+        // цвет — ближайшего пикселя державы (на стыке держав цвет меняется резко — его закрывает векторная граница)
+        let c = col[(ay < 0.5 ? j : j + rw) + (ax < 0.5 ? 0 : 1)]; if (c < 0) c = col[j] >= 0 ? col[j] : col[j + 1] >= 0 ? col[j + 1] : col[j + rw] >= 0 ? col[j + rw] : col[j + rw + 1];
+        if (c < 0) continue;
+        const cc = pc[c]; let a = A0;
+        if (pf[c]) { const gx = X0 + ox / S, gy = Y0 + oy / S; a = ((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0; }
+        else { const mm = crisp(bl(Mb)), fo = crisp(bl(Fob)); a = a + (AF - a) * fo; a = a + (AM - a) * mm; }
+        d[o] = cc[0]; d[o + 1] = cc[1]; d[o + 2] = cc[2]; d[o + 3] = a * f;
+      } else { const u = crisp(bl(Oub)); if (u > 0) { d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175 * u; } }
+    }
+  }
+  cx.putImageData(im, 0, 0);
+  PIX.sk = { cv, X0, Y0, X1, Y1, S, geo };
+}
 function drawVector() { vecInit(); if (VEC.segs && G) vecClassify(); paintVector(); }
 function paintVector() {
   const cv = $('veccv'), wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -660,7 +709,21 @@ function paintVector() {
     if (z * dpr >= 1.15 && HI.idx) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
-  if (UI.mapMode === 'geo') { /* режим «Местность»: без заливки держав */ }
+  // вблизи — гладкая заливка с подпикселями (без «ступенек» рек и мыльных краёв); пересчёт дорогой — пока карту двигают, рисуем быстрый вариант
+  const shS = clamp(Math.round(z * dpr / 2.5), 2, 6), shGeo = UI.mapMode === 'geo', sk = PIX.sk;
+  const shFits = sk && sk.S === shS && sk.geo === shGeo && sk.ver === PIX.vtKey && vx0 >= sk.X0 && vy0 >= sk.Y0 && vx1 <= sk.X1 && vy1 <= sk.Y1;
+  const shMoving = performance.now() - (UI.lastMove || 0) < 140, shOn = PIX.ids && PIX.pCol && z * dpr >= 2.5 && (shFits || !shMoving);
+  if (PIX.ids && z * dpr >= 2.5 && !shOn) { clearTimeout(PIX.shT); PIX.shT = setTimeout(scheduleVector, 170); }
+  if (UI.mapMode === 'geo' && !shOn) { /* режим «Местность»: без заливки держав */ }
+  else if (shOn) {
+    const S = shS, G16 = 16;
+    const X0 = Math.max(0, Math.floor((vx0 - (vx1 - vx0) * 0.25) / G16) * G16), Y0 = Math.max(0, Math.floor((vy0 - (vy1 - vy0) * 0.25) / G16) * G16);
+    const X1 = Math.min(PIX.w, Math.ceil((vx1 + (vx1 - vx0) * 0.25) / G16) * G16), Y1 = Math.min(PIX.h, Math.ceil((vy1 + (vy1 - vy0) * 0.25) / G16) * G16);
+    const geo = shGeo, fits = shFits;
+    if (!fits) { sharpFill(X0, Y0, X1, Y1, S, geo); PIX.sk.ver = PIX.vtKey = 'sharp' + (PIX.sharpGen = (PIX.sharpGen || 0) + 1); }
+    const k = PIX.sk, [sx0, sy0] = toS(k.X0, k.Y0), [sx1, sy1] = toS(k.X1, k.Y1);
+    ctx.drawImage(k.cv, sx0, sy0, sx1 - sx0, sy1 - sy0);
+  }
   else if (PIX.ids && PIX.pCol && z >= 1.1) {
     const X0 = Math.floor(vx0), Y0 = Math.floor(vy0), X1 = Math.min(PIX.w, Math.ceil(vx1)), Y1 = Math.min(PIX.h, Math.ceil(vy1));
     const vw = X1 - X0, vh = Y1 - Y0, key = X0 + ',' + Y0 + ',' + vw + ',' + vh;
