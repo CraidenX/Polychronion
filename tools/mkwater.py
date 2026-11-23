@@ -153,9 +153,13 @@ def export_icons():
         X, Y = TP['x'][i], TP['y'][i]
         buf += struct.pack('<HHBB', max(0, int(X * 8)), max(0, int(Y * 8)), int(TP['r'][i] * 100), (1 if TP['con'][i] else 0) | ((int(X * 7 + Y * 13) % len(TS.SPR['c' if TP['con'][i] else 'd'])) << 1))   # номер рисунка — как в подложке
     open(OUTD + f'/icons{VAR}.bin', 'wb').write(buf)
-    N = TS.N; at = Image.new('RGBA', (N * 10, N * 2), (0, 0, 0, 0))
+    # атлас для игры — в 2 раза подробнее (192 px): те же кроны (те же зёрна), но мельче фактура листьев
+    N0 = TS.N; TS.N = N = 192
+    spr = {'d': [Image.fromarray(TS.deciduous(100 + i), 'RGBA') for i in range(len(TS.SPR['d']))], 'c': [Image.fromarray(TS.conifer(200 + i), 'RGBA') for i in range(len(TS.SPR['c']))]}
+    TS.N = N0
+    at = Image.new('RGBA', (N * 10, N * 2), (0, 0, 0, 0))
     for r_, kind in enumerate(('d', 'c')):
-        for j, sp in enumerate(TS.SPR[kind]): at.alpha_composite(sp, (j * N, r_ * N))
+        for j, sp in enumerate(spr[kind]): at.alpha_composite(sp, (j * N, r_ * N))
     a = np.asarray(at).astype(np.float32) / 255; a[..., :3] = look(a[..., :3])
     Image.fromarray((a * 255).astype(np.uint8), 'RGBA').save(OUTD + '/trees.png', optimize=True)   # одинаков для обоих вариантов
     print('значки для игры: гор', n, 'деревьев', len(TP['x']), len(buf) // 1024, 'КБ')
