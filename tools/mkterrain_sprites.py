@@ -82,19 +82,8 @@ LANDMARKS = [   # набор, широта, долгота, ширина (px э�
 ]
 ISLANDS = {'lm_stromboli', 'lm_vulcano'}
 lab_, n_ = nd.label(land); cy_, cx_ = np.array(nd.center_of_mass(land, lab_, range(1, n_ + 1))).T; sz_ = nd.sum(land, lab_, range(1, n_ + 1))
-lms = []
-for name, la, lo, w, anc, title, info in LANDMARKS:
-    x, y = topx(lo, la); w = w / 3
-    if not (0 <= x < W and 0 <= y < H): continue
-    if name in ISLANDS:   # привязка к ближайшему маленькому острову (центр масс)
-        d_ = (cx_ - x) ** 2 + (cy_ - y) ** 2; d_[sz_ > 4000] = 1e18; i_ = int(np.argmin(d_))
-        if d_[i_] < 40 ** 2: x, y = cx_[i_], cy_[i_]
-    elif not land[int(y), int(x)] or nd.distance_transform_edt(land[max(0, int(y) - 40):int(y) + 40, max(0, int(x) - 40):int(x) + 40])[40 if y >= 40 else int(y), 40 if x >= 40 else int(x)] < 3:
-        # подошва должна стоять на суше (Афон — узкий полуостров): ищем ближайшую точку суши в глубине
-        dl = nd.distance_transform_edt(land); ys, xs = np.nonzero(dl >= 4)
-        i_ = int(np.argmin((xs - x) ** 2 + (ys - y) ** 2)); x, y = float(xs[i_]), float(ys[i_])
-    lms.append({'set': name, 'x': round(float(x), 1), 'y': round(float(y), 1), 'w': round(w, 1), 'anchor': anc, 'name': title, 'info': info,
-                'obj': None})   # obj — привязанный объект (Афон станет поселением-монашеской республикой)
+# ручные точки (landmarks.json): пиксели карты и ширина; правятся по скриншотам. LANDMARKS выше — исходные широта/долгота (справочно)
+lms = [dict(l, w=float(l['w'])) for l in json.load(open(SP + 'landmarks.json'))['landmarks']]
 lm_block = np.zeros((H, W), bool)
 for l in lms:
     r0 = int(l['w'] * 0.6) + 2; x, y = int(l['x']), int(l['y'])
@@ -164,7 +153,22 @@ for p in PASSES:
     x, y = int(p[2]), int(p[3])
     if 0 <= x < W and 0 <= y < H:
         add(y, x, 'pass_2' if ang[y, x] < -20 else ('pass_1' if rng.random() < 0.5 else 'pass_1b'))
-items = [t for t in items if land[t[0], t[2]]]
+# только игровая зона; под точкой привязки ≥60% суши в радиусе полуширины; прибрежные (у подножия есть вода) помечаются — игра подрежет подножие
+zone = nd.binary_dilation(m['zone'], iterations=2) & land
+landf = land.astype(np.float32); ii = landf.cumsum(0).cumsum(1)
+def land_frac(y, x, r):
+    y0, y1, x0, x1 = max(0, y - r), min(H - 1, y + r), max(0, x - r), min(W - 1, x + r)
+    s_ = ii[y1, x1] - (ii[y0 - 1, x1] if y0 else 0) - (ii[y1, x0 - 1] if x0 else 0) + (ii[y0 - 1, x0 - 1] if y0 and x0 else 0)
+    return s_ / ((y1 - y0 + 1) * (x1 - x0 + 1))
+items2 = []
+for t in items:
+    y, name, x, v, w = t
+    if not zone[y, x]: continue
+    r = max(2, int(w / 2))
+    if land_frac(y, x, r) < 0.6: continue
+    coast = land_frac(y, x, max(2, int(w * 0.35))) < 0.999 or land_frac(y + 3, x, max(2, int(w * 0.35))) < 0.999
+    items2.append((y, name, x, v, w, int(coast)))
+items = items2
 items.sort(key=lambda t: t[0])
 # ---------- классы местности для движения (те же, что на картинке) ----------
 # биты (несколько классов сразу — для скорости берётся минимальный множитель): 1 холмы, 2 лес, 4 проходимые горы, 8 непроходимые,
@@ -211,18 +215,20 @@ for n, k, im in spr: r = rects[n][k]; atlas.paste(im, (r[0], r[1]))
 atlas.save(OUT + '/terrain_atlas.webp', quality=86, method=6)
 sets = {n: {'anchor': ANCHOR.get(n, next((l['anchor'] for l in lms if l['set'] == n), 0.78)), 'r': [rects[n][k] for k in range(NV[n])]} for n in rects}
 for n in ('lm_etna_active', 'lm_etna_erupt'): sets[n]['anchor'] = sets['lm_etna']['anchor']
-json.dump({'sets': sets, 'items': [[t[1], t[3], t[2], t[0], t[4]] for t in items], 'landmarks': lms,
+json.dump({'sets': sets, 'items': [[t[1], t[3], t[2], t[0], t[4], t[5]] for t in items], 'landmarks': lms,
            'ischia': [round(v, 1) for v in topx(13.90, 40.73)]},
           open(OUT + '/terrain_sprites.json', 'w'), ensure_ascii=False, separators=(',', ':'))
 # ---------- деревья для ближнего уровня: без тех, что под уникальными горами и на непроходимых хребтах ----------
-block_t = lm_block | (impass > 0.3)
+block_t = lm_block | (impass > 0.3) | ~zone
+# рощи с просветами: примерно вдвое реже, островками (крупный шум), а не ковром
+grove = noise(6, 2, r=np.random.default_rng(77)) > 0.0
 for var in ('', '2'):
     b = open(OUT + f'/icons{var}.bin', 'rb').read(); nm, nt = struct.unpack('<II', b[:8]); o = 8 + nm * 48
     keep = []
     for i in range(nt):
         rec = b[o + i * 6:o + i * 6 + 6]; tx, ty = struct.unpack('<HH', rec[:4])
         X, Y = min(W - 1, tx // 8), min(H - 1, ty // 8)
-        if not block_t[Y, X]: keep.append(rec)
+        if not block_t[Y, X] and grove[Y, X]: keep.append(rec)
     open(OUT + f'/icons_t{var}.bin', 'wb').write(struct.pack('<II', 0, len(keep)) + b''.join(keep))
 from collections import Counter
 print('спрайтов', len(items), Counter(t[1] for t in items).most_common(), '\nуникальных гор', [(l['name'], l['x'], l['y']) for l in lms],
