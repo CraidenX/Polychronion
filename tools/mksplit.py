@@ -73,8 +73,15 @@ for sp in CFG['split']:
     gen['links'] = keep_links
     print(sp['from'], '→ оставлено', [provs[i][4] for i in kept], '| новый регион', sp['name'], [provs[i][4] for i in moved])
     print('   связи:', [l for l in gen['links'] if sp['id'] in l[:2] or sp['from'] in l[:2]])
-for a, b in CFG.get('rename_provs', {}).items():
+# переименования — разом по исходным именам (можно менять имена местами) и только один раз
+RN = CFG.get('rename_provs', {})
+if RN and not mi.get('split_renamed'):
     for p in provs:
-        if p[4] == a: p[4] = b; mi.setdefault('oldnames', {})[b] = a
+        a = p[4]
+        if a in RN:
+            p[4] = RN[a]
+            if 'земля' not in a: mi.setdefault('oldnames', {})[RN[a]] = a   # в поиске: «прежде: …» — только для настоящих названий
+            elif RN[a] in mi.get('oldnames', {}): del mi['oldnames'][RN[a]]
+    mi['split_renamed'] = True
 json.dump(gen, open(SP + 'gen.json', 'w'), ensure_ascii=False)
 json.dump(mi, open(SP + 'mapinfo3.json', 'w'), ensure_ascii=False)
