@@ -441,8 +441,17 @@ function outerAtClient(clientX, clientY) {
   if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return -1;
   return outerAt(px, py);
 }
+// уникальная гора под курсором (только вблизи, где она нарисована)
+function landmarkAt(cx, cy) {
+  if (TSP.st !== 2 || UI.view.z * Math.min(2, window.devicePixelRatio || 1) < 1.8) return null;
+  const r = $('mapwrap').getBoundingClientRect(), mx = (cx - r.left - UI.view.x) / UI.view.z, my = (cy - r.top - UI.view.y) / UI.view.z;
+  for (const l of TSP.lms) { const rr = l.r, h = l.w * rr[3] / rr[2]; if (Math.abs(mx - l.x) < l.w * 0.4 && my > l.y - h * l.an * 0.9 && my < l.y + h * (1 - l.an) * 0.5) return l; }
+  return null;
+}
 function provTip(cx, cy) {
-  const t = $('ptip'), k = provAt(cx, cy);
+  const t = $('ptip'), lm = landmarkAt(cx, cy);
+  if (lm) { t.innerHTML = `<b>${esc(lm.name)}</b><br><span class="muted">${esc(lm.info)}</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; }
+  const k = provAt(cx, cy);
   if (k < 0 && G) { const oi = outerAtClient(cx, cy); if (oi >= 0) { t.innerHTML = `<b>${esc(MAPINFO.outer[oi][0])}</b> <span class="muted">· за пределами карты</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; } }
   if (k < 0 || !G) { t.classList.add('hidden'); return; }
   const p = MAPINFO.provs[k], o = (G.prov && G.prov[k]) || null, reg = p[0] >= 0 ? R(ID_BY_IDX[p[0]]) : null;
@@ -582,22 +591,29 @@ function regionOutline(ri) {
   return SEL_CACHE[key] = traceOutline(x => x > 0 && pr[x] === ri, x0, y0, x1, y1);
 }
 /* --- подложка высокого разрешения: плитки hi/X_Y.jpg (512×512 карты в 1024×1024), грузятся только видимые --- */
-const HI = { idx: null, img: new Map(), use: 0 };
-if (!HEADLESS && typeof fetch !== 'undefined' && location.protocol !== 'file:') fetch(HIDIR + '/index.json').then(r => r.ok ? r.json() : null).then(j => { if (j) { HI.idx = j; HI.has = new Set(j.tiles.map(t => t[0] + '_' + t[1])); } }).catch(() => { });
-function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS) {
-  const T = HI.idx.T, tx0 = Math.floor(vx0 / T), ty0 = Math.floor(vy0 / T), tx1 = Math.floor((vx1 - 1) / T), ty1 = Math.floor((vy1 - 1) / T);
+// набор плиток: HI — обычная подложка, HIC — та же без гор и деревьев (вблизи под нарисованным рельефом)
+function hiSet(dir, now) {
+  const H = { idx: null, img: new Map(), use: 0, dir, has: new Set(), asked: false };
+  H.load = () => { if (H.asked || HEADLESS || typeof fetch === 'undefined' || location.protocol === 'file:') return; H.asked = true;
+    fetch(dir + '/index.json').then(r => r.ok ? r.json() : null).then(j => { if (j) { H.idx = j; H.has = new Set(j.tiles.map(t => t[0] + '_' + t[1])); scheduleVector(); } }).catch(() => { }); };
+  if (now) H.load();
+  return H;
+}
+const HI = hiSet(HIDIR, true), HIC = hiSet(HIDIR + 'c', false);
+function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, H = HI) {
+  const T = H.idx.T, tx0 = Math.floor(vx0 / T), ty0 = Math.floor(vy0 / T), tx1 = Math.floor((vx1 - 1) / T), ty1 = Math.floor((vy1 - 1) / T);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingQuality = 'high';
   for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
-    const key = tx + '_' + ty; if (!HI.has.has(key)) continue;
-    let e = HI.img.get(key);
-    if (!e) { const im = new Image(); e = { im, ok: false }; im.onload = () => { e.ok = true; scheduleVector(); }; im.src = HIDIR + '/' + key + '.jpg'; HI.img.set(key, e); }
-    e.use = ++HI.use;
+    const key = tx + '_' + ty; if (!H.has.has(key)) continue;
+    let e = H.img.get(key);
+    if (!e) { const im = new Image(); e = { im, ok: false }; im.onload = () => { e.ok = true; scheduleVector(); }; im.src = H.dir + '/' + key + '.jpg'; H.img.set(key, e); }
+    e.use = ++H.use;
     if (!e.ok) continue;
     const [a, b] = toS(tx * T, ty * T), [c, d] = toS(tx * T + e.im.naturalWidth / 2, ty * T + e.im.naturalHeight / 2);
     ctx.drawImage(e.im, a, b, c - a, d - b);
   }
   ctx.restore();
-  if (HI.img.size > 40) { const old = [...HI.img.entries()].sort((p, q) => p[1].use - q[1].use).slice(0, HI.img.size - 40); for (const [k] of old) HI.img.delete(k); }   // держим в памяти не больше 40 плиток
+  if (H.img.size > 40) { const old = [...H.img.entries()].sort((p, q) => p[1].use - q[1].use).slice(0, H.img.size - 40); for (const [k] of old) H.img.delete(k); }   // держим в памяти не больше 40 плиток
 }
 
 /* --- векторные границы (borders.js): рисуются на холсте размером с экран, только видимая часть ---
@@ -640,13 +656,19 @@ function vecCache() {
 /* --- значки вблизи: горы и деревья акварельной подложки, нарисованные игрой заново (icons{WCV}.bin + trees.png, готовит mkwater.py) —
    те же места, формы и цвета, но резкие на любом масштабе и непрозрачные. Грузятся (~0,4–0,8 МБ) при первом сильном приближении --- */
 const ICO = { st: 0 };
+// ближний уровень рельефа (mkterrain_sprites.py): нарисованные горы, холмы, перевалы, уникальные горы — атлас terrain_atlas.webp и
+// расстановка terrain_sprites.json; деревья — icons_t*.bin (без деревьев под уникальными горами и на непроходимых хребтах).
+// Если файлов нет — прежние значки подложки (icons*.bin: векторные горы и деревья).
+const TSP = { st: 0 };
 function icoLoad() {
   if (ICO.st || !ISWC || HEADLESS || location.protocol === 'file:') return; ICO.st = 1;
-  Promise.all([fetch(`icons${WCV}.bin`).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }),
-    new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = 'trees.png'; })]).then(([buf, im]) => {
+  const img = src => new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = src; });
+  const bin = f => fetch(f).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); });
+  const terrain = Promise.all([fetch('terrain_sprites.json').then(r => { if (!r.ok) throw 0; return r.json(); }), img('terrain_atlas.webp')]).then(([j, at]) => ({ j, at })).catch(() => null);
+  terrain.then(t => Promise.all([t ? bin(`icons_t${WCV}.bin`).catch(() => bin(`icons${WCV}.bin`)) : bin(`icons${WCV}.bin`), img('trees.png'), t])).then(([buf, im, t]) => {
     const dv = new DataView(buf), nm = dv.getUint32(0, true), nt = dv.getUint32(4, true); let o = 8;
     const rgb = q => `rgb(${dv.getUint8(q)},${dv.getUint8(q + 1)},${dv.getUint8(q + 2)})`, CELL = 64, cw = Math.ceil(MAPINFO.W / CELL) + 1;
-    const mg = new Map(), tg = new Map(), put = (g, x, y, v) => { const k = Math.floor(y / CELL) * cw + Math.floor(x / CELL); let a = g.get(k); if (!a) g.set(k, a = []); a.push(v); };
+    const mg = new Map(), tg = new Map(), sg = new Map(), put = (g, x, y, v) => { const k = Math.floor(y / CELL) * cw + Math.floor(x / CELL); let a = g.get(k); if (!a) g.set(k, a = []); a.push(v); };
     for (let i = 0; i < nm; i++, o += 48) {
       const m = { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, s: dv.getInt16(o + 4, true) / 100, wk: dv.getInt16(o + 6, true) / 1000, pk: dv.getInt16(o + 8, true) / 1000,
         vx: dv.getInt16(o + 10, true) / 1000, vm: dv.getInt16(o + 12, true) / 1000, vy: dv.getInt16(o + 14, true) / 1000, snow: dv.getUint8(o + 16), lt: rgb(o + 17), dk: rgb(o + 20), prof: [] };
@@ -654,24 +676,38 @@ function icoLoad() {
       put(mg, m.x, m.y, m);
     }
     for (let i = 0; i < nt; i++, o += 6) { const b = dv.getUint8(o + 5); put(tg, dv.getUint16(o, true) / 8, dv.getUint16(o + 2, true) / 8, { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, r: dv.getUint8(o + 4) / 100, con: b & 1, idx: b >> 1 }); }
-    Object.assign(ICO, { st: 2, mg, tg, CELL, cw, atlas: im, N: im.width / 10 });
+    if (t) {
+      const S = t.j.sets;
+      for (const [set, v, x, y, w] of t.j.items) put(sg, x, y, { set, v, x, y, w, r: S[set].r[v], an: S[set].anchor });
+      for (const l of t.j.landmarks) put(sg, l.x, l.y, Object.assign(l, { v: 0, r: S[l.set].r[0], an: S[l.set].anchor, lm: true }));
+      Object.assign(TSP, { st: 2, atlas: t.at, sets: S, lms: t.j.landmarks, ischia: t.j.ischia });
+    }
+    Object.assign(ICO, { st: 2, mg, tg, sg, CELL, cw, atlas: im, N: im.width / 10 });
     PIX.vtKey = ''; scheduleVector();
   }).catch(() => { ICO.st = 3; });
 }
-// нарисовать значки участка [X0..X1)×[Y0..Y1) на холст c в масштабе S (порядок — сверху вниз, как в подложке: сначала деревья, потом горы)
+// нарисовать участок [X0..X1)×[Y0..Y1) на холст c в масштабе S: деревья, нарисованные горы и холмы — в одной очереди от дальних к ближним (по y)
 function icoDraw(c, X0, Y0, X1, Y1, S) {
-  const get = g => { const out = []; for (let cy = Math.floor((Y0 - 30) / ICO.CELL); cy <= Math.floor((Y1 + 30) / ICO.CELL); cy++) for (let cx = Math.floor((X0 - 30) / ICO.CELL); cx <= Math.floor((X1 + 30) / ICO.CELL); cx++) { const a = g.get(cy * ICO.cw + cx); if (a) for (const v of a) out.push(v); } return out.sort((p, q) => p.y - q.y); };
-  c.save(); c.setTransform(S, 0, 0, S, -X0 * S, -Y0 * S); c.lineJoin = 'round'; c.lineCap = 'round';
-  const N = ICO.N;
-  for (const t of get(ICO.tg)) {
-    const r = t.r, px = Math.max(3, r * 4.2);
-    c.globalAlpha = 0.1; c.fillStyle = '#2a2418'; c.beginPath(); c.ellipse(t.x + r * 0.8, t.y + r * 0.4, r * 1.1, r * 0.5, 0, 0, 2 * Math.PI); c.fill();   // тень вправо-вниз
-    c.globalAlpha = 1; c.drawImage(ICO.atlas, t.idx * N, t.con * N, N, N, t.x - px / 2, t.y - px * 0.72, px, px);
-  }
-  for (const m of get(ICO.mg)) {
-    const wd = m.s * m.wk, P = m.prof, pts = []; let ip = 0;
+  const M = 150, q = [];
+  const get = g => { if (!g) return; for (let cy = Math.floor((Y0 - 30) / ICO.CELL); cy <= Math.floor((Y1 + M) / ICO.CELL); cy++) for (let cx = Math.floor((X0 - M) / ICO.CELL); cx <= Math.floor((X1 + M) / ICO.CELL); cx++) { const a = g.get(cy * ICO.cw + cx); if (a) for (const v of a) q.push(v); } };
+  get(ICO.tg); get(ICO.mg); get(ICO.sg);
+  q.sort((p, r) => p.y - r.y);
+  c.save(); c.setTransform(S, 0, 0, S, -X0 * S, -Y0 * S); c.lineJoin = 'round'; c.lineCap = 'round'; c.imageSmoothingQuality = 'high';
+  const N = ICO.N, A = TSP.atlas;
+  for (const m of q) {
+    if (m.set) {   // нарисованный спрайт: ширина w (px карты), точка привязки — доля высоты от верха
+      const r = m.r, w = m.w, h = w * r[3] / r[2];
+      if (m.x + w / 2 < X0 || m.x - w / 2 > X1 || m.y - h * m.an > Y1 || m.y + h * (1 - m.an) < Y0) continue;
+      c.drawImage(A, r[0], r[1], r[2], r[3], m.x - w / 2, m.y - h * m.an, w, h); continue;
+    }
+    if (m.r !== undefined && m.idx !== undefined) {   // дерево
+      const r = m.r, px = Math.max(3, r * 4.2);
+      c.globalAlpha = 0.1; c.fillStyle = '#2a2418'; c.beginPath(); c.ellipse(m.x + r * 0.8, m.y + r * 0.4, r * 1.1, r * 0.5, 0, 0, 2 * Math.PI); c.fill();   // тень вправо-вниз
+      c.globalAlpha = 1; c.drawImage(ICO.atlas, m.idx * N, m.con * N, N, N, m.x - px / 2, m.y - px * 0.72, px, px); continue;
+    }
+    const wd = m.s * m.wk, P = m.prof, pts = []; let ip = 0;   // прежняя векторная гора (если нет атласа рельефа)
     for (let i = 0; i < 25; i++) { pts.push([m.x + (-1 + i / 12) * wd / 2, m.y - m.s * P[i]]); if (P[i] > P[ip]) ip = i; }
-    for (let i = 23; i >= 1; i--) { const t = -1 + i / 12; pts.push([m.x + t * wd / 2, m.y + m.s * 0.07 * (1 - t * t)]); }   // подножие — пологой дугой, а не ровным срезом
+    for (let i = 23; i >= 1; i--) { const t = -1 + i / 12; pts.push([m.x + t * wd / 2, m.y + m.s * 0.07 * (1 - t * t)]); }
     const poly = (a, col) => { c.beginPath(); c.moveTo(a[0][0], a[0][1]); for (let i = 1; i < a.length; i++) c.lineTo(a[i][0], a[i][1]); c.closePath(); c.fillStyle = col; c.fill(); };
     poly(pts, m.dk);
     const vx = pts[ip][0] + m.vx * wd, vmid = [(pts[ip][0] + vx) / 2 + m.vm * wd, m.y - m.s * m.vy];
@@ -706,7 +742,7 @@ function sharpFill(X0, Y0, X1, Y1, S, geo) {   // geo — режим «Мест�
   const Fb = blur(F), Rb = blur(Rv), Mb = blur(Mo), Fob = blur(Fo), Oub = blur(Ou);
   const ow = (X1 - X0) * S, oh = (Y1 - Y0) * S, cv = (PIX.sk && PIX.sk.cv) || document.createElement('canvas');
   if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
-  const cx = cv.getContext('2d'), im = cx.createImageData(ow, oh), d = im.data, e = 0.09, A0 = 190, AR = 20, AM = UI.ridgeA, AF = 115;
+  const cx = cv.getContext('2d'), im = cx.createImageData(ow, oh), d = im.data, e = 0.09, A0 = 190, AR = 20, AM = TSP.st === 2 ? Math.min(UI.ridgeA, 50) : UI.ridgeA, AF = 115;   // нарисованный рельеф — под лёгким оттенком державы
   // свои значки (горы, деревья): в «Местности» — просто поверх подложки; на политической — под цветом державы (просвечивают, как раньше)
   const useIco = ICO.st === 2 && (geo || UI.ridgeA < 190);
   let ic = null;
@@ -777,6 +813,9 @@ function paintVector() {
     const k = (img.naturalWidth || img.width) / M.W;
     ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
     if (z * dpr >= 1.15 && HI.idx) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче
+    // вблизи — подложка без гор и деревьев: их рисует ближний уровень рельефа (плавно, вместе с ним)
+    const tt = clamp((z * dpr - 1.8) / 1.6, 0, 1), tA = TSP.st === 2 ? tt * tt * (3 - 2 * tt) : 0;
+    if (tA > 0) { HIC.load(); if (HIC.idx) { ctx.globalAlpha = tA; drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, HIC); ctx.globalAlpha = 1; } }
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
   // вблизи — гладкая заливка с подпикселями и резкими значками гор и лесов. Пересчёт дорогой: пока карту двигают, показываем
@@ -894,8 +933,23 @@ function paintSelection(ctx, z) {
       for (let j = cut + 1; j < rp.length; j++) ctx.lineTo(rp[j][0], rp[j][1]);
       p = rp[rp.length - 1]; cur = x.leg.to;
     }
-    for (const k of x.path) { if (typeof k !== 'number' || k === cur) continue; for (const q of roadPts(cur, k).slice(1)) ctx.lineTo(q[0], q[1]); p = [MAPINFO.provs[k][1], MAPINFO.provs[k][2]]; cur = k; }
-    ctx.stroke(); ctx.setLineDash([]);
+    const legs = [];   // для выбранного войска: [ломаная, дней] — по точке на каждый день пути
+    if (x === a && x.leg && typeof x.leg.from === 'number') { const rp = roadPts(x.leg.from, x.leg.to), f = legPos(x), cut = Math.floor(f * (rp.length - 1)); legs.push([[armyXY(x)].concat(rp.slice(cut + 1)), Math.max(0, x.leg.dur - x.leg.t)]); }
+    for (const k of x.path) { if (typeof k !== 'number' || k === cur) continue; const rp = roadPts(cur, k); for (const q of rp.slice(1)) ctx.lineTo(q[0], q[1]); if (x === a) { const e = provGraph().adj[cur].find(q => q.to === k); legs.push([rp, e ? e.d : 1]); } p = [MAPINFO.provs[k][1], MAPINFO.provs[k][2]]; cur = k; }
+    if (x === a) { ctx.globalAlpha = 0.35; ctx.lineWidth = w(1.6); }
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+    if (x === a) {   // одна точка — один день марша (горы, леса, броды и перевалы — точки чаще)
+      ctx.fillStyle = col; ctx.strokeStyle = 'rgba(255,240,220,.9)'; ctx.lineWidth = w(1);
+      for (const [rp, days] of legs) {
+        const n = Math.max(1, Math.round(days)), L = []; let tot = 0;
+        for (let j = 1; j < rp.length; j++) { const d = Math.hypot(rp[j][0] - rp[j - 1][0], rp[j][1] - rp[j - 1][1]); L.push(d); tot += d; }
+        for (let i = 1; i <= n; i++) {
+          let s2 = tot * i / n, j = 0; while (j < L.length - 1 && s2 > L[j]) { s2 -= L[j]; j++; }
+          const u = L[j] ? s2 / L[j] : 0, px = rp[j][0] + (rp[j + 1] ? (rp[j + 1][0] - rp[j][0]) * u : 0), py = rp[j][1] + (rp[j + 1] ? (rp[j + 1][1] - rp[j][1]) * u : 0);
+          ctx.beginPath(); ctx.arc(px, py, w(2.6), 0, 7); ctx.fill(); ctx.stroke();
+        }
+      }
+    }
     ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 7); ctx.fillStyle = col; ctx.fill();
   });
 }
@@ -1234,6 +1288,87 @@ function seaGLDraw(T, dpr, Wd, Hd, show) {
   gl.uniform1f(U.uT, T); gl.uniform2f(U.uWind, WIND[0] / wl, WIND[1] / wl);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); return true;
 }
+/* --- вулканы (ближний уровень): Этна по датам (спокойна → активна → извержение 1329 г.: лава проявляется и гаснет плавно, свечение
+   пульсирует, лёгкий дым всегда), Стромболи — дым и слабое свечение кратера, Вулкано — белый пар, Везувий спит.
+   Искья (без спрайта): землетрясения 1301 г., извержение 18 января — март 1302 г. (дым), затем тёмный лавовый язык на северо-востоке.
+   Игровых последствий нет: только хук VOLC.hook(вид, данные) для будущих событий. --- */
+const VOLC = {
+  etnaActive: [[1284, 1286], [1321, 1329], [1333, 1335], [1350, 1351]],   // годы «активна» (конец — не включая)
+  etnaErupt: [1329 + 178 / 365, 1329 + 216 / 365],                         // 28 июня — 4 августа 1329
+  ischiaQuake: [1301, 1302], ischiaErupt: [1302 + 17 / 365, 1302 + 90 / 365],
+  hook(kind, data) { /* сюда автор подключит игровые последствия: kind — 'ischia_quakes' | 'ischia_eruption' | 'ischia_lava_sea' | 'etna_eruption' */ },
+  fired: {},
+};
+function gameYear() {   // дробный год по игровой дате
+  if (!G) return 1261; const s = G.season, y = G.year, sm = [2, 5, 8, 11][s];
+  const st = Date.UTC(y, sm, 1), en = Date.UTC(s === 3 ? y + 1 : y, (sm + 3) % 12, 1), t = st + Math.min(SEASON_DAYS, G.day || 0) / SEASON_DAYS * (en - st);
+  return y + (t - Date.UTC(y, 0, 1)) / (Date.UTC(y + 1, 0, 1) - Date.UTC(y, 0, 1));
+}
+function etnaLevels(Y) {   // доли «активна» и «извержение» (0..1) с плавными переходами
+  const ramp = (a, b, f) => Y < a - f || Y > b + f ? 0 : Y < a ? (Y - a + f) / f : Y > b ? 1 - (Y - b) / f : 1;
+  let act = 0; for (const [a, b] of VOLC.etnaActive) act = Math.max(act, ramp(a, b, 0.12));
+  const [e0, e1] = VOLC.etnaErupt, er = Y < e0 - 0.02 ? 0 : Y < e0 ? (Y - e0 + 0.02) / 0.02 : Y <= e1 ? 1 : Math.max(0, 1 - (Y - e1) / 0.35);   // затухание за ~4 месяца
+  return [Math.max(act, er * 0.7), er];
+}
+// события-предвестники и извержения: раз в игру, через журнал (хук — для будущих последствий)
+function volcEvents() {
+  if (!G) return; const Y = gameYear(), f = VOLC.fired = G.volc || (G.volc = {});
+  const once = (k, cond, text, imp) => { if (cond && !f[k]) { f[k] = 1; log(text, imp ? 'imp' : undefined); VOLC.hook(k, { year: Y }); } };
+  once('ischia_quakes', Y >= 1301.2 && Y < 1302, 'Искья: на острове одно за другим трясётся земля — рыбаки говорят, что гора проснётся.');
+  once('ischia_eruption', Y >= VOLC.ischiaErupt[0] && Y < VOLC.ischiaErupt[1], 'Искья: из склона горы вырвался огонь, над островом стоит чёрный дым.', true);
+  once('ischia_lava_sea', Y >= VOLC.ischiaErupt[0] + 0.05 && Y < VOLC.ischiaErupt[1] + 0.2, 'Искья: лава дошла до моря, жители бегут с острова на лодках.', true);
+  once('etna_eruption', Y >= VOLC.etnaErupt[0] && Y < VOLC.etnaErupt[1], 'Сицилия: Этна извергается — потоки лавы спускаются к Катании.', true);
+}
+const VCV = { last: 0, t: 0 };
+function volcFrame(now) {
+  requestAnimationFrame(volcFrame);
+  let cv = $('volccv');
+  if (!cv) { const w = $('mapwrap'); if (!w) return; cv = document.createElement('canvas'); cv.id = 'volccv'; cv.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:1'; w.insertBefore(cv, $('cloudcv')); }
+  const v = UI.view, dpr = Math.min(2, window.devicePixelRatio || 1), zd = v.z * dpr;
+  const show = TSP.st === 2 && G && UI.tab === 'map' && zd >= 1.8 && !document.hidden && !$('app').classList.contains('hidden');
+  if (now - VCV.last > 1000) volcEvents();
+  if (!show) { if (cv.width) cv.width = 0; VCV.last = now; return; }
+  if (now - VCV.last < 40) return; VCV.t += Math.min(0.2, (now - VCV.last) / 1000); VCV.last = now;
+  const wrap = $('mapwrap'), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
+  if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
+  const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
+  const tt = clamp((zd - 1.8) / 1.6, 0, 1), vis = tt * tt * (3 - 2 * tt), T = VCV.t, Y = gameYear();
+  x.setTransform(dpr * v.z, 0, 0, dpr * v.z, dpr * v.x, dpr * v.y);
+  const vx0 = -v.x / v.z, vy0 = -v.y / v.z, vx1 = vx0 + Wd / v.z, vy1 = vy0 + Hd / v.z;
+  const A = TSP.atlas, S = TSP.sets, wl = Math.hypot(WIND[0], WIND[1]), wx = WIND[0] / wl, wy = WIND[1] / wl;
+  // дым: клубы из атласа облаков поднимаются из точки и сносятся ветром
+  const smoke = (cx, cy, size, amt, dark, n = 7) => {
+    if (!CA.img || amt <= 0) return; const m = CA.meta, src = dark ? CA.sh : CA.img;
+    for (let i = 0; i < n; i++) {
+      const ph = (T * 0.07 + i / n) % 1, L = size * 3.2, s = size * (0.35 + 0.9 * ph), k = i % m.n;
+      const px = cx + wx * ph * L + Math.sin(T * 0.3 + i) * size * 0.15, py = cy - ph * L * 0.55 + wy * ph * L;
+      x.globalAlpha = amt * vis * Math.sin(Math.PI * ph) * (dark ? 0.55 : 0.6);
+      x.drawImage(src, (k % m.cols) * m.w, Math.floor(k / m.cols) * m.h, m.w, m.h, px - s, py - s * 0.6, s * 2, s * 1.2);
+    }
+    x.globalAlpha = 1;
+  };
+  const glow = (cx, cy, r, a) => { if (a <= 0) return; const g = x.createRadialGradient(cx, cy, 0, cx, cy, r); g.addColorStop(0, `rgba(255,170,60,${a * vis})`); g.addColorStop(0.4, `rgba(255,90,20,${a * vis * 0.5})`); g.addColorStop(1, 'rgba(255,60,0,0)'); x.globalCompositeOperation = 'lighter'; x.fillStyle = g; x.fillRect(cx - r, cy - r, r * 2, r * 2); x.globalCompositeOperation = 'source-over'; };
+  for (const l of TSP.lms) {
+    const r = l.r, h = l.w * r[3] / r[2], top = l.y - h * l.an, cx = l.x, cy = top + h * 0.1;
+    if (l.x + l.w < vx0 || l.x - l.w > vx1 || l.y + h < vy0 || top - h * 2 > vy1) continue;
+    if (l.set === 'lm_etna') {
+      const [act, er] = etnaLevels(Y), pulse = 0.8 + 0.2 * Math.sin(T * 2.3);
+      for (const [nm, a] of [['lm_etna_active', act * (1 - er)], ['lm_etna_erupt', er]]) if (a > 0.01) { const q = S[nm].r[0], hh = l.w * q[3] / q[2]; x.globalAlpha = a * vis; x.drawImage(A, q[0], q[1], q[2], q[3], l.x - l.w / 2, l.y - hh * l.an, l.w, hh); }
+      x.globalAlpha = 1; glow(cx, cy, l.w * (0.12 + 0.18 * er), (0.25 * act + 0.6 * er) * pulse);
+      smoke(cx, cy, l.w * (0.14 + 0.12 * act + 0.2 * er), 0.35 + 0.35 * act + 0.3 * er, er > 0.2, 7 + Math.round(5 * er));
+    } else if (l.set === 'lm_stromboli') { glow(cx, cy, l.w * 0.25, 0.25 * (0.75 + 0.25 * Math.sin(T * 3.1))); smoke(cx, cy, l.w * 0.3, 0.45, false, 5); }
+    else if (l.set === 'lm_vulcano') smoke(cx, cy + h * 0.05, l.w * 0.28, 0.35, false, 4);
+  }
+  // Искья: дым во время извержения, после — тёмный лавовый язык на северо-востоке острова
+  if (TSP.ischia) {
+    const [ix, iy] = TSP.ischia;
+    if (ix > vx0 - 60 && ix < vx1 + 60 && iy > vy0 - 60 && iy < vy1 + 60) {
+      if (Y >= VOLC.ischiaErupt[0]) { x.globalAlpha = 0.55 * vis; x.fillStyle = '#2b2522'; x.beginPath(); x.ellipse(ix + 2.2, iy - 1.4, 2.6, 0.9, -0.6, 0, 2 * Math.PI); x.fill(); x.globalAlpha = 1; }
+      if (Y >= VOLC.ischiaErupt[0] && Y < VOLC.ischiaErupt[1] + 0.05) { smoke(ix + 1, iy - 2, 6, 0.8, true, 8); glow(ix + 1.5, iy - 1, 4, 0.4 * (0.8 + 0.2 * Math.sin(T * 2))); }
+    }
+  }
+}
+if (!HEADLESS) requestAnimationFrame(volcFrame);
 function waveFrame(now) {
   requestAnimationFrame(waveFrame);
   const cv = $('wavecv'); if (!cv) return;

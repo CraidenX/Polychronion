@@ -43,7 +43,23 @@ function dayDate() {   // «14 июля 1261»: день сезона -> нас�
 }
 // длительность перехода между соседними областями (дней): по расстоянию между центрами, ~20 км в день,
 // по морю ~45 км в день; перевал — ещё PASS_DAYS. Масштаб карты: 1 px ≈ 0,63 км по долготе, 0,82 км по широте
-const MARCH_KM = 20, SAIL_KM = 45, PASS_DAYS = 15;
+const MARCH_KM = 20, SAIL_KM = 45;
+// скорость по местности (утверждено автором): множитель скорости марша по классу местности под каждым участком дороги
+// (при наложении классов берётся минимальный — это считает сборка, mkroadcost.py), задержки на переправах и перевалах — в днях
+const MOVE = {
+  mult: { plain: 1.0, hills: 0.75, forest: 0.5, forestRoad: 0.85, mountains: 0.4, swamp: 0.4, desert: 0.7, steppe: 1.0, road: 1.25 },
+  ford: 1, bigRiver: 4, bridge: 0,   // брод +1 день; большая река +3–5 (берём 4); по мосту — 0 (мостов в данных пока нет)
+  pass: 4,                            // перевал: +3–5 дней (было +15)
+};
+const PASS_DAYS = MOVE.pass;
+// дни пути по дороге связи i (rcost из mkroadcost.py: км по классам + броды + большие реки); null — по прямой
+function terrainDays(i, t) {
+  const c = typeof MAPINFO !== 'undefined' && MAPINFO.rcost && MAPINFO.rcost[i]; if (!c) return null;
+  const m = MOVE.mult, mm = [m.plain, m.hills, m.forest, m.mountains, m.swamp, m.desert, m.steppe];   // порядок как в rcost
+  let d = 0; for (let k = 0; k < 7; k++) d += c[k] / (MARCH_KM * mm[k]);
+  d += c[7] * MOVE.ford + c[8] * MOVE.bigRiver + (t === 'pass' ? MOVE.pass : 0);
+  return Math.max(1, Math.round(d));
+}
 function legKm(from, to) {
   const P = typeof MAPINFO !== 'undefined' && MAPINFO.pos, a = P && P[RID(from)], b = P && P[RID(to)];
   if (!a || !b) return 150;
@@ -239,7 +255,7 @@ function provGraph() {
       for (let j = 0; j < n; j++) { x += r[2 * j]; y += r[2 * j + 1]; pts[2 * j] = x; pts[2 * j + 1] = y; }
       len = 0; for (let j = 1; j < n; j++) len += Math.hypot((pts[2 * j] - pts[2 * j - 2]) * 0.63 / k, (pts[2 * j + 1] - pts[2 * j - 1]) * 0.82 / k);
     }
-    const d = Math.max(1, Math.round(len / (sea ? SAIL_KM : MARCH_KM))) + (t === 'pass' ? PASS_DAYS : 0);
+    const td = sea ? null : terrainDays(i, t), d = td != null ? td : Math.max(1, Math.round(len / (sea ? SAIL_KM : MARCH_KM))) + (t === 'pass' ? PASS_DAYS : 0);   // суша — по местности вдоль дороги
     adj[a].push({ to: b, t, d, pts, rev: false, km: len }); adj[b].push({ to: a, t, d, pts, rev: true, km: len });
   });
   reg.forEach((r, i) => { if (r) (byReg[r] = byReg[r] || []).push(i); });

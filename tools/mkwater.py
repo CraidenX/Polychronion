@@ -165,6 +165,9 @@ def export_icons():
     print('значки для игры: гор', n, 'деревьев', len(TP['x']), len(buf) // 1024, 'КБ')
 export_icons()
 if os.environ.get('ICONS_ONLY'): sys.exit(0)
+# NOICONS=1 — плитки 2× без гор и деревьев (hi_wc{VAR}c/): вблизи их рисует ближний уровень рельефа, старые значки не должны просвечивать
+NOI = bool(os.environ.get('NOICONS'))
+if NOI: TP = {kk: v[:0] for kk, v in TP.items()}; MP = {kk: v[:0] for kk, v in MP.items()}
 def sub(P, x0, y0, x1, y1, mg):
     s = (P['x'] >= x0 - mg) & (P['x'] < x1 + mg) & (P['y'] >= y0 - mg) & (P['y'] < y1 + mg)
     return {kk: v[s] for kk, v in P.items()}
@@ -244,13 +247,14 @@ out = paint(B0.copy(), 0, 0, 1, RV)
 # маска нарисованных значков для игры: на политической карте цвет державы над ними прозрачнее (горы 255, леса 165, реки 180)
 rel = np.zeros((H, W), np.uint8)
 rel[OBJ['t']] = 165; rel[RV > 0.18] = 180; rel[OBJ['m']] = 255
-Image.fromarray(rel).save(OUTD + f'/relief_wc{VAR}.png', optimize=True)
-Image.fromarray((out * 255).astype(np.uint8)).save(OUTD + f'/map_wc{VAR}.jpg', quality=90, optimize=True, progressive=True)
+if not NOI:
+    Image.fromarray(rel).save(OUTD + f'/relief_wc{VAR}.png', optimize=True)
+    Image.fromarray((out * 255).astype(np.uint8)).save(OUTD + f'/map_wc{VAR}.jpg', quality=90, optimize=True, progressive=True)
 print('map_wc.jpg готово, гор', len(MP['x']), 'деревьев', len(TP['x']))
 if os.environ.get('ONLY1'): sys.exit(0)
 # ---------- плитки 2× ----------
 T, MG = 512, 12
-hid = OUTD + f'/hi_wc{VAR}'; os.makedirs(hid, exist_ok=True)
+hid = OUTD + f'/hi_wc{VAR}' + ('c' if NOI else ''); os.makedirs(hid, exist_ok=True)
 _, (iy, ix) = nd.distance_transform_edt(WL, return_indices=True); landfill = B0[iy, ix]
 _, (iy, ix) = nd.distance_transform_edt(~WP, return_indices=True); waterfill = B0[iy, ix]
 del iy, ix
