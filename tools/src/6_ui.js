@@ -624,7 +624,7 @@ const GD = { st: 0, K: ['grass', 'steppe', 'maquis', 'sand'], img: {}, w: {}, c:
 // детали всех текстур складываются в один серый слой — заранее, с запасом вокруг экрана (на кадре — один проход «мягкого света»);
 // пересборка — когда меняется масштаб или экран выходит за запас, и только когда карта остановилась
 function detailBuild(vx0, vy0, vx1, vy1, kz) {
-  const M = MAPINFO, mx = (vx1 - vx0) * 0.3, my = (vy1 - vy0) * 0.3, X0 = vx0 - mx, Y0 = vy0 - my, X1 = vx1 + mx, Y1 = vy1 + my;
+  const M = MAPINFO, mx = (vx1 - vx0) * 0.2, my = (vy1 - vy0) * 0.2, X0 = vx0 - mx, Y0 = vy0 - my, X1 = vx1 + mx, Y1 = vy1 + my;
   const w = Math.ceil((X1 - X0) * kz), h = Math.ceil((Y1 - Y0) * kz);
   const C = (GD.c && GD.c.cv) || document.createElement('canvas'); if (C.width !== w || C.height !== h) { C.width = w; C.height = h; }
   const T = GD.tmp || (GD.tmp = document.createElement('canvas')); if (T.width !== w || T.height !== h) { T.width = w; T.height = h; }
@@ -643,11 +643,13 @@ function detailBuild(vx0, vy0, vx1, vy1, kz) {
 }
 function groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const a = clamp((z * dpr - 4) / 4, 0, 1); if (a <= 0) return;
-  if (!GD.st) { GD.st = 1; let n = 0; for (const k of GD.K) for (const [d, f] of [[GD.img, `detail_${k}.jpg`], [GD.w, `detail_w_${k}.png`]]) { const im = new Image(); im.onload = () => { if (++n === GD.K.length * 2) { GD.st = 2; scheduleVector(); } }; im.src = f; d[k] = im; } }
+  if (!GD.st) gdLoad();
   if (GD.st !== 2) return;
-  const kz = dpr * z, c = GD.c, moving = performance.now() - (UI.lastMove || 0) < 160;
-  const fits = c && Math.abs(c.kz - kz) < 1e-6 && vx0 >= c.X0 && vy0 >= c.Y0 && vx1 <= c.X1 && vy1 <= c.Y1;
-  if (!fits) { if (!moving || !c) detailBuild(vx0, vy0, vx1, vy1, kz); else { clearTimeout(GD.t); GD.t = setTimeout(scheduleVector, 180); } }
+  // слой собирается по ступеням масштаба (2^¼, ступень вверх — текстура не мельче экрана), между ступенями — растягивается:
+  // пересборка (заливка узорами четырёх текстур) — самое дорогое при приближении, раньше шла на каждом новом масштабе
+  const kz = dpr * z, kb = Math.pow(2, Math.ceil(Math.log2(kz) * 4 - 1e-6) / 4), c = GD.c, moving = performance.now() - (UI.lastMove || 0) < 160;
+  const fits = c && Math.abs(c.kz - kb) < 1e-6 && vx0 >= c.X0 && vy0 >= c.Y0 && vx1 <= c.X1 && vy1 <= c.Y1;
+  if (!fits) { if (!moving || !c) detailBuild(vx0, vy0, vx1, vy1, kb); else { clearTimeout(GD.t); GD.t = setTimeout(scheduleVector, 180); } }
   const g = GD.c; if (!g) return;
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = a; ctx.imageSmoothingEnabled = true;
   ctx.drawImage(g.cv, dpr * v.x + g.X0 * kz, dpr * v.y + g.Y0 * kz, (g.X1 - g.X0) * kz, (g.Y1 - g.Y0) * kz);   // во время приближения — растянутый прежний слой
@@ -722,6 +724,8 @@ function icoLoad() {
       for (const md of TSP.models) { md.img = new Image(); md.img.onload = () => scheduleVector(); md.img.src = md.file; }
     }
     Object.assign(ICO, { st: 2, mg, tg, sg, CELL, cw, atlas: im, N: im.width / 10 });
+    if (t) pretintStart(t.j);
+    gdLoad();
     PIX.vtKey = ''; scheduleVector(); if (G && typeof renderMarkers === 'function') renderMarkers();
   }).catch(() => { ICO.st = 3; });
 }
@@ -893,9 +897,10 @@ function polBorders(ctx, z, vx0, vy0, vx1, vy1, pa) {
 const TINT = { c: new Map() };
 function tintCanvas(src, sx, sy, sw, sh, col, an, tb) {
   const T0 = tb ? tb[0] : 0.15, T1 = tb ? tb[1] : 0.6;   // сила подкраски: вершина и подножие (у деревьев слабее)
-  const c = document.createElement('canvas'); c.width = sw; c.height = sh; const x = c.getContext('2d'); x.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
-  if (!col) return c;
-  const im = x.getImageData(0, 0, sw, sh), d = im.data, cl = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 + 1e-4;
+  const c = document.createElement('canvas'); c.width = sw; c.height = sh; const x = c.getContext('2d');
+  const cpu = src === TSP.atlas && TSP.pxc;   // копия атласа в обычной памяти: чтение пикселей без медленной выгрузки из видеопамяти
+  if (!col || !cpu) { x.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh); if (!col) return c; }
+  const im = cpu ? TSP.pxc.getImageData(sx, sy, sw, sh) : x.getImageData(0, 0, sw, sh), d = im.data, cl = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 + 1e-4;
   for (let yy = 0; yy < sh; yy++) {
     const t = clamp(((yy + 0.5) / sh - 0.15) / Math.max(0.2, an - 0.15), 0, 1), w0 = T0 + (T1 - T0) * t * t * (3 - 2 * t);
     for (let xx = 0; xx < sw; xx++) {
@@ -907,9 +912,30 @@ function tintCanvas(src, sx, sy, sw, sh, col, an, tb) {
   }
   x.putImageData(im, 0, 0); return c;
 }
+// предзагрузка: копия атласа в обычной памяти и все подкрашенные варианты спрайтов — в фоне, кусками по ~10 мс
+// (пока игрок на титуле и во вступлении), начиная с ближайших к столице; к приближению всё уже готово
+function pretintStart(j) {
+  if (TSP.pre) return;
+  const at = TSP.atlas, pc = document.createElement('canvas'); pc.width = at.width; pc.height = at.height;
+  const px = pc.getContext('2d', { willReadFrequently: true }); px.drawImage(at, 0, 0); TSP.pxc = px;
+  const seen = new Set(), q = [], cd = typeof REGION_DEFS !== 'undefined' && typeof RNAME !== 'undefined' && REGION_DEFS.find(d => RNAME[d[0]] === 'Константинополь'), cap = (cd && MAPINFO.pos[cd[0]]) || [2330, 1010];
+  for (const it of j.items) { const k = it[0] + ':' + it[1] + ':' + (it[6] == null ? -1 : it[6]); if (!seen.has(k)) { seen.add(k); q.push([Math.hypot(it[2] - cap[0], it[3] - cap[1]), it[0], it[1], it[6] == null ? -1 : it[6]]); } }
+  for (const l of j.landmarks) if (!l.model) q.push([0, l.set, 0, l.tone == null ? -1 : l.tone]);
+  q.sort((a, b) => a[0] - b[0]); TSP.pre = { q, i: 0, n: q.length };
+  const step = () => { const t0 = performance.now(), P = TSP.pre; while (P.i < P.n && performance.now() - t0 < 10) { const [, set, v, tone] = P.q[P.i++]; tintedSprite(set, v, tone); } if (P.i < P.n) setTimeout(step, 0); else P.done = true; };
+  setTimeout(step, 0);
+}
+function gdLoad() {   // текстуры детализации земли: загрузить, распаковать и один раз нарисовать заранее, чтобы первое приближение к 4× не стояло
+  if (GD.st) return; GD.st = 1; let n = 0; const all = [];
+  for (const k of GD.K) for (const [d, f] of [[GD.img, `detail_${k}.jpg`], [GD.w, `detail_w_${k}.png`]]) {
+    const im = new Image(); d[k] = im; all.push(im);
+    im.onload = () => { (im.decode ? im.decode() : Promise.resolve()).catch(() => {}).then(() => { if (++n === GD.K.length * 2) { const c = document.createElement('canvas'); c.width = c.height = 2; const x = c.getContext('2d'); for (const a of all) x.drawImage(a, 0, 0, 2, 2); GD.st = 2; scheduleVector(); } }); };
+    im.src = f;
+  }
+}
 function tintGet(key, make) {
   let c = TINT.c.get(key); if (c) { TINT.c.delete(key); TINT.c.set(key, c); return c; }
-  c = make(); TINT.c.set(key, c); if (TINT.c.size > 1200) TINT.c.delete(TINT.c.keys().next().value); return c;
+  c = make(); TINT.c.set(key, c); if (TINT.c.size > 2500) TINT.c.delete(TINT.c.keys().next().value); return c;
 }
 function tintedSprite(set, v, tone) {
   const S = TSP.sets[set], r = S.r[v], col = TSP.tones && tone >= 0 ? TSP.tones[tone] : null;
@@ -1394,6 +1420,8 @@ function cloudFrame(now) {
   x.globalAlpha = 1;
 }
 if (!HEADLESS) requestAnimationFrame(cloudFrame);
+// рельеф, деревья и детализация земли грузятся сразу при открытии страницы (пока игрок на титуле), а не при первом приближении
+if (!HEADLESS) setTimeout(() => { try { icoLoad(); } catch (e) {} }, 400);
 
 /* --- спокойное море: мягкое «дыхание» света, редкие линии зыби, тонкая полоса прибоя ---
    всё рисуется на отдельном холсте и в конце обрезается маской открытого моря (sea.png): реки и озёра не трогаем */
