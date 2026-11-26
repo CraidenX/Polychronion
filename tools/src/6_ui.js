@@ -731,10 +731,10 @@ function seaBlur() {
 }
 function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const u = geoU(z); if (u <= 0 || ICO.st !== 2 || TSP.st !== 2) return;
-  const sc = 0.9 + 0.1 * u, k = dpr * z, M = 150, q = [];
+  const sc = 1, k = dpr * z, M = 150, q = [];   // тот же размер, что у запечённых в дальний вид: при приближении спрайты не прыгают, только становятся чётче
   const get = g => { for (let cy = Math.floor((vy0 - 30) / ICO.CELL); cy <= Math.floor((vy1 + M) / ICO.CELL); cy++) for (let cx = Math.floor((vx0 - M) / ICO.CELL); cx <= Math.floor((vx1 + M) / ICO.CELL); cx++) { const a = g.get(cy * ICO.cw + cx); if (a) for (const o of a) q.push(o); } };
   get(ICO.tg); get(ICO.sg); q.sort((a, b) => a.y - b.y);
-  ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y); ctx.globalAlpha = u; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y); ctx.globalAlpha = Math.min(1, u * 8);   // живые спрайты стоят ровно на запечённых: быстро становятся непрозрачными — картинка не бледнеет ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   const A = TSP.atlas, N = ICO.N, sea = WV.mask;
   for (const m of q) {
     if (m.set) {
