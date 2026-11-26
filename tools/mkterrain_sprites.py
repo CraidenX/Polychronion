@@ -179,12 +179,31 @@ def ladd(y, x, name, lo, hi_):
     if 0 <= y < H and 0 <= x < W and land[y, x]: items.append((y, name, x, int(rng.integers(NV[name])), round(float(rng.uniform(lo, hi_) / 3), 1)))
 near_riv = nd.binary_dilation(np.load(SP + 'umap/rivers.npy') > 46, iterations=5)   # бугры не наезжают на русла
 mtn_lego = (passable > 0.55) & (impass < 0.3) & (saddle < 0.35) & ~lm_block
-for y, x in sparse(mtn_lego & ~near_riv, rng.random((H, W)).astype(np.float32), 24, 1.0):
-    ladd(y, x, 'lego_hill_r', 110, 150)
-    for j in range(int(rng.integers(2, 4))): ladd(y + rng.normal(0, 3), x + rng.normal(0, 6), 'lego_rock', 50, 75)
 hill_lego = hills_m & (saddle < 0.35) & ~lm_block & ~mtn_lego
-for y, x in sparse(hill_lego & ~near_riv, rng.random((H, W)).astype(np.float32), 34, 1.0):
+# K4: поле высот рельефа (условные метры; 1 ед. height.png = 4 у. м): исходная карта высот + купола по классам местности —
+#     холмы 30–60, проходимые горы 90–150, непроходимые 200–320. Купола задаются первыми; бугры parts_hilltops ставятся на их вершины.
+RELK = 4.0
+def domes(pts, lo, hi_, sig):   # сумма гауссовых куполов с вершиной заданной высоты
+    imp_ = np.zeros((H, W), np.float32)
+    for y, x in pts: imp_[y, x] += rng.uniform(lo, hi_) * 2 * np.pi * sig * sig
+    return nd.gaussian_filter(imp_, sig)
+hill_c = sparse(hill_lego & ~near_riv, rng.random((H, W)).astype(np.float32), 34, 1.0)
+mtn_c = sparse(mtn_lego & ~near_riv, rng.random((H, W)).astype(np.float32), 24, 1.0)
+DOME = domes(hill_c, 30, 60, 6.0) + domes(mtn_c, 90, 150, 7.0)
+imp_c = sparse((impass > 0.6) & (saddle < 0.35), rng.random((H, W)).astype(np.float32), 13, 1.0)
+DOME += domes(imp_c, 200, 320, 7.0)
+REL = (nd.gaussian_filter(hraw, 2.0) * RELK + DOME) * land
+np.save(SP + 'umap/relief.npy', REL.astype(np.float16))
+def top(y, x, r=5):   # вершина купола рядом с центром
+    ys_, xs_ = slice(max(0, y - r), y + r + 1), slice(max(0, x - r), x + r + 1); sub_ = DOME[ys_, xs_]; i = int(np.argmax(sub_))
+    return ys_.start + i // sub_.shape[1], xs_.start + i % sub_.shape[1]
+for y, x in mtn_c:
+    y, x = top(y, x); ladd(y, x, 'lego_hill_r', 110, 150)
+    for j in range(int(rng.integers(2, 4))): ladd(y + rng.normal(0, 3), x + rng.normal(0, 6), 'lego_rock', 50, 75)
+for y, x in hill_c:
+    y, x = top(y, x)
     for j in range(int(rng.integers(2, 4))): ladd(y + (rng.normal(0, 4) if j else 0), x + (rng.normal(0, 8) if j else 0), 'lego_hill', 70 * (1 if j == 0 else 0.75), 115 * (1 if j == 0 else 0.75))
+print('купола: холмы', len(hill_c), 'проходимые горы', len(mtn_c), 'непроходимые', len(imp_c), 'высоты у. м: до', int(REL.max()))
 # 1) непроходимые — из «конструктора» (образец terrain_lego/lego_render.py): центры вразброс с шагом ~13 px карты;
 #    направление — тензор структуры маски непроходимых гор; при когерентности > 0,2 — с вероятностью 75 % хребет этого направления
 #    (150–200 px экрана при 4×), иначе одиночная вершина (95–130)

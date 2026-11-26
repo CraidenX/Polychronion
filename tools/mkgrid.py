@@ -171,7 +171,8 @@ def rle(a):
         v = int(a[s]); ln = int(e - s)
         while ln > 0: q = min(ln, 65535); out += [v, q]; ln -= q
     return np.array(out, np.uint16)
-layers = [('cls', cls), ('prov', prov), ('flags', flags), ('edge', edge)]
+REL = np.load(SP + 'umap/relief.npy').astype(np.float32); hcell = np.clip(blocks(REL).mean(2), 0, 65535).astype(np.uint16)   # K4: средняя высота клетки, у. м
+layers = [('cls', cls), ('prov', prov), ('flags', flags), ('edge', edge), ('h', hcell)]
 enc = [rle(a) for _, a in layers]
 hdr = np.array([0x47524944, GW, GH, C, len(layers)] + [len(e) for e in enc], np.uint32)
 with open(OUT + '/grid.bin', 'wb') as f:
@@ -182,7 +183,7 @@ json.dump({'_': 'Сетка перемещений (mkgrid.py). grid.bin: заг
            'cls': 'биты класса местности (как umap/tclass.npy): 1 холмы, 2 лес, 4 проходимые горы, 8 непроходимые, 16 болото, 32 пустыня, 64 степь; 0 равнина; 255 не суша',
            'prov': 'номер провинции + 1 (MAPINFO.provs), 0 — нет',
            'flags': FLAGS, 'edge': 'переправы на рёбрах к соседям E (биты 0–1), S (2–3), SE (4–5), SW (6–7): 0 нет, 1 брод, 2 большая река, 3 мост',
-           'km': 'шаг по x ≈ 6·0,63 км, по y ≈ 6·0,82 км'}, open(OUT + '/grid.json', 'w'), ensure_ascii=False, indent=1)
+           'h': 'K4: средняя высота клетки (условные метры, mkterrain_sprites.py → umap/relief.npy), u16', 'km': 'шаг по x ≈ 6·0,63 км, по y ≈ 6·0,82 км'}, open(OUT + '/grid.json', 'w'), ensure_ascii=False, indent=1)
 e = edge
 print('сетка', GW, 'x', GH, 'суша', int((flags & 1 > 0).sum()), 'зона', int((flags & 2 > 0).sum()), 'море', int((flags & 32 > 0).sum()),
       'дороги', int((flags & 4 > 0).sum()), 'проливы', int((flags & 64 > 0).sum()), 'перевалы', int((flags & 8 > 0).sum()), 'непроходимые', int((flags & 16 > 0).sum()),

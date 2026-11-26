@@ -266,7 +266,7 @@ def up(a, mode=Image.BICUBIC):
 if NOI:
     TC = np.load(SP + 'umap/tclass.npy')
     DSEA = nd.distance_transform_edt(~(WP & ~land)).astype(np.float32)
-    HSM = nd.gaussian_filter(hgt, 2.0)
+    HSM = (np.load(SP + 'umap/relief.npy').astype(np.float32) / 4.0) if os.path.exists(SP + 'umap/relief.npy') else nd.gaussian_filter(hgt, 2.0)   # K4: светотень — по полю высот рельефа (купола холмов и гор)
     MTB = nd.gaussian_filter(((TC != 255) & ((TC & (1 | 4 | 8)) > 0)).astype(np.float32), 6)   # холмы и горы — светотень сильнее
     # текстуры со своим цветом (насыщенность ≈ 0,88; трава приглушена на 15 %) в двух масштабах: повтор ≈ 140 и 226 px плитки
     # (≈ 280 и 450 px экрана при 4×) — смесь масштабов прячет повторы
