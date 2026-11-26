@@ -267,13 +267,26 @@ if NOI:
     DSEA = nd.distance_transform_edt(~(WP & ~land)).astype(np.float32)
     HSM = nd.gaussian_filter(hgt, 2.0)
     MTB = nd.gaussian_filter(((TC != 255) & ((TC & (1 | 4 | 8)) > 0)).astype(np.float32), 6)   # холмы и горы — светотень сильнее
-    def _tex(name, sat, amp, hue):   # текстура → «рисунок» (отношение к среднему) + оттенок; насыщенность приглушена под палитру карты
-        t = np.asarray(Image.open(SP + f'textures/{name}.webp').convert('RGB')).astype(np.float32) / 255
-        lum = (t @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]; t = lum + (t - lum) * sat
-        mean = t.reshape(-1, 3).mean(0); det = 1 + (t / mean - 1) * amp
-        return det.astype(np.float32), mean, hue
-    TEX = {'grass': _tex('grass', 0.42, 0.9, 0.12), 'steppe': _tex('steppe', 0.55, 0.9, 0.22), 'maquis': _tex('maquis', 0.55, 0.7, 0.22),
-           'sand': _tex('sand', 0.6, 0.8, 0.3), 'marsh': _tex('marsh', 0.5, 1.0, 0.25)}
+    # текстуры со своим цветом (насыщенность ≈ 0,88; трава приглушена на 15 %) в двух масштабах: повтор ≈ 140 и 226 px плитки
+    # (≈ 280 и 450 px экрана при 4×) — смесь масштабов прячет повторы
+    def _tex(name, sat, val):
+        t = Image.open(SP + f'textures/{name}.webp').convert('RGB'); out = []
+        for n in (140, 226):
+            a = np.asarray(t.resize((n, n), Image.LANCZOS)).astype(np.float32) / 255
+            lum = (a @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]; out.append(np.clip((lum + (a - lum) * sat) * val, 0, 1))
+        return out
+    SC = 0.88 / 1.18 / 1.1   # итоговая насыщенность ≈ 0,88: paint() в конце ещё раз поднимает насыщенность (×1,18) и контраст (×1,2)
+    TEX = {'grass': _tex('grass', SC * 0.85, 0.92), 'steppe': _tex('steppe', SC, 1.0), 'maquis': _tex('maquis', SC, 1.0),
+           'sand': _tex('sand', SC, 1.0), 'marsh': _tex('marsh', SC, 1.0)}
+    # общие для всей карты поля шума (без швов между плитками): сдвиг весов классов и смешение двух масштабов текстуры
+    _r = np.random.default_rng(31)
+    NZQ = nd.gaussian_filter(_r.standard_normal(((H + 3) // 4, (W + 3) // 4)).astype(np.float32), 1.3); NZQ /= NZQ.std()
+    MXQ = nd.gaussian_filter(_r.standard_normal(((H + 3) // 4, (W + 3) // 4)).astype(np.float32), 5); MXQ = np.clip(MXQ / MXQ.std() * 0.35 + 0.5, 0, 1)
+    GAIN = float(os.environ.get('GAIN', '1.2'))   # земля светлее прежней на ~30 % (у подножий — не темнее низа спрайтов)
+    def _crop4(F, x0, y0, x1, y1, k):   # кусок поля четвертного разрешения в масштабе k (1 — карта, 2 — плитка)
+        qy0, qx0 = y0 // 4, x0 // 4; sub = F[qy0:(y1 + 3) // 4 + 1, qx0:(x1 + 3) // 4 + 1]
+        z = nd.zoom(sub, 4 * k, order=1); oy, ox = (y0 - qy0 * 4) * k, (x0 - qx0 * 4) * k
+        return z[oy:oy + (y1 - y0) * k, ox:ox + (x1 - x0) * k]
     SOUTH = 866   # ≈ 42° с. ш.: южнее — средиземноморские побережья (маквис)
     WARM, COOL = np.array([1.0, 0.945, 0.785], np.float32), np.array([0.24, 0.29, 0.42], np.float32)
     # «подошвы»: цвет подножия каждого набора — средний цвет нижней полосы спрайта (над точкой привязки)
@@ -292,10 +305,10 @@ if NOI:
     def close_land(bl, x0, y0, x1, y1):
         h2, w2 = bl.shape[:2]
         tcc = TC[y0:y1, x0:x1]; isl = tcc != 255; ref = ecol[y0:y1, x0:x1]
-        green = np.clip((ref[..., 1] - (ref[..., 0] + ref[..., 2]) / 2 - 0.005) / 0.05, 0, 1)
+        green = nd.gaussian_filter(np.clip((ref[..., 1] - (ref[..., 0] + ref[..., 2]) / 2 - 0.005) / 0.05, 0, 1), 6)   # трава или степь — плавно, без лоскутов
         ys = np.arange(y0, y1)[:, None] * np.ones((1, x1 - x0))
-        rr = np.random.default_rng(x0 * 7 + y0 * 3)
-        nz = nd.gaussian_filter(rr.standard_normal((y1 - y0, x1 - x0)).astype(np.float32), 5); nz /= nz.std() + 1e-6
+        q = lambda F: _crop4(F, x0, y0, x1, y1, 1)
+        nz = q(NZQ)
         bit = lambda b: ((tcc & b) > 0) & isl
         hill = bit(1) | bit(4) | bit(8)
         w = {'sand': bit(32) * 1.0, 'marsh': bit(16) * 1.0,
@@ -304,27 +317,22 @@ if NOI:
         w['maquis'] *= (1 - w['sand']) * (1 - w['marsh']); w['steppe'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh']); w['grass'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh'])
         for k in w: w[k] = np.clip(nd.gaussian_filter(w[k], 3.0) + 0.12 * nz * (w[k] > 0.05), 0, None)
         tot = sum(w.values()) + 1e-6
-        # координаты 2× (общие для всей карты — без швов между плитками); второй отсчёт текстуры — другой масштаб и сдвиг (без видимых повторов)
         gy = (y0 * 2 + np.arange(h2))[:, None]; gx = (x0 * 2 + np.arange(w2))[None, :]
-        m2 = nd.zoom(nd.gaussian_filter(rr.standard_normal((y1 - y0, x1 - x0)).astype(np.float32), 18), 2, order=1)[:h2, :w2]; m2 = np.clip(m2 / (m2.std() + 1e-6) * 0.5 + 0.5, 0, 1)[..., None]
-        ay, ax = gy % 1024, gx % 1024; by_, bx_ = (gy * 0.77 + 311).astype(int) % 1024, (gx * 0.77 + 517).astype(int) % 1024
-        lumb = (bl @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]
-        out = np.zeros_like(bl)
-        for k, (det, mean, hue) in TEX.items():
+        mx = _crop4(MXQ, x0, y0, x1, y1, 2)[:h2, :w2][..., None]
+        tex = np.zeros_like(bl)
+        for k, (tA, tB) in TEX.items():
             wk = nd.zoom(w[k] / tot, 2, order=1)[:h2, :w2][..., None]
             if wk.max() < 0.01: continue
-            d = det[ay, ax] * (1 - m2) + det[by_, bx_] * m2
-            tint = mean * (lumb / (mean @ np.array([0.3, 0.59, 0.11], np.float32)))         # оттенок текстуры при яркости палитры карты
-            base = bl * (1 - hue) + tint * hue
-            out += wk * base * d
+            tex += wk * (tA[gy % 140, gx % 140] * (1 - mx) + tB[(gy + 77) % 226, (gx + 131) % 226] * mx)
         lw = nd.zoom(isl.astype(np.float32), 2, order=1)[:h2, :w2][..., None]
+        out = (tex * 0.75 + bl * 0.25) * GAIN                                       # цвет текстур; прежняя подложка — лёгкий оттенок для плавных переходов
         out = bl * (1 - lw) + out * lw
-        # светотень: тёплый свет с северо-запада, холодная тень; сильнее в холмах и горах
-        hz = nd.zoom(HSM[y0:y1, x0:x1], 2, order=1)[:h2, :w2]; dy, dx = np.gradient(hz * 0.55)
+        # светотень мягче: на равнине почти нет, в холмах и горах — умеренная, без тёмных разводов
+        hz = nd.zoom(nd.gaussian_filter(HSM[y0:y1, x0:x1], 2.5), 2, order=1)[:h2, :w2]; dy, dx = np.gradient(hz * 0.5)
         lx, ly, lz = -0.62, -0.62, 0.48; sh = (-dx * lx - dy * ly + lz) / np.sqrt(dx * dx + dy * dy + 1)
-        sh = np.clip((sh - lz) * 1.6, -1, 1) * (0.3 + 0.7 * nd.zoom(MTB[y0:y1, x0:x1], 2, order=1)[:h2, :w2])
-        sp_ = np.clip(sh, 0, 1)[..., None] * 0.32; sn = np.clip(-sh, 0, 1)[..., None] * 0.26
-        out = out * (1 - sp_) + WARM * sp_; out = out * (1 - sn) + out * COOL * 1.7 * sn
+        sh = np.clip((sh - lz) * 1.4, -1, 1) * (0.05 + 0.6 * nd.zoom(MTB[y0:y1, x0:x1], 2, order=1)[:h2, :w2])
+        sp_ = np.clip(sh, 0, 1)[..., None] * 0.22; sn = np.clip(-sh, 0, 1)[..., None] * 0.16
+        out = out * (1 - sp_) + WARM * sp_; out = out * (1 - sn) + out * COOL * 1.9 * sn
         # подошвы: мягкая контактная тень на юго-восток и пятно цвета подножия с размытым краем
         sel = FEET[(FEET[:, 0] + FEET[:, 2] > x0) & (FEET[:, 0] - FEET[:, 2] < x1) & (FEET[:, 1] + FEET[:, 2] > y0) & (FEET[:, 1] - FEET[:, 2] < y1)]
         if len(sel):
