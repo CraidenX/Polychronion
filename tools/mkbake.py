@@ -6,7 +6,7 @@
 # Запуск после mkwater.py (NOICONS=1) и mkterrain_sprites.py: python3 -I mkbake.py ..   (VAR=2 — второй стиль)
 import os, sys, json, struct
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy import ndimage as nd
 SP = os.path.dirname(os.path.abspath(__file__)) + '/'
 OUT = sys.argv[1] if len(sys.argv) > 1 else SP + '..'
@@ -19,7 +19,27 @@ TREES = Image.open(OUT + '/trees.png').convert('RGBA'); NT = TREES.width // 10
 idx = json.load(open(OUT + f'/hi_wc{VAR}c/index.json')); T = idx['T']
 # суша, размытая на ~2,5 px — для обрезки подножий у берега (как в игре)
 LANDS = nd.gaussian_filter(land.astype(np.float32), 1.2)
-RIV = np.load(SP + 'umap/rivers.npy') > 46
+RIV = np.zeros(np.load(SP + 'umap/rivers_big.npy').shape, bool)   # J5: чёткий растровый слой рек не нужен — вблизи игра рисует реки линиями (большие — лентой, малые — тонкой линией)
+RSM = json.load(open(OUT + '/rivers_small.json'))['lines']   # малые реки — линиями (mkrivvec.py)
+RSB = [(min(l[0::2]), min(l[1::2]), max(l[0::2]), max(l[1::2])) for l in RSM]
+RBG = list(json.load(open(OUT + '/rivers_big.json'))['rivers'].values())   # большие реки — лентой шириной w px карты
+def small_rivers(img, X0, Y0, X1, Y1, K):   # малые реки на плитке: берег (песок/ил), тёмная кромка, вода; сглаживание — рисуем в 3× и уменьшаем
+    SS = 3; sel = [l for l, b in zip(RSM, RSB) if b[2] >= X0 - 4 and b[0] <= X1 + 4 and b[3] >= Y0 - 4 and b[1] <= Y1 + 4]
+    bigs = [r for r in RBG if max(r['pts'][0::2]) >= X0 - 8 and min(r['pts'][0::2]) <= X1 + 8 and max(r['pts'][1::2]) >= Y0 - 8 and min(r['pts'][1::2]) <= Y1 + 8]
+    if not sel and not bigs: return img
+    w, h = img.size; lay = Image.new('RGBA', (w * SS, h * SS), (0, 0, 0, 0)); d = ImageDraw.Draw(lay)
+    for r in bigs:   # как в игре: берег, тёмная кромка, вода, светлая стремнина
+        pts = [((r['pts'][i] - X0) * K * SS, (r['pts'][i + 1] - Y0) * K * SS) for i in range(0, len(r['pts']), 2)]; bw = r['w'] * K * SS
+        for col, wd in (((160, 140, 98, 153), bw + 2.0 * K * SS), ((30, 44, 58, 235), bw + 1.0 * K * SS), ((58, 98, 132, 255), bw), ((96, 138, 168, 255), max(1, bw * 0.35))):
+            d.line(pts, fill=col, width=max(1, int(round(wd))), joint='curve')
+    core = 1.6 * K * SS
+    for col, wd in (((168, 150, 106, 150), core + 2.4 * K * SS), ((38, 52, 66, 225), core + 0.9 * K * SS), ((64, 104, 136, 255), core)):
+        for l in sel:
+            pts = [((l[i] - X0) * K * SS, (l[i + 1] - Y0) * K * SS) for i in range(0, len(l), 2)]
+            d.line(pts, fill=col, width=max(1, int(round(wd))), joint='curve')
+            r = wd / 2
+            for x, y in (pts[0], pts[-1]): d.ellipse((x - r, y - r, x + r, y + r), fill=col)
+    return Image.alpha_composite(img, lay.resize((w, h), Image.LANCZOS))
 # что рисуем: спрайты (без перевалов, они — тоже спрайты) и уникальные горы; деревья рощ
 items = []   # (y, kind, data)
 TONES = np.array(TSJ.get('tones', [[0.5, 0.45, 0.35]] * 8), np.float32)
@@ -103,7 +123,7 @@ for tx_, ty_ in idx['tiles']:
             if px0 > tw or py0 > th or px0 + px < 0 or py0 + px < 0: continue
             lay.paste(Image.alpha_composite(lay.crop((px0, py0, px0 + px, py0 + px)), sp), (px0, py0))
             tre.paste(255, (px0, py0), sp.getchannel('A').point(lambda q: 255 if q > 128 else 0))
-    out = base
+    out = small_rivers(base, X0, Y0, X1, Y1, K)   # J5: малые реки — под моделями и спрайтами
     for md in MODELS:   # модели, заменяющие кусок карты (Афон): картинка с прозрачностью в рамке (пиксели карты) — под спрайтами
         mx0, my0, mx1, my1 = md['box']
         if mx1 < X0 or mx0 > X1 or my1 < Y0 or my0 > Y1: continue

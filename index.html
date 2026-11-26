@@ -167,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 101, "date": "26.11.2026 22:21"};
+const GAME_VERSION = {"v": 102, "date": "26.11.2026 23:16"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -475,7 +475,9 @@ const MARCH_KM = 20, SAIL_KM = 45;
 // (при наложении классов берётся минимальный — это считает сборка, mkroadcost.py), задержки на переправах и перевалах — в днях
 const MOVE = {
   mult: { plain: 1.0, hills: 0.75, forest: 0.5, forestRoad: 0.85, mountains: 0.4, swamp: 0.4, desert: 0.7, steppe: 1.0, road: 1.25 },
-  ford: 1, bigRiver: 4, bridge: 0,   // брод +1 день; большая река +3–5 (берём 4); по мосту — 0 (мостов в данных пока нет)
+  ford: 0.5, bigRiver: Infinity, bridge: 0,   // J5: малая река (брод) +0,5 дня; большая река — только по мосту (без моста непроходима); по мосту — 0
+  bigRiverDetour: 2,                  // грубая оценка без сетки (rcost): обход до моста ≈ +2 дня
+  riverSail: true,                    // с флотом (речными судами) — вдоль большой реки со скоростью плавания
   pass: 4,                            // перевал: +3–5 дней (было +15)
 };
 const PASS_DAYS = MOVE.pass;
@@ -484,7 +486,7 @@ function terrainDays(i, t) {
   const c = typeof MAPINFO !== 'undefined' && MAPINFO.rcost && MAPINFO.rcost[i]; if (!c) return null;
   const m = MOVE.mult, mm = [m.plain, m.hills, m.forest, m.mountains, m.swamp, m.desert, m.steppe];   // порядок как в rcost
   let d = 0; for (let k = 0; k < 7; k++) d += c[k] / (MARCH_KM * mm[k]);
-  d += c[7] * MOVE.ford + c[8] * MOVE.bigRiver + (t === 'pass' ? MOVE.pass : 0);
+  d += c[7] * MOVE.ford + c[8] * (Number.isFinite(MOVE.bigRiver) ? MOVE.bigRiver : MOVE.bigRiverDetour) + (t === 'pass' ? MOVE.pass : 0);
   return Math.max(1, Math.round(d));
 }
 function legKm(from, to) {
@@ -825,7 +827,7 @@ function gridPath(s, t, allow, sail, maxN = 300000) {
   const W = GRID.GW, Hh = GRID.GH, g = GRID.g, from = GRID.from, st = GRID.stamp, cl = GRID.closed, M = GRID.mult, F = GRID.flags, P = GRID.prov;
   const gen = ++GRID.gen, ED = EDGE_DAYS(), vh = Math.max(sail ? SAIL_KM : 0, MARCH_KM * MOVE.mult.road);
   const tx = t % W, ty = Math.floor(t / W), hf = c => Math.hypot((c % W - tx) * GRID.kx, (Math.floor(c / W) - ty) * GRID.ky) / vh;
-  const ok = c => (F[c] & 1) ? (M[c] > 0 && allow[P[c] - 1] === 1) : ((F[c] & 64) || (sail && (F[c] & 32)));
+  const ok = c => (F[c] & 1) ? (M[c] > 0 && allow[P[c] - 1] === 1) : ((F[c] & 64) || (sail && (F[c] & (32 | 128))));   // 128 — судоходная большая река (вода)
   const heap = [], push = (f, c) => { heap.push([f, c]); let i = heap.length - 1; while (i > 0) { const q = (i - 1) >> 1; if (heap[q][0] <= heap[i][0]) break; [heap[q], heap[i]] = [heap[i], heap[q]]; i = q; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
   st[s] = gen; g[s] = 0; from[s] = -1; push(hf(s), s); let n = 0;
@@ -837,8 +839,10 @@ function gridPath(s, t, allow, sail, maxN = 300000) {
       if (!dx && !dy) continue; const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= W || y >= Hh) continue;
       const v = y * W + x; if (cl[v] === gen || !ok(v)) continue;
       const vsea = !(F[v] & 1), km = dx && dy ? GRID.kd : dx ? GRID.kx : GRID.ky;
-      let d = vsea || sea ? (sail ? km / SAIL_KM : km / MARCH_KM + (vsea && !sea ? 1 : 0)) : km / (MARCH_KM * M[v]);   // без флота пролив — на лодках: 20 км/день и день на переправу
-      if (!vsea && !sea) { d += ED[edgeCode(c, dx, dy)]; if ((F[v] & 8) && !(F[c] & 8)) d += MOVE.pass; }
+      const rs = sail && MOVE.riverSail && (F[c] & 128) && (F[v] & 128);   // J5: вдоль большой реки — на судах
+      const vbr = (F[v] & 64) && (F[v] & 128);   // мост через водный участок большой реки — пешком, без лодок
+      let d = vsea || sea || rs ? (sail ? km / SAIL_KM : km / MARCH_KM + (vsea && !sea && !vbr ? 1 : 0)) : km / (MARCH_KM * M[v]);   // без флота пролив — на лодках: 20 км/день и день на переправу
+      if (!vsea && !sea && !rs) { const ec = ED[edgeCode(c, dx, dy)]; if (ec === Infinity) continue; d += ec; if ((F[v] & 8) && !(F[c] & 8)) d += MOVE.pass; }   // большая река без моста — непроходима
       const nd = g[c] + d; if (st[v] === gen && nd >= g[v]) continue;
       st[v] = gen; g[v] = nd; from[v] = c; push(nd + hf(v), v);
     }
@@ -894,11 +898,13 @@ function buildRoute(x0, y0, nodes, sail) {
     let m = sea ? 0 : M[c]; if (!sea && !m) m = pm; if (m) pm = m;
     if (c !== pc && !sea && (F[pc] & 1)) {   // переход в соседнюю клетку: переправа, перевал — остановка
       const dx = Math.sign(c % W - pc % W), dy = Math.sign(Math.floor(c / W) - Math.floor(pc / W));
-      const stop = ED[edgeCode(pc, dx, dy)] + ((F[c] & 8) && !(F[pc] & 8) ? MOVE.pass : 0);
+      const rs = sail && MOVE.riverSail && (F[c] & 128) && (F[pc] & 128), e0 = rs ? 0 : ED[edgeCode(pc, dx, dy)];
+      const stop = (Number.isFinite(e0) ? e0 : 0) + ((F[c] & 8) && !(F[pc] & 8) ? MOVE.pass : 0);
       if (stop) { RX.push(X[i - 1]); RY.push(Y[i - 1]); t += stop; T.push(t); }
     }
-    if (sea && !sail && (F[pc] & 1)) t += 1;   // переправа на лодках
-    t += sea ? km / (sail ? SAIL_KM : MARCH_KM) : km / (MARCH_KM * m);
+    if (sea && !sail && (F[pc] & 1) && !((F[c] & 64) && (F[c] & 128))) t += 1;   // переправа на лодках (по мосту — без задержки)
+    const onRiv = sail && MOVE.riverSail && (F[c] & 128) && (F[pc] & 128);   // вдоль большой реки на судах
+    t += sea ? km / (sail ? SAIL_KM : MARCH_KM) : onRiv ? km / SAIL_KM : km / (MARCH_KM * m);
     RX.push(X[i]); RY.push(Y[i]); T.push(t); pc = c;
   }
   return { x: RX.map(v => Math.round(v * 10) / 10), y: RY.map(v => Math.round(v * 10) / 10), t: T.map(v => Math.round(v * 1000) / 1000) };
@@ -3497,7 +3503,7 @@ function pretintStart(j) {
 const PRL = { tiles: 0, tilesN: 0, started: false };
 function preloadAll() {
   if (PRL.started || HEADLESS || typeof fetch === 'undefined' || location.protocol === 'file:') return; PRL.started = true;
-  HI.load(); HIC.load();
+  HI.load(); HIC.load(); rivLoad();
   const bar = document.createElement('div'); bar.id = 'preBar';
   bar.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;width:min(360px,80vw);padding:6px 10px 8px;border-radius:8px;background:rgba(24,18,30,.82);color:#e9dcc0;font:12px/1.3 Georgia,serif;text-align:center;pointer-events:none;transition:opacity .6s';
   bar.innerHTML = '<div id="preTxt">Подготовка карты…</div><div style="margin-top:5px;height:5px;border-radius:3px;background:rgba(255,255,255,.15);overflow:hidden"><div id="preFill" style="height:100%;width:0;background:#c9a24a;transition:width .2s"></div></div>';
@@ -3523,6 +3529,58 @@ function prlFrac() {   // доля готовности тяжёлой част�
   if (HEADLESS || location.protocol === 'file:') return 1;
   const t = PRL.tilesN ? PRL.tiles / PRL.tilesN : 0, p = TSP.pre ? TSP.pre.i / Math.max(1, TSP.pre.n) : 0, o = (ICO.st >= 2 ? 0.5 : 0) + (GD.st === 2 ? 0.5 : 0);
   const f = t * 0.6 + p * 0.3 + o * 0.1; return f > 0.999 ? 1 : f;   // 0,6 + 0,3 + 0,1 в плавающей точке — не ровно 1
+}
+// J5: малые реки (rivers_small.json, mkrivvec.py) и мосты (bridges.json, mkgrid.py)
+const RIVS = { st: 0, lines: [], bb: [], br: [], big: [] };
+function rivLoad() {
+  if (RIVS.st || HEADLESS || typeof fetch === 'undefined' || location.protocol === 'file:') return; RIVS.st = 1;
+  Promise.all([fetch('rivers_small.json').then(r => r.json()), fetch('bridges.json').then(r => r.json()).catch(() => ({ bridges: [] })), fetch('rivers_big.json').then(r => r.json()).catch(() => ({ rivers: {} }))]).then(([j, b, bg]) => {
+    for (const r of Object.values(bg.rivers || {})) { const a = Float32Array.from(r.pts); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.big.push({ a, w: r.w, bb: [x0, y0, x1, y1] }); }
+    for (const l of j.lines) { const a = Float32Array.from(l); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.lines.push(a); RIVS.bb.push([x0, y0, x1, y1]); }
+    RIVS.br = b.bridges || []; RIVS.st = 2; scheduleVector();
+  }).catch(() => { RIVS.st = 3; });
+}
+// малые реки вблизи: ширина на экране почти не растёт с приближением (≈ 3 px при 4×); берег (песок/ил) 1–2 px, тонкая тёмная кромка
+function riversSmall(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  const u = geoU(z); if (u <= 0) return; if (RIVS.st !== 2) { rivLoad(); return; }
+  const w = (2.2 + 0.4 * Math.log2(Math.max(1, z))) * dpr, P = new Path2D(), k = dpr * z, ox = dpr * v.x, oy = dpr * v.y;
+  for (let n = 0; n < RIVS.lines.length; n++) {
+    const b = RIVS.bb[n]; if (b[2] < vx0 - 2 || b[0] > vx1 + 2 || b[3] < vy0 - 2 || b[1] > vy1 + 2) continue;
+    const a = RIVS.lines[n], N = a.length / 2, X = i => ox + a[i * 2] * k, Y = i => oy + a[i * 2 + 1] * k;
+    P.moveTo(X(0), Y(0)); if (N === 2) { P.lineTo(X(1), Y(1)); continue; }
+    for (let i = 1; i < N - 1; i++) P.quadraticCurveTo(X(i), Y(i), (X(i) + X(i + 1)) / 2, (Y(i) + Y(i + 1)) / 2);   // сглаживание через середины
+    P.lineTo(X(N - 1), Y(N - 1));
+  }
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = Math.min(1, u * 8);
+  // большие реки — лентой шириной w px карты (растёт с приближением), тёмная кромка и полоса берега
+  for (const r of RIVS.big) {
+    const b = r.bb; if (b[2] < vx0 - 6 || b[0] > vx1 + 6 || b[3] < vy0 - 6 || b[1] > vy1 + 6) continue;
+    const a = r.a, N = a.length / 2, X = i => ox + a[i * 2] * k, Y = i => oy + a[i * 2 + 1] * k, Q = new Path2D(); Q.moveTo(X(0), Y(0));
+    for (let i = 1; i < N - 1; i++) Q.quadraticCurveTo(X(i), Y(i), (X(i) + X(i + 1)) / 2, (Y(i) + Y(i + 1)) / 2); Q.lineTo(X(N - 1), Y(N - 1));
+    const bw = r.w * k;
+    ctx.strokeStyle = 'rgba(160,140,98,0.6)'; ctx.lineWidth = bw + 4 * dpr; ctx.stroke(Q);
+    ctx.strokeStyle = 'rgba(30,44,58,0.92)'; ctx.lineWidth = bw + 2 * dpr; ctx.stroke(Q);
+    ctx.strokeStyle = 'rgb(58,98,132)'; ctx.lineWidth = bw; ctx.stroke(Q);
+    ctx.strokeStyle = 'rgba(120,160,190,0.35)'; ctx.lineWidth = Math.max(1, bw * 0.35); ctx.stroke(Q);   // светлая стремнина
+  }
+  ctx.strokeStyle = 'rgba(168,150,106,0.55)'; ctx.lineWidth = w + 2.6 * dpr; ctx.stroke(P);   // берег
+  ctx.strokeStyle = 'rgba(38,52,66,0.9)'; ctx.lineWidth = w + 1.0 * dpr; ctx.stroke(P);       // кромка
+  ctx.strokeStyle = 'rgb(64,104,136)'; ctx.lineWidth = w; ctx.stroke(P);                       // вода
+  ctx.restore();
+}
+// мосты: деревянный настил поперёк реки (по направлению переправы), размер на экране постоянный; видны с 1,5×
+function bridgesDraw(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  if (z < 1.5) return; if (RIVS.st !== 2) { rivLoad(); return; }
+  const k = dpr * z, L = (z >= 3 ? 18 : 13) * dpr, Wd = L * 0.38;
+  ctx.save();
+  for (const [x, y, an] of RIVS.br) {
+    if (x < vx0 - 5 || x > vx1 + 5 || y < vy0 - 5 || y > vy1 + 5) continue;
+    ctx.setTransform(1, 0, 0, 1, dpr * v.x + x * k, dpr * v.y + y * k); ctx.rotate(an);
+    ctx.fillStyle = 'rgba(30,22,14,0.35)'; ctx.fillRect(-L / 2 + 1.5 * dpr, -Wd / 2 + 2 * dpr, L, Wd);   // тень
+    ctx.fillStyle = '#9a7048'; ctx.strokeStyle = '#3a2614'; ctx.lineWidth = 1.2 * dpr; ctx.fillRect(-L / 2, -Wd / 2, L, Wd); ctx.strokeRect(-L / 2, -Wd / 2, L, Wd);
+    ctx.beginPath(); for (let i = 1; i < 5; i++) { const t = -L / 2 + L * i / 5; ctx.moveTo(t, -Wd / 2); ctx.lineTo(t, Wd / 2); } ctx.lineWidth = 0.8 * dpr; ctx.stroke();   // доски
+  }
+  ctx.restore();
 }
 function gdLoad() {   // текстуры детализации земли: загрузить, распаковать и один раз нарисовать заранее, чтобы первое приближение к 4× не стояло
   if (GD.st) return; GD.st = 1; let n = 0; const all = [];
@@ -3642,7 +3700,7 @@ function sharpFill(X0, Y0, X1, Y1, S, geo) {   // geo — режим «Мест�
   for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) {
     const gx = X0 + x - 1, gy = Y0 + y - 1, j = y * rw + x; if (gx < 0 || gy < 0 || gx >= W || gy >= PIX.h) continue;
     const i = gy * W + gx, v = ids[i];
-    if (mt && mt[i] === 2) Rv[j] = 1;   // реки — сплошные, и за краем игровой зоны (поверх вуали): иначе большие реки «рвутся» на границе зоны
+    if (false && mt && mt[i] === 2) Rv[j] = 1;   // J5: реки вблизи — линиями (riversSmall), растровый слой рек отключён   // реки — сплошные, и за краем игровой зоны (поверх вуали): иначе большие реки «рвутся» на границе зоны
     if (!v) { if (outer && outer[i]) Ou[j] = 1; continue; }
     if (geo) continue;
     if (pr[v] < 0 || po[v] < 0) continue;
@@ -3778,7 +3836,9 @@ function paintVector() {
     ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
   if (false) drawSharp();   // переход и края: чёткий слой поверх быстрого
+  riversSmall(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // J5: малые реки — линией (в ближних плитках их нет)
   terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);
+  bridgesDraw(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // J5: мосты через большие реки
   // (тонировка G6 заменена заливкой I4 — polFill поверх итоговой картинки)   // политическая карта: тонировка цветом державы (плавно при переключении)   // «Местность»: рельеф и рощи — каждый кадр, с коротким переходом
   if (TSP.st === 2 && z * dpr >= 1.2 && !(geoU(z) > 0)) { ctx.save(); ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); modelsDraw(ctx, vx0, vy0, vx1, vy1, false); ctx.restore(); }   // монастыри Афона — и издали, и на политической карте (модель уже запечена в плитки)
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
@@ -4437,6 +4497,7 @@ function waveFrame(now) {
     }
     x.globalAlpha = 1;
   }
+  { const Wd2 = Wd, Hd2 = Hd; bridgesDraw(x, -v.x / z, -v.y / z, (Wd2 - v.x) / z, (Hd2 - v.y) / z, z, dpr, v); }   // J5: мосты — и поверх морского слоя (широкие реки — вода в маске суши)
 }
 if (!HEADLESS) requestAnimationFrame(waveFrame);
 

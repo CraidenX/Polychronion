@@ -20,6 +20,7 @@ ecol = np.asarray(Image.open(SP + 'terrain/color.jpg').convert('RGB')).astype(np
 ter = np.asarray(Image.open(SP + 'terrain/type.png'))
 hgt = np.asarray(Image.open(SP + 'terrain/height.png')).astype(np.float32)
 RV = np.load(SP + 'umap/rivers.npy').astype(np.float32) / 255
+RVBIG = nd.binary_dilation(np.load(SP + 'umap/rivers_big.npy'), iterations=3).astype(np.float32) if os.path.exists(SP + 'umap/rivers_big.npy') else 1.0   # большие реки (mkrivvec.py)
 PAPER = np.array([238, 226, 198], np.float32) / 255
 INK = np.array([70, 48, 32], np.float32) / 255
 SEA_SHALLOW = np.array([92, 140, 150], np.float32) / 255
@@ -377,7 +378,7 @@ for ty_ in range(0, H, T):
         rr = np.random.default_rng(tx_ * 131 + ty_)
         g2 = nd.gaussian_filter(rr.standard_normal(b.shape[:2]).astype(np.float32), 0.7)
         b *= (1 + 0.035 * g2 / (np.abs(g2).max() + 1e-9) * 2)[..., None]       # зерно бумаги вблизи
-        rv = np.clip((up(RV[y0:y1, x0:x1], Image.BILINEAR) - 0.3) * 1.8, 0, 1)
+        rv = np.zeros(up(RV[y0:y1, x0:x1], Image.BILINEAR).shape, np.float32)   # J5: реки вблизи — линиями в игре (большие — лентой, малые — тонкой линией), в плитке их нет
         o = paint(np.clip(b, 0, 1), x0, y0, 2, rv)
         ox, oy = (tx_ - x0) * 2, (ty_ - y0) * 2
         o = o[oy:oy + 2 * min(T, H - ty_), ox:ox + 2 * min(T, W - tx_)]

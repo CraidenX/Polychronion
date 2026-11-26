@@ -48,7 +48,9 @@ const MARCH_KM = 20, SAIL_KM = 45;
 // (при наложении классов берётся минимальный — это считает сборка, mkroadcost.py), задержки на переправах и перевалах — в днях
 const MOVE = {
   mult: { plain: 1.0, hills: 0.75, forest: 0.5, forestRoad: 0.85, mountains: 0.4, swamp: 0.4, desert: 0.7, steppe: 1.0, road: 1.25 },
-  ford: 1, bigRiver: 4, bridge: 0,   // брод +1 день; большая река +3–5 (берём 4); по мосту — 0 (мостов в данных пока нет)
+  ford: 0.5, bigRiver: Infinity, bridge: 0,   // J5: малая река (брод) +0,5 дня; большая река — только по мосту (без моста непроходима); по мосту — 0
+  bigRiverDetour: 2,                  // грубая оценка без сетки (rcost): обход до моста ≈ +2 дня
+  riverSail: true,                    // с флотом (речными судами) — вдоль большой реки со скоростью плавания
   pass: 4,                            // перевал: +3–5 дней (было +15)
 };
 const PASS_DAYS = MOVE.pass;
@@ -57,7 +59,7 @@ function terrainDays(i, t) {
   const c = typeof MAPINFO !== 'undefined' && MAPINFO.rcost && MAPINFO.rcost[i]; if (!c) return null;
   const m = MOVE.mult, mm = [m.plain, m.hills, m.forest, m.mountains, m.swamp, m.desert, m.steppe];   // порядок как в rcost
   let d = 0; for (let k = 0; k < 7; k++) d += c[k] / (MARCH_KM * mm[k]);
-  d += c[7] * MOVE.ford + c[8] * MOVE.bigRiver + (t === 'pass' ? MOVE.pass : 0);
+  d += c[7] * MOVE.ford + c[8] * (Number.isFinite(MOVE.bigRiver) ? MOVE.bigRiver : MOVE.bigRiverDetour) + (t === 'pass' ? MOVE.pass : 0);
   return Math.max(1, Math.round(d));
 }
 function legKm(from, to) {
@@ -398,7 +400,7 @@ function gridPath(s, t, allow, sail, maxN = 300000) {
   const W = GRID.GW, Hh = GRID.GH, g = GRID.g, from = GRID.from, st = GRID.stamp, cl = GRID.closed, M = GRID.mult, F = GRID.flags, P = GRID.prov;
   const gen = ++GRID.gen, ED = EDGE_DAYS(), vh = Math.max(sail ? SAIL_KM : 0, MARCH_KM * MOVE.mult.road);
   const tx = t % W, ty = Math.floor(t / W), hf = c => Math.hypot((c % W - tx) * GRID.kx, (Math.floor(c / W) - ty) * GRID.ky) / vh;
-  const ok = c => (F[c] & 1) ? (M[c] > 0 && allow[P[c] - 1] === 1) : ((F[c] & 64) || (sail && (F[c] & 32)));
+  const ok = c => (F[c] & 1) ? (M[c] > 0 && allow[P[c] - 1] === 1) : ((F[c] & 64) || (sail && (F[c] & (32 | 128))));   // 128 — судоходная большая река (вода)
   const heap = [], push = (f, c) => { heap.push([f, c]); let i = heap.length - 1; while (i > 0) { const q = (i - 1) >> 1; if (heap[q][0] <= heap[i][0]) break; [heap[q], heap[i]] = [heap[i], heap[q]]; i = q; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
   st[s] = gen; g[s] = 0; from[s] = -1; push(hf(s), s); let n = 0;
@@ -410,8 +412,10 @@ function gridPath(s, t, allow, sail, maxN = 300000) {
       if (!dx && !dy) continue; const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= W || y >= Hh) continue;
       const v = y * W + x; if (cl[v] === gen || !ok(v)) continue;
       const vsea = !(F[v] & 1), km = dx && dy ? GRID.kd : dx ? GRID.kx : GRID.ky;
-      let d = vsea || sea ? (sail ? km / SAIL_KM : km / MARCH_KM + (vsea && !sea ? 1 : 0)) : km / (MARCH_KM * M[v]);   // без флота пролив — на лодках: 20 км/день и день на переправу
-      if (!vsea && !sea) { d += ED[edgeCode(c, dx, dy)]; if ((F[v] & 8) && !(F[c] & 8)) d += MOVE.pass; }
+      const rs = sail && MOVE.riverSail && (F[c] & 128) && (F[v] & 128);   // J5: вдоль большой реки — на судах
+      const vbr = (F[v] & 64) && (F[v] & 128);   // мост через водный участок большой реки — пешком, без лодок
+      let d = vsea || sea || rs ? (sail ? km / SAIL_KM : km / MARCH_KM + (vsea && !sea && !vbr ? 1 : 0)) : km / (MARCH_KM * M[v]);   // без флота пролив — на лодках: 20 км/день и день на переправу
+      if (!vsea && !sea && !rs) { const ec = ED[edgeCode(c, dx, dy)]; if (ec === Infinity) continue; d += ec; if ((F[v] & 8) && !(F[c] & 8)) d += MOVE.pass; }   // большая река без моста — непроходима
       const nd = g[c] + d; if (st[v] === gen && nd >= g[v]) continue;
       st[v] = gen; g[v] = nd; from[v] = c; push(nd + hf(v), v);
     }
@@ -467,11 +471,13 @@ function buildRoute(x0, y0, nodes, sail) {
     let m = sea ? 0 : M[c]; if (!sea && !m) m = pm; if (m) pm = m;
     if (c !== pc && !sea && (F[pc] & 1)) {   // переход в соседнюю клетку: переправа, перевал — остановка
       const dx = Math.sign(c % W - pc % W), dy = Math.sign(Math.floor(c / W) - Math.floor(pc / W));
-      const stop = ED[edgeCode(pc, dx, dy)] + ((F[c] & 8) && !(F[pc] & 8) ? MOVE.pass : 0);
+      const rs = sail && MOVE.riverSail && (F[c] & 128) && (F[pc] & 128), e0 = rs ? 0 : ED[edgeCode(pc, dx, dy)];
+      const stop = (Number.isFinite(e0) ? e0 : 0) + ((F[c] & 8) && !(F[pc] & 8) ? MOVE.pass : 0);
       if (stop) { RX.push(X[i - 1]); RY.push(Y[i - 1]); t += stop; T.push(t); }
     }
-    if (sea && !sail && (F[pc] & 1)) t += 1;   // переправа на лодках
-    t += sea ? km / (sail ? SAIL_KM : MARCH_KM) : km / (MARCH_KM * m);
+    if (sea && !sail && (F[pc] & 1) && !((F[c] & 64) && (F[c] & 128))) t += 1;   // переправа на лодках (по мосту — без задержки)
+    const onRiv = sail && MOVE.riverSail && (F[c] & 128) && (F[pc] & 128);   // вдоль большой реки на судах
+    t += sea ? km / (sail ? SAIL_KM : MARCH_KM) : onRiv ? km / SAIL_KM : km / (MARCH_KM * m);
     RX.push(X[i]); RY.push(Y[i]); T.push(t); pc = c;
   }
   return { x: RX.map(v => Math.round(v * 10) / 10), y: RY.map(v => Math.round(v * 10) / 10), t: T.map(v => Math.round(v * 1000) / 1000) };
