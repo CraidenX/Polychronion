@@ -261,12 +261,96 @@ del iy, ix
 def up(a, mode=Image.BICUBIC):
     if a.ndim == 3: return np.stack([up(a[..., c], mode) for c in range(3)], -1)
     im = Image.fromarray(a.astype(np.float32), 'F'); return np.asarray(im.resize((a.shape[1] * 2, a.shape[0] * 2), mode))
+# ---------- ближний уровень (NOICONS): фактура земли по классам местности, светотень по рельефу, «подошвы» под спрайтами ----------
+if NOI:
+    TC = np.load(SP + 'umap/tclass.npy')
+    DSEA = nd.distance_transform_edt(~(WP & ~land)).astype(np.float32)
+    HSM = nd.gaussian_filter(hgt, 2.0)
+    MTB = nd.gaussian_filter(((TC != 255) & ((TC & (1 | 4 | 8)) > 0)).astype(np.float32), 6)   # холмы и горы — светотень сильнее
+    def _tex(name, sat, amp, hue):   # текстура → «рисунок» (отношение к среднему) + оттенок; насыщенность приглушена под палитру карты
+        t = np.asarray(Image.open(SP + f'textures/{name}.webp').convert('RGB')).astype(np.float32) / 255
+        lum = (t @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]; t = lum + (t - lum) * sat
+        mean = t.reshape(-1, 3).mean(0); det = 1 + (t / mean - 1) * amp
+        return det.astype(np.float32), mean, hue
+    TEX = {'grass': _tex('grass', 0.42, 0.9, 0.12), 'steppe': _tex('steppe', 0.55, 0.9, 0.22), 'maquis': _tex('maquis', 0.55, 0.7, 0.22),
+           'sand': _tex('sand', 0.6, 0.8, 0.3), 'marsh': _tex('marsh', 0.5, 1.0, 0.25)}
+    SOUTH = 866   # ≈ 42° с. ш.: южнее — средиземноморские побережья (маквис)
+    WARM, COOL = np.array([1.0, 0.945, 0.785], np.float32), np.array([0.24, 0.29, 0.42], np.float32)
+    # «подошвы»: цвет подножия каждого набора — средний цвет нижней полосы спрайта (над точкой привязки)
+    try:
+        TSJ = json.load(open(OUTD + '/terrain_sprites.json')); ATL = np.asarray(Image.open(OUTD + '/terrain_atlas.webp').convert('RGBA')).astype(np.float32) / 255
+        FOOT = {}
+        for n, st in TSJ['sets'].items():
+            FOOT[n] = []
+            for r in st['r']:
+                h_ = r[3]; ya = int(h_ * st['anchor']); band = ATL[r[1] + max(0, ya - h_ // 6):r[1] + ya, r[0]:r[0] + r[2]]
+                m_ = band[..., 3] > 0.8; FOOT[n].append(band[..., :3][m_].mean(0) if m_.any() else np.array([0.5, 0.45, 0.35], np.float32))
+        FEET = [(it[2], it[3], it[4], FOOT[it[0]][it[1]]) for it in TSJ['items'] if not it[0].startswith('pass')] + [(l['x'], l['y'], l['w'], FOOT[l['set']][0]) for l in TSJ['landmarks']]
+        FEET = np.array([(x, y, w, *c) for x, y, w, c in FEET], np.float32)
+    except Exception as e:
+        print('подошвы: нет данных спрайтов', e); FEET = np.zeros((0, 6), np.float32)
+    def close_land(bl, x0, y0, x1, y1):
+        h2, w2 = bl.shape[:2]
+        tcc = TC[y0:y1, x0:x1]; isl = tcc != 255; ref = ecol[y0:y1, x0:x1]
+        green = np.clip((ref[..., 1] - (ref[..., 0] + ref[..., 2]) / 2 - 0.005) / 0.05, 0, 1)
+        ys = np.arange(y0, y1)[:, None] * np.ones((1, x1 - x0))
+        rr = np.random.default_rng(x0 * 7 + y0 * 3)
+        nz = nd.gaussian_filter(rr.standard_normal((y1 - y0, x1 - x0)).astype(np.float32), 5); nz /= nz.std() + 1e-6
+        bit = lambda b: ((tcc & b) > 0) & isl
+        hill = bit(1) | bit(4) | bit(8)
+        w = {'sand': bit(32) * 1.0, 'marsh': bit(16) * 1.0,
+             'maquis': (hill | ((DSEA[y0:y1, x0:x1] < 45) & (ys > SOUTH))) * 1.0,
+             'steppe': (bit(64) | ~hill) * (1 - green) * 1.0, 'grass': (~hill & ~bit(64)) * green * 1.0}
+        w['maquis'] *= (1 - w['sand']) * (1 - w['marsh']); w['steppe'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh']); w['grass'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh'])
+        for k in w: w[k] = np.clip(nd.gaussian_filter(w[k], 3.0) + 0.12 * nz * (w[k] > 0.05), 0, None)
+        tot = sum(w.values()) + 1e-6
+        # координаты 2× (общие для всей карты — без швов между плитками); второй отсчёт текстуры — другой масштаб и сдвиг (без видимых повторов)
+        gy = (y0 * 2 + np.arange(h2))[:, None]; gx = (x0 * 2 + np.arange(w2))[None, :]
+        m2 = nd.zoom(nd.gaussian_filter(rr.standard_normal((y1 - y0, x1 - x0)).astype(np.float32), 18), 2, order=1)[:h2, :w2]; m2 = np.clip(m2 / (m2.std() + 1e-6) * 0.5 + 0.5, 0, 1)[..., None]
+        ay, ax = gy % 1024, gx % 1024; by_, bx_ = (gy * 0.77 + 311).astype(int) % 1024, (gx * 0.77 + 517).astype(int) % 1024
+        lumb = (bl @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]
+        out = np.zeros_like(bl)
+        for k, (det, mean, hue) in TEX.items():
+            wk = nd.zoom(w[k] / tot, 2, order=1)[:h2, :w2][..., None]
+            if wk.max() < 0.01: continue
+            d = det[ay, ax] * (1 - m2) + det[by_, bx_] * m2
+            tint = mean * (lumb / (mean @ np.array([0.3, 0.59, 0.11], np.float32)))         # оттенок текстуры при яркости палитры карты
+            base = bl * (1 - hue) + tint * hue
+            out += wk * base * d
+        lw = nd.zoom(isl.astype(np.float32), 2, order=1)[:h2, :w2][..., None]
+        out = bl * (1 - lw) + out * lw
+        # светотень: тёплый свет с северо-запада, холодная тень; сильнее в холмах и горах
+        hz = nd.zoom(HSM[y0:y1, x0:x1], 2, order=1)[:h2, :w2]; dy, dx = np.gradient(hz * 0.55)
+        lx, ly, lz = -0.62, -0.62, 0.48; sh = (-dx * lx - dy * ly + lz) / np.sqrt(dx * dx + dy * dy + 1)
+        sh = np.clip((sh - lz) * 1.6, -1, 1) * (0.3 + 0.7 * nd.zoom(MTB[y0:y1, x0:x1], 2, order=1)[:h2, :w2])
+        sp_ = np.clip(sh, 0, 1)[..., None] * 0.32; sn = np.clip(-sh, 0, 1)[..., None] * 0.26
+        out = out * (1 - sp_) + WARM * sp_; out = out * (1 - sn) + out * COOL * 1.7 * sn
+        # подошвы: мягкая контактная тень на юго-восток и пятно цвета подножия с размытым краем
+        sel = FEET[(FEET[:, 0] + FEET[:, 2] > x0) & (FEET[:, 0] - FEET[:, 2] < x1) & (FEET[:, 1] + FEET[:, 2] > y0) & (FEET[:, 1] - FEET[:, 2] < y1)]
+        if len(sel):
+            shm = Image.new('L', (w2, h2), 0); ftm = Image.new('L', (w2, h2), 0); fcol = np.zeros((h2, w2, 3), np.float32)
+            dsh = ImageDraw.Draw(shm); dft = ImageDraw.Draw(ftm)
+            for x, y, wd, r_, g_, b_ in sel:
+                X, Y, Wd = (x - x0) * 2, (y - y0) * 2, wd * 2
+                dsh.ellipse([X - Wd * 0.38 + Wd * 0.14, Y - Wd * 0.07 + Wd * 0.05, X + Wd * 0.48 + Wd * 0.14, Y + Wd * 0.11 + Wd * 0.05], fill=255)
+                e = [X - Wd * 0.42, Y - Wd * 0.1, X + Wd * 0.42, Y + Wd * 0.07]; dft.ellipse(e, fill=255)
+                a0, a1 = max(0, int(e[1])), min(h2, int(e[3]) + 1); b0, b1 = max(0, int(e[0])), min(w2, int(e[2]) + 1)
+                if a1 > a0 and b1 > b0: fcol[a0:a1, b0:b1] = (r_, g_, b_)
+            S_ = nd.gaussian_filter(np.asarray(shm, np.float32) / 255, 4)[..., None] * 0.3
+            Fm = nd.gaussian_filter(np.asarray(ftm, np.float32) / 255, 3)[..., None] * 0.55
+            fcol = nd.gaussian_filter(fcol, (3, 3, 0)); fn = nd.gaussian_filter((fcol.sum(2) > 0).astype(np.float32), 3)[..., None]
+            fcol = fcol / np.maximum(fn, 1e-3)
+            out = out * (1 - S_) + out * COOL * 1.2 * S_
+            out = out * (1 - Fm * (fn > 0.05)) + fcol * Fm * (fn > 0.05)
+        return np.clip(out, 0, 1).astype(np.float32)
 tiles = []
 for ty_ in range(0, H, T):
     for tx_ in range(0, W, T):
         if not land[ty_:ty_ + T, tx_:tx_ + T].any(): continue
+        if os.environ.get('TILES') and f'{tx_ // T}_{ty_ // T}' not in os.environ['TILES'].split(','): tiles.append([tx_ // T, ty_ // T]); continue   # TILES=3_1,3_2 — только эти плитки (для проверки)
         x0, y0, x1, y1 = max(0, tx_ - MG), max(0, ty_ - MG), min(W, tx_ + T + MG), min(H, ty_ + T + MG)
         bl, bw = up(landfill[y0:y1, x0:x1]), up(waterfill[y0:y1, x0:x1])
+        if NOI: bl = close_land(bl, x0, y0, x1, y1)
         wm = nd.gaussian_filter(up(WL[y0:y1, x0:x1].astype(np.float32), Image.BILINEAR), 1.5)
         a_ = np.clip((wm - 0.5) * 4 + 0.5, 0, 1)[..., None]
         b = bl * (1 - a_) + bw * a_
