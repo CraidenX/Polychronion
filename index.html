@@ -167,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 90, "date": "26.11.2026 07:31"};
+const GAME_VERSION = {"v": 91, "date": "26.11.2026 07:44"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -3117,6 +3117,24 @@ function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, H = HI) {
   if (H.img.size > 40) { const old = [...H.img.entries()].sort((p, q) => p[1].use - q[1].use).slice(0, H.img.size - 40); for (const [k] of old) H.img.delete(k); }   // держим в памяти не больше 40 плиток
 }
 
+// резкая фактура земли вблизи (mkdetail.py): «рельеф» текстур в родном разрешении (повтор — 70 px карты, как в плитках) поверх плитки
+// режимом «мягкий свет», по маскам классов. Цвет, светотень и подошвы остаются из плитки — добавляется только чёткость
+const GD = { st: 0, K: ['grass', 'steppe', 'maquis', 'sand'], img: {}, w: {} };
+function groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  const a = clamp((z * dpr - 4) / 4, 0, 1) * 0.85; if (a <= 0) return;
+  if (!GD.st) { GD.st = 1; let n = 0; for (const k of GD.K) for (const [d, f] of [[GD.img, `detail_${k}.jpg`], [GD.w, `detail_w_${k}.png`]]) { const im = new Image(); im.onload = () => { if (++n === GD.K.length * 2) { GD.st = 2; scheduleVector(); } }; im.src = f; d[k] = im; } }
+  if (GD.st !== 2) return;
+  const cv = ctx.canvas, D = GD.cv || (GD.cv = document.createElement('canvas')); if (D.width !== cv.width || D.height !== cv.height) { D.width = cv.width; D.height = cv.height; }
+  const d = D.getContext('2d'), kz = dpr * z, M = MAPINFO;
+  for (const k of GD.K) {
+    if (!GD.pat) GD.pat = {}; if (!GD.pat[k]) { GD.pat[k] = d.createPattern(GD.img[k], 'repeat'); GD.pat[k].setTransform(new DOMMatrix().scale(70 / 1024)); }
+    d.setTransform(1, 0, 0, 1, 0, 0); d.globalCompositeOperation = 'source-over'; d.globalAlpha = 1; d.clearRect(0, 0, D.width, D.height);
+    d.setTransform(kz, 0, 0, kz, dpr * v.x, dpr * v.y); d.fillStyle = GD.pat[k]; d.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
+    d.globalCompositeOperation = 'destination-in'; d.imageSmoothingEnabled = true; const wi = GD.w[k], sx = wi.width / M.W;
+    d.drawImage(wi, Math.max(0, vx0 * sx - 1), Math.max(0, vy0 * sx - 1), (vx1 - vx0) * sx + 2, (vy1 - vy0) * sx + 2, Math.max(0, vx0 * sx - 1) / sx, Math.max(0, vy0 * sx - 1) / sx, ((vx1 - vx0) * sx + 2) / sx, ((vy1 - vy0) * sx + 2) / sx);
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = a; ctx.drawImage(D, 0, 0); ctx.restore();
+  }
+}
 /* --- векторные границы (borders.js): рисуются на холсте размером с экран, только видимая часть ---
    (раньше это был один огромный SVG — при сильном приближении браузер его не тянул) */
 const VEC = { segs: null, key: '', cls: null, raf: 0 };
@@ -3390,6 +3408,7 @@ function paintVector() {
     // вблизи — подложка без гор и деревьев: их рисует ближний уровень рельефа (плавно, вместе с ним)
     const tt = clamp((z * dpr - 1.8) / 1.6, 0, 1), tA = TSP.st === 2 ? (UI.mapMode === 'geo' ? geoU(z) : tt * tt * (3 - 2 * tt)) : 0;
     if (tA > 0) { HIC.load(); if (HIC.idx) { ctx.globalAlpha = tA; drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, HIC); ctx.globalAlpha = 1; } }
+    if (UI.mapMode === 'geo') groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // резкая фактура земли при сильном приближении
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
   // вблизи — гладкая заливка с подпикселями и резкими значками гор и лесов. Пересчёт дорогой: пока карту двигают, показываем
