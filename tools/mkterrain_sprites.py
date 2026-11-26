@@ -139,6 +139,7 @@ _pk = lambda d: sorted(glob.glob(f'{LEGO}/{d}/peak_*.png'), key=lambda f: int(f.
 _rd = open(f'{LEGO}/parts_ridges_a/dirs.txt').read().split()
 LEGO_FILES = {f'lego_ridge_{d}': [f for f, dd in zip(_pk('parts_ridges_a'), _rd) if dd == d] for d in ('h', 'd1', 'd2')}
 LEGO_FILES['lego_summit'] = _pk('parts_summits')
+LEGO_FILES.update({'lego_hill': _pk('parts_hilltops') + _pk('parts_hilltops_rocky'), 'lego_hill_r': _pk('parts_hilltops_rocky'), 'lego_rock': _pk('parts_rocks')})
 # деревья: полог parts_forest_canopy (0–1 дубовый, 2–3 еловый, 4–5 смешанный), купы parts_trees_a…d (0–3 дубы, 4–7 ели в c/d, 8–11 оливы, 12–15 кипарисы),
 # одиночные parts_trees_single (0–4 дубы, 5–9 сосны и ели, 10–14 оливы и кипарисы, 15–19 кусты, 20–24 маквис); лишние обрывки нарезки (16-й в trees_d) не берутся
 _can, _sg = _pk('parts_forest_canopy'), _pk('parts_trees_single'); _tr = {c: _pk(f'parts_trees_{c}') for c in 'abcd'}
@@ -149,6 +150,7 @@ TREE_PAD, TREE_PB, TREE_AN = 0.2, 0.32, 0.92   # поля под тень (до�
 for n, fs in LEGO_FILES.items():
     NV[n] = len(fs)
     if n.startswith('tree_'): SIZE[n] = (0, 0); ANCHOR[n] = TREE_AN / (1 + TREE_PB)
+    elif n.startswith('lego_hill'): SIZE[n] = (70, 115); ANCHOR[n] = 0.6
     else: SIZE[n] = (150, 200) if 'ridge' in n else (95, 130); ANCHOR[n] = 0.85
 spath = lambda n, k: LEGO_FILES[n][k] if n in LEGO_FILES else f'{ART}/{n}/peak_{k}.png'
 items = []
@@ -170,14 +172,19 @@ def sparse(mask, score, mind, kx=0.8):
             if not ok: break
         if ok: taken.append((y, x)); cell.setdefault((cy, cx), []).append((y, x))
     return taken
-cand = (passable > 0.55) & (impass < 0.3) & (saddle < 0.35) & ~lm_block
-for y, x in sparse(cand, base_h + 4 * noise(8 / 3 * 3, 2), 31):
-    d = direction(y, x)
-    add(y, x, {'h': 'ridges_low_h', 'd1': 'ridges_low_d1', 'd2': 'mtn_low'}.get(d, 'mtn_low_single'), 0.75 + 0.25 * np.clip((passable[y, x] - 0.55) / 0.3, 0, 1))
-hz = hills_m & (saddle < 0.35) & ~lm_block & (noise(10, 2) > 0.1)
-for y, x in sparse(hz, base_h + 6 * noise(10 / 3 * 3, 2), 32):
-    d = direction(y, x)
-    add(y, x, {'h': 'hills', 'd1': 'hills_d1', 'd2': 'hills_d2'}.get(d, 'hills_single'), rng.uniform(0.8, 1.0))
+# 2) J4: холмы и проходимые горы — из «конструктора» (образец lego_render.py, размеры — px экрана пробы 3×):
+#    холмы — parts_hilltops(+rocky) группами по 2–3 (шаг 34); проходимые горы — бугор parts_hilltops_rocky + 2–3 скалы parts_rocks (шаг 24), ели — ниже, с деревьями
+def ladd(y, x, name, lo, hi_):
+    y, x = int(round(y)), int(round(x))
+    if 0 <= y < H and 0 <= x < W and land[y, x]: items.append((y, name, x, int(rng.integers(NV[name])), round(float(rng.uniform(lo, hi_) / 3), 1)))
+near_riv = nd.binary_dilation(np.load(SP + 'umap/rivers.npy') > 46, iterations=5)   # бугры не наезжают на русла
+mtn_lego = (passable > 0.55) & (impass < 0.3) & (saddle < 0.35) & ~lm_block
+for y, x in sparse(mtn_lego & ~near_riv, rng.random((H, W)).astype(np.float32), 24, 1.0):
+    ladd(y, x, 'lego_hill_r', 110, 150)
+    for j in range(int(rng.integers(2, 4))): ladd(y + rng.normal(0, 3), x + rng.normal(0, 6), 'lego_rock', 50, 75)
+hill_lego = hills_m & (saddle < 0.35) & ~lm_block & ~mtn_lego
+for y, x in sparse(hill_lego & ~near_riv, rng.random((H, W)).astype(np.float32), 34, 1.0):
+    for j in range(int(rng.integers(2, 4))): ladd(y + (rng.normal(0, 4) if j else 0), x + (rng.normal(0, 8) if j else 0), 'lego_hill', 70 * (1 if j == 0 else 0.75), 115 * (1 if j == 0 else 0.75))
 # 1) непроходимые — из «конструктора» (образец terrain_lego/lego_render.py): центры вразброс с шагом ~13 px карты;
 #    направление — тензор структуры маски непроходимых гор; при когерентности > 0,2 — с вероятностью 75 % хребет этого направления
 #    (150–200 px экрана при 4×), иначе одиночная вершина (95–130)
@@ -241,6 +248,7 @@ for pv in MI['provs']:   # окрестности поселений: 1–2 гр
 pl = okg & ~fz & ~hills_m & ~mtn_b & ~bank & (nd.distance_transform_edt(~edge) > 6)
 for y, x in sparse(pl, rs(), 60, 1.0): group(y, x, 'tree_s_olv' if south[y, 0] and rt.random() < 0.5 else 'tree_s_oak', 16, 24); ng['поле'] = ng.get('поле', 0) + 1
 print('групп одиночных деревьев', ng)
+for y, x in sparse(mtn_lego & (noise(3, 1, r=rt) > 0), rs(), 12, 1.0): tadd(y, x, 'tree_k_fir', 34 * 4 / 3, 46 * 4 / 3)   # ели на проходимых горах (34–46 px пробы 3×)
 print('деревьев (до отбора по зоне)', len(items) - tcount)
 del fd, edge, hb, pl, bank, riv_s, bigz
 # 3) перевалы: дорога поперёк хребта
@@ -327,10 +335,10 @@ def fade_bottom(im, n, k, frac=0.28):   # низ растворяется с ш�
 for n in sorted(used):
     for k in range(NV[n]):
         im = grade(Image.open(spath(n, k)).convert('RGBA'), n)
-        mw = 900 if n.startswith(('lm_', 'pass_')) else 400 if n.startswith('lego_') else (256 if '_can_' in n else 128 if '_k_' in n else 64) if n.startswith('tree_') else 270
+        mw = 900 if n.startswith(('lm_', 'pass_')) else (256 if n == 'lego_rock' else 400) if n.startswith('lego_') else (256 if '_can_' in n else 128 if '_k_' in n else 64) if n.startswith('tree_') else 270
         if im.width > mw: im = im.resize((mw, max(1, round(im.height * mw / im.width))), Image.LANCZOS)
         if n.startswith('lm_'): im = ragged_foot(im, n)
-        if n.startswith('lego_'): im = fade_bottom(im, n, k)
+        if n.startswith('lego_') and not n.startswith('lego_hill'): im = fade_bottom(im, n, k, 0.25 if n == 'lego_rock' else 0.28)
         if n.startswith('tree_'): im = tree_shadow(im)
         spr.append((n, k, im))
 AW = 4096; x = y = rowh = 0; rects = {}
@@ -341,7 +349,8 @@ for n, k, im in spr:
 atlas = Image.new('RGBA', (AW, y + rowh), (0, 0, 0, 0))
 for n, k, im in spr: r = rects[n][k]; atlas.paste(im, (r[0], r[1]))
 atlas.save(OUT + '/terrain_atlas.webp', quality=86, method=6)
-sets = {n: {'tint': [0.05, 0.25]} if n.startswith('tree_') else {} for n in rects}
+TINTS = {'lego_hill': [0.25, 0.55], 'lego_hill_r': [0.25, 0.55], 'lego_rock': [0.1, 0.45]}   # подкраска под землю — как в образце
+sets = {n: {'tint': [0.05, 0.25]} if n.startswith('tree_') else {'tint': TINTS[n]} if n in TINTS else {} for n in rects}
 sets = {n: {**sets[n], 'anchor': ANCHOR.get(n, next((l['anchor'] for l in lms if l['set'] == n), 0.78)) if not n.startswith('athos_') else 0.78, 'r': [rects[n][k] for k in range(NV[n])]} for n in rects}
 for n in ('lm_etna_active', 'lm_etna_erupt'): sets[n]['anchor'] = sets['lm_etna']['anchor']
 json.dump({'sets': sets, 'items': [[t[1], t[3], t[2], t[0], t[4], t[5]] for t in items], 'landmarks': lms, 'models': models,
