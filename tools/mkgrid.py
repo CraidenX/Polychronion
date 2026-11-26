@@ -72,7 +72,7 @@ st = np.zeros_like(lc)
 for dy, dx in ((1, 0), (0, 1), (1, 1), (1, -1)): st |= near(dy, dx) & near(-dy, -dx)
 flags[st & ((flags & 32) > 0)] |= 64
 # опорная точка клетки: ближайший к центру пиксель суши не на реке (для проверки переправ)
-rv = np.load(SP + 'umap/rivers.npy') > 46
+RG = np.load(SP + 'umap/rivgraph.npy'); rv = nd.binary_dilation(RG > 0, iterations=1)   # K2: реки — из графа (mkrivgraph.py), как на картинке
 off = np.array([(i // C, i % C) for i in range(C * C)]); dc = np.hypot(off[:, 0] - 2.5, off[:, 1] - 2.5)
 score = dc[None, None, :] + 100 * blocks(rv) + 200 * ~blocks(land)
 k = score.argmin(2); ry = gy * C + off[k, 0]; rx = gx * C + off[k, 1]
@@ -82,7 +82,7 @@ BR = json.load(open(SP + 'big_rivers.json')); FIT = json.load(open(SP + 'umap/fi
 L0, SXF, P0, SYF = FIT['p'][0], FIT['p'][1] * KF, FIT['p'][2], FIT['p'][3] * KF
 lines = Image.new('L', (W, H), 0); dl = ImageDraw.Draw(lines)
 for pts in BR['rivers'].values(): dl.line([((lo - L0) * SXF, (P0 - la) * SYF) for lo, la in pts], fill=255, width=2)
-bigzone = nd.binary_dilation(np.load(SP + 'umap/rivers_big.npy'), iterations=1)   # J5: основное русло больших рек (mkrivvec.py), без притоков в коридоре
+bigzone = nd.binary_dilation(RG == 2, iterations=2)   # K2: большие реки — рёбра графа на основном русле (big_rivers.json)
 # J5: водные участки больших рек (нижний Дунай, Евфрат…): в маске суши это вода, а не линия растра рек. Узкая вода (≤ 5 px от берега)
 # в коридоре ручной линии реки — река: клетки перестают быть «проливом» (вброд на лодках нельзя), судоходны (флаг 128), переход — только по мостам
 corr_ = nd.distance_transform_edt(np.asarray(lines) == 0) <= BR['corridor'] + 4

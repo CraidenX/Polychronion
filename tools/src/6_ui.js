@@ -1038,42 +1038,36 @@ function prlFrac() {   // доля готовности тяжёлой част�
   const t = PRL.tilesN ? PRL.tiles / PRL.tilesN : 0, p = TCH.wst === 2 ? (TCH.preN ? TCH.pre / TCH.preN : 0) * (TSP.pre && TSP.pre.done ? 1 : 0.99) : TCH.wst < 0 || !TSP.pre ? (TSP.pre ? TSP.pre.i / Math.max(1, TSP.pre.n) : 0) : 0, o = (ICO.st >= 2 ? 0.5 : 0) + (GD.st === 2 ? 0.5 : 0);
   const f = t * 0.6 + p * 0.3 + o * 0.1; return f > 0.999 ? 1 : f;   // 0,6 + 0,3 + 0,1 в плавающей точке — не ровно 1
 }
-// J5: малые реки (rivers_small.json, mkrivvec.py) и мосты (bridges.json, mkgrid.py)
-const RIVS = { st: 0, lines: [], bb: [], br: [], big: [] };
+// K2: реки — граф (rivers.json, mkrivgraph.py) и мосты (bridges.json)
+const RIVS = { st: 0, lines: [], br: [] };
 function rivLoad() {
   if (RIVS.st || HEADLESS || typeof fetch === 'undefined' || location.protocol === 'file:') return; RIVS.st = 1;
-  Promise.all([fetch('rivers_small.json').then(r => r.json()), fetch('bridges.json').then(r => r.json()).catch(() => ({ bridges: [] })), fetch('rivers_big.json').then(r => r.json()).catch(() => ({ rivers: {} }))]).then(([j, b, bg]) => {
-    for (const r of Object.values(bg.rivers || {})) { const a = Float32Array.from(r.pts); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.big.push({ a, w: r.w, bb: [x0, y0, x1, y1] }); }
-    for (const l of j.lines) { const a = Float32Array.from(l); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.lines.push(a); RIVS.bb.push([x0, y0, x1, y1]); }
+  Promise.all([fetch('rivers.json').then(r => r.json()), fetch('bridges.json').then(r => r.json()).catch(() => ({ bridges: [] }))]).then(([j, b]) => {
+    for (const e of j.edges) { const a = Float32Array.from(e.p); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.lines.push({ a, w: e.w, b: e.b, o: e.o, bb: [x0, y0, x1, y1] }); }
     RIVS.br = b.bridges || []; RIVS.st = 2; scheduleVector();
   }).catch(() => { RIVS.st = 3; });
 }
-// малые реки вблизи: ширина на экране почти не растёт с приближением (≈ 3 px при 4×); берег (песок/ил) 1–2 px, тонкая тёмная кромка
+// K2: реки вблизи — граф (mkrivgraph.py): сглаженные кривые (Катмулл — Ром), ширина по порядку Штралера (малые 1,5–3 px при 4×, большие 5–9),
+// на экране почти не растёт с приближением; тонкая тёмная кромка, у малых — светлая полоса берега. Все реки — в три прохода (берег, кромка, вода): слияния плавные
+function catmull(P, a, ox, oy, k) {
+  const N = a.length / 2, X = i => ox + a[Math.max(0, Math.min(N - 1, i)) * 2] * k, Y = i => oy + a[Math.max(0, Math.min(N - 1, i)) * 2 + 1] * k;
+  P.moveTo(X(0), Y(0)); if (N === 2) { P.lineTo(X(1), Y(1)); return; }
+  for (let i = 0; i < N - 1; i++) P.bezierCurveTo(X(i) + (X(i + 1) - X(i - 1)) / 6, Y(i) + (Y(i + 1) - Y(i - 1)) / 6, X(i + 1) - (X(i + 2) - X(i)) / 6, Y(i + 1) - (Y(i + 2) - Y(i)) / 6, X(i + 1), Y(i + 1));
+}
 function riversSmall(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const u = geoU(z); if (u <= 0) return; if (RIVS.st !== 2) { rivLoad(); return; }
-  const w = (2.2 + 0.4 * Math.log2(Math.max(1, z))) * dpr, P = new Path2D(), k = dpr * z, ox = dpr * v.x, oy = dpr * v.y;
-  for (let n = 0; n < RIVS.lines.length; n++) {
-    const b = RIVS.bb[n]; if (b[2] < vx0 - 2 || b[0] > vx1 + 2 || b[3] < vy0 - 2 || b[1] > vy1 + 2) continue;
-    const a = RIVS.lines[n], N = a.length / 2, X = i => ox + a[i * 2] * k, Y = i => oy + a[i * 2 + 1] * k;
-    P.moveTo(X(0), Y(0)); if (N === 2) { P.lineTo(X(1), Y(1)); continue; }
-    for (let i = 1; i < N - 1; i++) P.quadraticCurveTo(X(i), Y(i), (X(i) + X(i + 1)) / 2, (Y(i) + Y(i + 1)) / 2);   // сглаживание через середины
-    P.lineTo(X(N - 1), Y(N - 1));
+  const k = dpr * z, ox = dpr * v.x, oy = dpr * v.y, zs = Math.pow(z / 4, 0.15) * dpr, groups = new Map();
+  for (const r of RIVS.lines) {
+    const b = r.bb; if (b[2] < vx0 - 4 || b[0] > vx1 + 4 || b[3] < vy0 - 4 || b[1] > vy1 + 4) continue;
+    const key = (r.b ? 'b' : 's') + Math.round(r.w * 4) / 4; let g = groups.get(key); if (!g) groups.set(key, g = { w: r.w, b: r.b, P: new Path2D() });
+    catmull(g.P, r.a, ox, oy, k);
   }
+  const G2 = [...groups.values()].sort((a, b) => a.w - b.w);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = Math.min(1, u * 8);
-  // большие реки — лентой шириной w px карты (растёт с приближением), тёмная кромка и полоса берега
-  for (const r of RIVS.big) {
-    const b = r.bb; if (b[2] < vx0 - 6 || b[0] > vx1 + 6 || b[3] < vy0 - 6 || b[1] > vy1 + 6) continue;
-    const a = r.a, N = a.length / 2, X = i => ox + a[i * 2] * k, Y = i => oy + a[i * 2 + 1] * k, Q = new Path2D(); Q.moveTo(X(0), Y(0));
-    for (let i = 1; i < N - 1; i++) Q.quadraticCurveTo(X(i), Y(i), (X(i) + X(i + 1)) / 2, (Y(i) + Y(i + 1)) / 2); Q.lineTo(X(N - 1), Y(N - 1));
-    const bw = r.w * k;
-    ctx.strokeStyle = 'rgba(160,140,98,0.6)'; ctx.lineWidth = bw + 4 * dpr; ctx.stroke(Q);
-    ctx.strokeStyle = 'rgba(30,44,58,0.92)'; ctx.lineWidth = bw + 2 * dpr; ctx.stroke(Q);
-    ctx.strokeStyle = 'rgb(58,98,132)'; ctx.lineWidth = bw; ctx.stroke(Q);
-    ctx.strokeStyle = 'rgba(120,160,190,0.35)'; ctx.lineWidth = Math.max(1, bw * 0.35); ctx.stroke(Q);   // светлая стремнина
-  }
-  ctx.strokeStyle = 'rgba(168,150,106,0.55)'; ctx.lineWidth = w + 2.6 * dpr; ctx.stroke(P);   // берег
-  ctx.strokeStyle = 'rgba(38,52,66,0.9)'; ctx.lineWidth = w + 1.0 * dpr; ctx.stroke(P);       // кромка
-  ctx.strokeStyle = 'rgb(64,104,136)'; ctx.lineWidth = w; ctx.stroke(P);                       // вода
+  for (const g of G2) { const w = g.w * zs; ctx.strokeStyle = g.b ? 'rgba(150,132,92,0.55)' : 'rgba(176,160,118,0.5)'; ctx.lineWidth = w + (g.b ? 3.5 : 2.6) * dpr; ctx.stroke(g.P); }   // берег
+  for (const g of G2) { const w = g.w * zs; ctx.strokeStyle = 'rgba(32,46,60,0.88)'; ctx.lineWidth = w + (g.b ? 1.8 : 1.1) * dpr; ctx.stroke(g.P); }                                     // кромка
+  for (const g of G2) { const w = g.w * zs; ctx.strokeStyle = g.b ? 'rgb(58,98,132)' : 'rgb(64,104,136)'; ctx.lineWidth = w; ctx.stroke(g.P); }                                            // вода
+  for (const g of G2) if (g.b) { const w = g.w * zs; ctx.strokeStyle = 'rgba(120,160,190,0.35)'; ctx.lineWidth = Math.max(1, w * 0.35); ctx.stroke(g.P); }                                // стремнина
   ctx.restore();
 }
 // мосты: деревянный настил поперёк реки (по направлению переправы), размер на экране постоянный; видны с 1,5×

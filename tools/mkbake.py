@@ -20,25 +20,22 @@ idx = json.load(open(OUT + f'/hi_wc{VAR}c/index.json')); T = idx['T']
 # суша, размытая на ~2,5 px — для обрезки подножий у берега (как в игре)
 LANDS = nd.gaussian_filter(land.astype(np.float32), 1.2)
 RIV = np.zeros(np.load(SP + 'umap/rivers_big.npy').shape, bool)   # J5: чёткий растровый слой рек не нужен — вблизи игра рисует реки линиями (большие — лентой, малые — тонкой линией)
-RSM = json.load(open(OUT + '/rivers_small.json'))['lines']   # малые реки — линиями (mkrivvec.py)
-RSB = [(min(l[0::2]), min(l[1::2]), max(l[0::2]), max(l[1::2])) for l in RSM]
-RBG = list(json.load(open(OUT + '/rivers_big.json'))['rivers'].values())   # большие реки — лентой шириной w px карты
-def small_rivers(img, X0, Y0, X1, Y1, K):   # малые реки на плитке: берег (песок/ил), тёмная кромка, вода; сглаживание — рисуем в 3× и уменьшаем
-    SS = 3; sel = [l for l, b in zip(RSM, RSB) if b[2] >= X0 - 4 and b[0] <= X1 + 4 and b[3] >= Y0 - 4 and b[1] <= Y1 + 4]
-    bigs = [r for r in RBG if max(r['pts'][0::2]) >= X0 - 8 and min(r['pts'][0::2]) <= X1 + 8 and max(r['pts'][1::2]) >= Y0 - 8 and min(r['pts'][1::2]) <= Y1 + 8]
-    if not sel and not bigs: return img
+RVG = json.load(open(OUT + '/rivers.json'))['edges']   # K2: реки — граф (mkrivgraph.py); ширина w — px экрана при 4×
+RVB = [(min(e['p'][0::2]), min(e['p'][1::2]), max(e['p'][0::2]), max(e['p'][1::2])) for e in RVG]
+def small_rivers(img, X0, Y0, X1, Y1, K):   # реки на плитке дальнего вида: берег, тёмная кромка, вода (и стремнина у больших); рисуем в 3× и уменьшаем
+    SS = 3; sel = [e for e, b in zip(RVG, RVB) if b[2] >= X0 - 6 and b[0] <= X1 + 6 and b[3] >= Y0 - 6 and b[1] <= Y1 + 6]
+    if not sel: return img
     w, h = img.size; lay = Image.new('RGBA', (w * SS, h * SS), (0, 0, 0, 0)); d = ImageDraw.Draw(lay)
-    for r in bigs:   # как в игре: берег, тёмная кромка, вода, светлая стремнина
-        pts = [((r['pts'][i] - X0) * K * SS, (r['pts'][i + 1] - Y0) * K * SS) for i in range(0, len(r['pts']), 2)]; bw = r['w'] * K * SS
-        for col, wd in (((160, 140, 98, 153), bw + 2.0 * K * SS), ((30, 44, 58, 235), bw + 1.0 * K * SS), ((58, 98, 132, 255), bw), ((96, 138, 168, 255), max(1, bw * 0.35))):
-            d.line(pts, fill=col, width=max(1, int(round(wd))), joint='curve')
-    core = 1.6 * K * SS
-    for col, wd in (((168, 150, 106, 150), core + 2.4 * K * SS), ((38, 52, 66, 225), core + 0.9 * K * SS), ((64, 104, 136, 255), core)):
-        for l in sel:
-            pts = [((l[i] - X0) * K * SS, (l[i + 1] - Y0) * K * SS) for i in range(0, len(l), 2)]
-            d.line(pts, fill=col, width=max(1, int(round(wd))), joint='curve')
-            r = wd / 2
-            for x, y in (pts[0], pts[-1]): d.ellipse((x - r, y - r, x + r, y + r), fill=col)
+    sel.sort(key=lambda e: e['w'])
+    def wm(e): return (0.4 * e['w'] + (0.6 if e['b'] else 0.3)) * K * SS   # ширина в px карты: вблизи (≈ 3×) — как линия игры
+    passes = [(lambda e: ((150, 132, 92, 140) if e['b'] else (176, 160, 118, 128)), lambda e: wm(e) + (1.4 if e['b'] else 1.0) * K * SS),
+              (lambda e: (32, 46, 60, 225), lambda e: wm(e) + (0.7 if e['b'] else 0.45) * K * SS),
+              (lambda e: (58, 98, 132, 255) if e['b'] else (64, 104, 136, 255), wm)]
+    for col, wd in passes:
+        for e in sel:
+            pts = [((e['p'][i] - X0) * K * SS, (e['p'][i + 1] - Y0) * K * SS) for i in range(0, len(e['p']), 2)]; c_ = col(e); ww = wd(e)
+            d.line(pts, fill=c_, width=max(1, int(round(ww))), joint='curve'); r = ww / 2
+            for x, y in (pts[0], pts[-1]): d.ellipse((x - r, y - r, x + r, y + r), fill=c_)
     return Image.alpha_composite(img, lay.resize((w, h), Image.LANCZOS))
 # что рисуем: спрайты (без перевалов, они — тоже спрайты) и уникальные горы; деревья рощ
 items = []   # (y, kind, data)
