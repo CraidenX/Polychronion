@@ -23,7 +23,7 @@ RIV = np.load(SP + 'umap/rivers.npy') > 46
 # что рисуем: спрайты (без перевалов, они — тоже спрайты) и уникальные горы; деревья рощ
 items = []   # (y, kind, data)
 TONES = np.array(TSJ.get('tones', [[0.5, 0.45, 0.35]] * 8), np.float32)
-for it in TSJ['items']: set_, v, x, y, w, c = it[:6]; items.append((y, 's', (set_, v, x, y, w, c, np.array(it[7] if len(it) > 7 else TONES[4], np.float32))))
+for it in TSJ['items']: set_, v, x, y, w, c = it[:6]; items.append((y, 's', (set_, v, x, y, w, c, np.array(it[7] if len(it) > 7 else TONES[it[6] if len(it) > 6 else 4], np.float32))))
 for l in TSJ['landmarks']:
     if l.get('model'): continue          # модель (Афон) рисуется отдельно
     items.append((l['y'], 's', (l['set'], 0, l['x'], l['y'], l['w'], 2, np.array(l.get('col', TONES[4]), np.float32))))   # 2 — уникальная гора (подножие режется по берегу раньше)

@@ -210,17 +210,39 @@ for y, x in sparse(fz & (fd > 6) & ~mtn_b, rs(), 14, 1.0):
     tadd(y, x, 'tree_can_fir' if nearmt[y, x] else ('tree_can_mix' if south[y, 0] else 'tree_can_oak'), 95, 130)
 for y, x in sparse(fz & (fd > 1.5) & (fd <= 7), rs(), 8, 1.0):
     tadd(y, x, 'tree_k_fir' if nearmt[y, x] else ('tree_k_olv' if south[y, 0] and rt.random() < 0.6 else 'tree_k_oak'), 40, 56)
-edge = nd.binary_dilation(fz, iterations=3) & ~(fd > 1.5) & land & ~imp_b & ~lm_block
-for y, x in sparse(edge & (rs() < 0.35), rs(), 5, 1.0):
-    tadd(y, x, 'tree_s_pine' if nearmt[y, x] else ('tree_s_olv' if south[y, 0] else 'tree_s_oak'), 18, 28)
-hb = hills_m & ~fz & ~lm_block & ~imp_b
-for y, x in sparse(hb & (rs() < 0.2), rs(), 14, 1.0):
-    tadd(y, x, 'tree_s_olv' if south[y, 0] else 'tree_s_oak', 16, 24)
-pl = land & ~fz & ~hills_m & ~mtn_b & ~imp_b & ~lm_block
-for y, x in sparse(pl & (rs() < 0.02), rs(), 40, 1.0):
-    tadd(y, x, 'tree_s_oak', 16, 24)
+# J2: одиночные деревья и кусты — только группами по 3–7 (центр + разброс 2–5 px карты): опушки, берега малых рек (полоса ~4 px),
+#     холмы, окрестности поселений; в открытом поле — редкие группы (≈ одна на 60×60 px); одиночек в чистом поле нет
+okg = land & ~imp_b & ~lm_block & ~nd.binary_dilation(np.load(SP + 'umap/rivers.npy') > 46, iterations=2)   # не на русле (нарисованная река шире маски)
+def group(y, x, name, lo, hi_):
+    n = int(rt.integers(3, 8)); rr = rt.uniform(2, 5)
+    for i in range(n):
+        if i == 0: yy, xx = y, x
+        else: a_ = rt.uniform(0, 2 * np.pi); d_ = rr * np.sqrt(rt.random()); yy, xx = int(round(y + d_ * np.sin(a_) * 0.8)), int(round(x + d_ * np.cos(a_)))
+        if 0 <= yy < H and 0 <= xx < W and okg[yy, xx]: tadd(yy, xx, name, lo, hi_)
+sp_ = lambda y, x: 'tree_s_pine' if nearmt[y, x] else ('tree_s_olv' if south[y, 0] else 'tree_s_oak')
+ng = {}
+edge = nd.binary_dilation(fz, iterations=3) & ~(fd > 1.5) & okg
+for y, x in sparse(edge, rs(), 18, 1.0): group(y, x, sp_(y, x), 18, 28); ng['опушки'] = ng.get('опушки', 0) + 1
+# малые реки: все реки, кроме коридора больших (big_rivers.json, как в mkgrid.py)
+from PIL import ImageDraw
+BR = json.load(open(SP + 'big_rivers.json')); lines_ = Image.new('L', (W, H), 0); dl_ = ImageDraw.Draw(lines_)
+for pts in BR['rivers'].values(): dl_.line([topx(lo, la) for lo, la in pts], fill=255, width=2)
+bigz = nd.distance_transform_edt(np.asarray(lines_) == 0) <= BR['corridor']
+riv_s = (np.load(SP + 'umap/rivers.npy') > 46) & ~bigz
+bank = (nd.distance_transform_edt(~riv_s) <= 5) & ~riv_s & ~fz & okg   # полоса ~4 px за краем русла
+for y, x in sparse(bank, rs(), 24, 1.0): group(y, x, sp_(y, x), 18, 28); ng['берега рек'] = ng.get('берега рек', 0) + 1
+hb = hills_m & ~fz & okg
+for y, x in sparse(hb, rs(), 30, 1.0): group(y, x, 'tree_s_olv' if south[y, 0] else 'tree_s_oak', 16, 24); ng['холмы'] = ng.get('холмы', 0) + 1
+MI = json.load(open(SP + 'mapinfo3.json'))
+for pv in MI['provs']:   # окрестности поселений: 1–2 группы в 4–12 px от центра провинции
+    for _ in range(int(rt.integers(1, 3))):
+        a_ = rt.uniform(0, 2 * np.pi); d_ = rt.uniform(4, 12); y, x = int(pv[2] + d_ * np.sin(a_) * 0.8), int(pv[1] + d_ * np.cos(a_))
+        if 0 <= y < H and 0 <= x < W and okg[y, x] and not fz[y, x]: group(y, x, sp_(y, x), 16, 24); ng['поселения'] = ng.get('поселения', 0) + 1
+pl = okg & ~fz & ~hills_m & ~mtn_b & ~bank & (nd.distance_transform_edt(~edge) > 6)
+for y, x in sparse(pl, rs(), 60, 1.0): group(y, x, 'tree_s_olv' if south[y, 0] and rt.random() < 0.5 else 'tree_s_oak', 16, 24); ng['поле'] = ng.get('поле', 0) + 1
+print('групп одиночных деревьев', ng)
 print('деревьев (до отбора по зоне)', len(items) - tcount)
-del fd, edge, hb, pl
+del fd, edge, hb, pl, bank, riv_s, bigz
 # 3) перевалы: дорога поперёк хребта
 for p in PASSES:
     x, y = int(p[2]), int(p[3])

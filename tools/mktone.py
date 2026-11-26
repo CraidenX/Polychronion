@@ -43,7 +43,7 @@ C = C[np.argsort(C @ np.array([0.3, 0.59, 0.11]))]   # от тёмного к с
 near = lambda c: int(((C - c) ** 2).sum(1).argmin()) if c is not None else 4
 TSJ['tones'] = [[round(float(v), 3) for v in c] for c in C]
 for it, c in zip(TSJ['items'], cols):
-    del it[6:]; it += [near(c), [round(float(v), 3) for v in (c if c is not None else C[4])]]
+    del it[6:]; it += [near(c)] if it[0].startswith('tree_') else [near(c), [round(float(v), 3) for v in (c if c is not None else C[4])]]   # у деревьев — только тон (подкраска слабая, точный цвет не нужен)
 for l, c in zip(TSJ['landmarks'], lmc):
     if c is not None: l['tone'] = near(c); l['col'] = [round(float(v), 3) for v in c]
 TSJ['treeTones'] = {var: ''.join(str(near(c)) for c in tc) for var, tc in trees.items()}
