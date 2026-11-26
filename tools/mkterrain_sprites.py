@@ -139,7 +139,17 @@ _pk = lambda d: sorted(glob.glob(f'{LEGO}/{d}/peak_*.png'), key=lambda f: int(f.
 _rd = open(f'{LEGO}/parts_ridges_a/dirs.txt').read().split()
 LEGO_FILES = {f'lego_ridge_{d}': [f for f, dd in zip(_pk('parts_ridges_a'), _rd) if dd == d] for d in ('h', 'd1', 'd2')}
 LEGO_FILES['lego_summit'] = _pk('parts_summits')
-for n, fs in LEGO_FILES.items(): NV[n] = len(fs); SIZE[n] = (150, 200) if 'ridge' in n else (95, 130); ANCHOR[n] = 0.85
+# деревья: полог parts_forest_canopy (0–1 дубовый, 2–3 еловый, 4–5 смешанный), купы parts_trees_a…d (0–3 дубы, 4–7 ели в c/d, 8–11 оливы, 12–15 кипарисы),
+# одиночные parts_trees_single (0–4 дубы, 5–9 сосны и ели, 10–14 оливы и кипарисы, 15–19 кусты, 20–24 маквис); лишние обрывки нарезки (16-й в trees_d) не берутся
+_can, _sg = _pk('parts_forest_canopy'), _pk('parts_trees_single'); _tr = {c: _pk(f'parts_trees_{c}') for c in 'abcd'}
+LEGO_FILES.update({'tree_can_oak': _can[0:2], 'tree_can_fir': _can[2:4], 'tree_can_mix': _can[4:6],
+    'tree_k_oak': [f for c in 'abcd' for f in _tr[c][0:4]], 'tree_k_fir': _tr['c'][4:8] + _tr['d'][4:8], 'tree_k_olv': [f for c in 'abcd' for f in _tr[c][8:16]],
+    'tree_s_oak': _sg[0:5] + _sg[15:20], 'tree_s_pine': _sg[5:10], 'tree_s_olv': _sg[10:15] + _sg[20:25]})
+TREE_PAD, TREE_PB, TREE_AN = 0.2, 0.32, 0.92   # поля под тень (доля ширины с боков, доля высоты снизу), привязка дерева (низ ствола)
+for n, fs in LEGO_FILES.items():
+    NV[n] = len(fs)
+    if n.startswith('tree_'): SIZE[n] = (0, 0); ANCHOR[n] = TREE_AN / (1 + TREE_PB)
+    else: SIZE[n] = (150, 200) if 'ridge' in n else (95, 130); ANCHOR[n] = 0.85
 spath = lambda n, k: LEGO_FILES[n][k] if n in LEGO_FILES else f'{ART}/{n}/peak_{k}.png'
 items = []
 def add(y, x, name, scale=1.0, px=3):   # px — пикселей экрана на пиксель карты, в которых задан размер набора (проба 3×, конструктор 4×)
@@ -181,6 +191,36 @@ for y, x in sparse(impm, rng.random((H, W)).astype(np.float32), 13, 1.0):
     a = iang[y, x]; d = ('h' if abs(a) < 25 else ('d1' if a > 0 else 'd2')) if icoh[y, x] > 0.2 else None
     if d and rng.random() < 0.75: add(y, x, f'lego_ridge_{d}', px=4)
     else: add(y, x, 'lego_summit', px=4)
+# 1б) деревья — три слоя (образец lego_render.py): маска леса вне непроходимых гор с просветами по крупному шуму;
+#     сердцевина (> 6 px от края, не на проходимых горах) — полог, шаг 14; пояс (1,5–7 px) — купы, шаг 8; опушка (до 3 px снаружи) — одиночные, шаг 5, 35 %;
+#     холмы вне леса — редкие кусты и деревья (шаг 14), поля — очень редкие одиночные (шаг 40). Размеры — px экрана при 4×; тени — в атласе (мягкий эллипс на юго-восток)
+rt = np.random.default_rng(23)
+ASP = {n: [Image.open(f).height / Image.open(f).width for f in LEGO_FILES[n]] for n in LEGO_FILES if n.startswith('tree_')}
+def tadd(y, x, name, lo, hi_):   # высокие (кипарисы) — по высоте: не выше ~1,5 ширины набора, иначе одиночный кипарис выше холма
+    v = int(rt.integers(NV[name])); k = min(1.0, 1.5 / ASP[name][v])
+    items.append((int(y), name, int(x), v, round(float(rt.uniform(lo, hi_) / 4 * k * (1 + 2 * TREE_PAD)), 2)))
+imp_b = impass > 0.5; mtn_b = passable > 0.5
+fz = (m['forest'] | m['conifer']) & land & ~imp_b & ~lm_block & (noise(5, 1, r=rt) > -0.25)
+fd = nd.distance_transform_edt(fz)
+south = np.arange(H)[:, None] > 870                         # южнее ~42° с. ш. — средиземноморская растительность
+nearmt = nd.binary_dilation(mtn_b | imp_b, iterations=6)
+rs = lambda: rt.random((H, W)).astype(np.float32)
+tcount = len(items)
+for y, x in sparse(fz & (fd > 6) & ~mtn_b, rs(), 14, 1.0):
+    tadd(y, x, 'tree_can_fir' if nearmt[y, x] else ('tree_can_mix' if south[y, 0] else 'tree_can_oak'), 95, 130)
+for y, x in sparse(fz & (fd > 1.5) & (fd <= 7), rs(), 8, 1.0):
+    tadd(y, x, 'tree_k_fir' if nearmt[y, x] else ('tree_k_olv' if south[y, 0] and rt.random() < 0.6 else 'tree_k_oak'), 40, 56)
+edge = nd.binary_dilation(fz, iterations=3) & ~(fd > 1.5) & land & ~imp_b & ~lm_block
+for y, x in sparse(edge & (rs() < 0.35), rs(), 5, 1.0):
+    tadd(y, x, 'tree_s_pine' if nearmt[y, x] else ('tree_s_olv' if south[y, 0] else 'tree_s_oak'), 18, 28)
+hb = hills_m & ~fz & ~lm_block & ~imp_b
+for y, x in sparse(hb & (rs() < 0.2), rs(), 14, 1.0):
+    tadd(y, x, 'tree_s_olv' if south[y, 0] else 'tree_s_oak', 16, 24)
+pl = land & ~fz & ~hills_m & ~mtn_b & ~imp_b & ~lm_block
+for y, x in sparse(pl & (rs() < 0.02), rs(), 40, 1.0):
+    tadd(y, x, 'tree_s_oak', 16, 24)
+print('деревьев (до отбора по зоне)', len(items) - tcount)
+del fd, edge, hb, pl
 # 3) перевалы: дорога поперёк хребта
 for p in PASSES:
     x, y = int(p[2]), int(p[3])
@@ -246,6 +286,14 @@ def ragged_foot(im, name):
     yy = (np.arange(h)[:, None] + 0.5) / h; f = np.clip((yy - 0.5) / 0.1, 0, 1)   # с 55 % высоты вниз — рвём край, вершина чёткая
     a[..., 3] = al * (1 - f * (1 - mask)) * 255
     return Image.fromarray(a.astype(np.uint8), 'RGBA')
+def tree_shadow(im):   # поля и мягкая тень-эллипс на юго-восток от низа ствола
+    w0, h0 = im.size; px, pb = round(w0 * TREE_PAD), round(h0 * TREE_PB); W2, H2 = w0 + 2 * px, h0 + pb
+    yy, xx = np.mgrid[0:H2, 0:W2].astype(np.float32); cx, cy = px + w0 * 0.66, h0 * TREE_AN + w0 * 0.05
+    e = ((xx - cx) / (w0 * 0.42)) ** 2 + ((yy - cy) / (w0 * 0.14)) ** 2
+    sh = nd.gaussian_filter(np.clip(1.2 - e, 0, 1).astype(np.float32), max(0.6, w0 * 0.05)) * 0.42
+    out = Image.new('RGBA', (W2, H2), (0, 0, 0, 0)); out.putalpha(Image.fromarray((np.clip(sh, 0, 1) * 255).astype(np.uint8)))
+    base = Image.new('RGBA', (W2, H2), (28, 24, 14, 0)); base.putalpha(out.getchannel('A'))
+    base.alpha_composite(im, (px, 0)); return base
 def fade_bottom(im, n, k, frac=0.28):   # низ растворяется с шумом (как в lego_render.py)
     a = np.asarray(im).astype(np.float32); h, w = a.shape[:2]; r = np.random.default_rng(sum(map(ord, n)) * 31 + k)
     ex = np.clip(np.minimum(a[..., 0], a[..., 2]) - a[..., 1], 0, None)   # остаток пурпурного фона: красный и синий выше зелёного — к серому
@@ -257,10 +305,11 @@ def fade_bottom(im, n, k, frac=0.28):   # низ растворяется с ш�
 for n in sorted(used):
     for k in range(NV[n]):
         im = grade(Image.open(spath(n, k)).convert('RGBA'), n)
-        mw = 900 if n.startswith(('lm_', 'pass_')) else 400 if n.startswith('lego_') else 270
+        mw = 900 if n.startswith(('lm_', 'pass_')) else 400 if n.startswith('lego_') else (256 if '_can_' in n else 128 if '_k_' in n else 64) if n.startswith('tree_') else 270
         if im.width > mw: im = im.resize((mw, max(1, round(im.height * mw / im.width))), Image.LANCZOS)
         if n.startswith('lm_'): im = ragged_foot(im, n)
         if n.startswith('lego_'): im = fade_bottom(im, n, k)
+        if n.startswith('tree_'): im = tree_shadow(im)
         spr.append((n, k, im))
 AW = 4096; x = y = rowh = 0; rects = {}
 spr.sort(key=lambda t: -t[2].height)
@@ -270,7 +319,8 @@ for n, k, im in spr:
 atlas = Image.new('RGBA', (AW, y + rowh), (0, 0, 0, 0))
 for n, k, im in spr: r = rects[n][k]; atlas.paste(im, (r[0], r[1]))
 atlas.save(OUT + '/terrain_atlas.webp', quality=86, method=6)
-sets = {n: {'anchor': ANCHOR.get(n, next((l['anchor'] for l in lms if l['set'] == n), 0.78)) if not n.startswith('athos_') else 0.78, 'r': [rects[n][k] for k in range(NV[n])]} for n in rects}
+sets = {n: {'tint': [0.05, 0.25]} if n.startswith('tree_') else {} for n in rects}
+sets = {n: {**sets[n], 'anchor': ANCHOR.get(n, next((l['anchor'] for l in lms if l['set'] == n), 0.78)) if not n.startswith('athos_') else 0.78, 'r': [rects[n][k] for k in range(NV[n])]} for n in rects}
 for n in ('lm_etna_active', 'lm_etna_erupt'): sets[n]['anchor'] = sets['lm_etna']['anchor']
 json.dump({'sets': sets, 'items': [[t[1], t[3], t[2], t[0], t[4], t[5]] for t in items], 'landmarks': lms, 'models': models,
            'ischia': [round(v, 1) for v in topx(13.90, 40.73)]},
@@ -285,7 +335,7 @@ for var in ('', '2'):
     for i in range(nt):
         rec = b[o + i * 6:o + i * 6 + 6]; tx, ty = struct.unpack('<HH', rec[:4])
         X, Y = min(W - 1, tx // 8), min(H - 1, ty // 8)
-        if not block_t[Y, X] and grove[Y, X]: keep.append(rec)
+        if False and not block_t[Y, X] and grove[Y, X]: keep.append(rec)   # деревья теперь — из конструктора (tree_* в items)
     open(OUT + f'/icons_t{var}.bin', 'wb').write(struct.pack('<II', 0, len(keep)) + b''.join(keep))
 from collections import Counter
 print('спрайтов', len(items), Counter(t[1] for t in items).most_common(), '\nуникальных гор', [(l['name'], l['x'], l['y']) for l in lms],

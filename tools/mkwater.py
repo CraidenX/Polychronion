@@ -303,7 +303,7 @@ if NOI:
             for r in st['r']:
                 h_ = r[3]; ya = int(h_ * st['anchor']); band = ATL[r[1] + max(0, ya - h_ // 6):r[1] + ya, r[0]:r[0] + r[2]]
                 m_ = band[..., 3] > 0.8; FOOT[n].append(band[..., :3][m_].mean(0) if m_.any() else np.array([0.5, 0.45, 0.35], np.float32))
-        FEET = [(it[2], it[3], it[4], FOOT[it[0]][it[1]]) for it in TSJ['items'] if not it[0].startswith(('pass', 'lego_'))] + [(l['x'], l['y'], l['w'], FOOT[l['set']][0]) for l in TSJ['landmarks'] if not l.get('model') and l['set'] in FOOT]
+        FEET = [(it[2], it[3], it[4], FOOT[it[0]][it[1]]) for it in TSJ['items'] if not it[0].startswith(('pass', 'lego_', 'tree_'))] + [(l['x'], l['y'], l['w'], FOOT[l['set']][0]) for l in TSJ['landmarks'] if not l.get('model') and l['set'] in FOOT]
         FEET = np.array([(x, y, w, *c) for x, y, w, c in FEET], np.float32)
     except Exception as e:
         print('подошвы: нет данных спрайтов', e); FEET = np.zeros((0, 6), np.float32)
