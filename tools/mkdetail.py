@@ -33,6 +33,6 @@ for k in ('grass', 'steppe', 'maquis', 'sand'):
     t = np.asarray(Image.open(SP + f'textures/{k}.webp').convert('RGB')).astype(np.float32) / 255
     lum = t @ np.array([0.3, 0.59, 0.11], np.float32)
     big = np.pad(lum, 40, mode='wrap'); hp = (lum - nd.gaussian_filter(big, 14)[40:-40, 40:-40])
-    g = np.clip(0.5 + hp * {'grass': 1.6, 'steppe': 1.2, 'maquis': 1.0, 'sand': 1.3}[k], 0, 1)   # у травы контраст слабее — усиливаем сильнее
+    g = np.clip(0.5 + hp * {'grass': 2.3, 'steppe': 1.75, 'maquis': 1.45, 'sand': 1.9}[k], 0, 1)   # у травы контраст слабее — усиливаем сильнее
     Image.fromarray((g * 255).astype(np.uint8)).save(OUT + f'/detail_{k}.jpg', quality=88)
 print('детали текстур и маски готовы', {k: os.path.getsize(OUT + f'/detail_{k}.jpg') // 1024 for k in ('grass', 'steppe', 'maquis', 'sand')}, 'КБ')

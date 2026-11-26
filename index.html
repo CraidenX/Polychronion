@@ -167,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 91, "date": "26.11.2026 07:44"};
+const GAME_VERSION = {"v": 92, "date": "26.11.2026 07:59"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -3024,7 +3024,7 @@ function drawOverlay() {
       const sy = Math.min(PIX.h - 1, Math.floor(y * st)) * W;
       for (let x = 0; x < tw; x++) {
         const i = sy + Math.min(W - 1, Math.floor(x * st)), v = ids[i];
-        if (!v) { if (PIX.outer && (PIX.outer[i] || (PIX.mtn && PIX.mtn[i] === 2))) { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; }   // земли за краем зоны — серая вуаль
+        if (!v) { if (PIX.outer && PIX.outer[i] && !(PIX.mtn && PIX.mtn[i] === 2)) { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; }   // земли за краем зоны — серая вуаль
         if (pr[v] < 0 || pOwn[v] < 0) continue;
         const m = PIX.mtn && PIX.mtn[i] && !pFree[v], c = pCol[v], o = (y * tw + x) * 4;
         d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = pFree[v] ? (((x + y) % 5 === 0 || (x - y + 9999) % 5 === 0) ? 110 : 0) : (m ? (PIX.mtn[i] === 2 ? 20 : PIX.mtn[i] === 3 ? 115 : UI.ridgeA) : 190);
@@ -3119,21 +3119,38 @@ function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, H = HI) {
 
 // резкая фактура земли вблизи (mkdetail.py): «рельеф» текстур в родном разрешении (повтор — 70 px карты, как в плитках) поверх плитки
 // режимом «мягкий свет», по маскам классов. Цвет, светотень и подошвы остаются из плитки — добавляется только чёткость
-const GD = { st: 0, K: ['grass', 'steppe', 'maquis', 'sand'], img: {}, w: {} };
+const GD = { st: 0, K: ['grass', 'steppe', 'maquis', 'sand'], img: {}, w: {}, c: null };
+// детали всех текстур складываются в один серый слой — заранее, с запасом вокруг экрана (на кадре — один проход «мягкого света»);
+// пересборка — когда меняется масштаб или экран выходит за запас, и только когда карта остановилась
+function detailBuild(vx0, vy0, vx1, vy1, kz) {
+  const M = MAPINFO, mx = (vx1 - vx0) * 0.3, my = (vy1 - vy0) * 0.3, X0 = vx0 - mx, Y0 = vy0 - my, X1 = vx1 + mx, Y1 = vy1 + my;
+  const w = Math.ceil((X1 - X0) * kz), h = Math.ceil((Y1 - Y0) * kz);
+  const C = (GD.c && GD.c.cv) || document.createElement('canvas'); if (C.width !== w || C.height !== h) { C.width = w; C.height = h; }
+  const T = GD.tmp || (GD.tmp = document.createElement('canvas')); if (T.width !== w || T.height !== h) { T.width = w; T.height = h; }
+  const c = C.getContext('2d'), t = T.getContext('2d');
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.fillStyle = 'rgb(128,128,128)'; c.fillRect(0, 0, w, h);
+  for (const k of GD.K) {
+    if (!GD.pat) GD.pat = {}; if (!GD.pat[k]) { GD.pat[k] = t.createPattern(GD.img[k], 'repeat'); GD.pat[k].setTransform(new DOMMatrix().scale(70 / 1024)); }
+    t.setTransform(1, 0, 0, 1, 0, 0); t.globalCompositeOperation = 'source-over'; t.clearRect(0, 0, w, h);
+    t.setTransform(kz, 0, 0, kz, -X0 * kz, -Y0 * kz); t.fillStyle = GD.pat[k]; t.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+    t.globalCompositeOperation = 'destination-in'; t.imageSmoothingEnabled = true; const wi = GD.w[k], s = wi.width / M.W;
+    const sx0 = Math.max(0, X0 * s - 1), sy0 = Math.max(0, Y0 * s - 1), sw = Math.min(wi.width - sx0, (X1 - X0) * s + 2), sh = Math.min(wi.height - sy0, (Y1 - Y0) * s + 2);
+    if (sw > 0 && sh > 0) t.drawImage(wi, sx0, sy0, sw, sh, sx0 / s, sy0 / s, sw / s, sh / s);
+    c.drawImage(T, 0, 0);
+  }
+  GD.c = { cv: C, X0, Y0, X1, Y1, kz };
+}
 function groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
-  const a = clamp((z * dpr - 4) / 4, 0, 1) * 0.85; if (a <= 0) return;
+  const a = clamp((z * dpr - 4) / 4, 0, 1); if (a <= 0) return;
   if (!GD.st) { GD.st = 1; let n = 0; for (const k of GD.K) for (const [d, f] of [[GD.img, `detail_${k}.jpg`], [GD.w, `detail_w_${k}.png`]]) { const im = new Image(); im.onload = () => { if (++n === GD.K.length * 2) { GD.st = 2; scheduleVector(); } }; im.src = f; d[k] = im; } }
   if (GD.st !== 2) return;
-  const cv = ctx.canvas, D = GD.cv || (GD.cv = document.createElement('canvas')); if (D.width !== cv.width || D.height !== cv.height) { D.width = cv.width; D.height = cv.height; }
-  const d = D.getContext('2d'), kz = dpr * z, M = MAPINFO;
-  for (const k of GD.K) {
-    if (!GD.pat) GD.pat = {}; if (!GD.pat[k]) { GD.pat[k] = d.createPattern(GD.img[k], 'repeat'); GD.pat[k].setTransform(new DOMMatrix().scale(70 / 1024)); }
-    d.setTransform(1, 0, 0, 1, 0, 0); d.globalCompositeOperation = 'source-over'; d.globalAlpha = 1; d.clearRect(0, 0, D.width, D.height);
-    d.setTransform(kz, 0, 0, kz, dpr * v.x, dpr * v.y); d.fillStyle = GD.pat[k]; d.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
-    d.globalCompositeOperation = 'destination-in'; d.imageSmoothingEnabled = true; const wi = GD.w[k], sx = wi.width / M.W;
-    d.drawImage(wi, Math.max(0, vx0 * sx - 1), Math.max(0, vy0 * sx - 1), (vx1 - vx0) * sx + 2, (vy1 - vy0) * sx + 2, Math.max(0, vx0 * sx - 1) / sx, Math.max(0, vy0 * sx - 1) / sx, ((vx1 - vx0) * sx + 2) / sx, ((vy1 - vy0) * sx + 2) / sx);
-    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = a; ctx.drawImage(D, 0, 0); ctx.restore();
-  }
+  const kz = dpr * z, c = GD.c, moving = performance.now() - (UI.lastMove || 0) < 160;
+  const fits = c && Math.abs(c.kz - kz) < 1e-6 && vx0 >= c.X0 && vy0 >= c.Y0 && vx1 <= c.X1 && vy1 <= c.Y1;
+  if (!fits) { if (!moving || !c) detailBuild(vx0, vy0, vx1, vy1, kz); else { clearTimeout(GD.t); GD.t = setTimeout(scheduleVector, 180); } }
+  const g = GD.c; if (!g) return;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = a; ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(g.cv, dpr * v.x + g.X0 * kz, dpr * v.y + g.Y0 * kz, (g.X1 - g.X0) * kz, (g.Y1 - g.Y0) * kz);   // во время приближения — растянутый прежний слой
+  ctx.restore();
 }
 /* --- векторные границы (borders.js): рисуются на холсте размером с экран, только видимая часть ---
    (раньше это был один огромный SVG — при сильном приближении браузер его не тянул) */
@@ -3320,8 +3337,8 @@ function sharpFill(X0, Y0, X1, Y1, S, geo) {   // geo — режим «Мест�
   for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) {
     const gx = X0 + x - 1, gy = Y0 + y - 1, j = y * rw + x; if (gx < 0 || gy < 0 || gx >= W || gy >= PIX.h) continue;
     const i = gy * W + gx, v = ids[i];
-    if (!v) { if (outer && (outer[i] || (mt && mt[i] === 2))) Ou[j] = 1; continue; }   // земли за краем зоны — сплошная вуаль, вместе с руслами рек
-    if (mt && mt[i] === 2) Rv[j] = 1;
+    if (mt && mt[i] === 2) Rv[j] = 1;   // реки — сплошные, и за краем игровой зоны (поверх вуали): иначе большие реки «рвутся» на границе зоны
+    if (!v) { if (outer && outer[i]) Ou[j] = 1; continue; }
     if (geo) continue;
     if (pr[v] < 0 || po[v] < 0) continue;
     F[j] = 1; col[j] = v; const m = mt && mt[i] && !pf[v];
@@ -3404,7 +3421,7 @@ function paintVector() {
     }
     const k = (img.naturalWidth || img.width) / M.W;
     ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
-    if (z * dpr >= 1.15 && HI.idx) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче
+    if (z * dpr >= 1.15 && HI.idx && !(TSP.st === 2 && UI.mapMode === 'geo' && geoU(z) >= 1 && HIC.idx)) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче (в «Местности» с 3× их целиком закрывают чистые)
     // вблизи — подложка без гор и деревьев: их рисует ближний уровень рельефа (плавно, вместе с ним)
     const tt = clamp((z * dpr - 1.8) / 1.6, 0, 1), tA = TSP.st === 2 ? (UI.mapMode === 'geo' ? geoU(z) : tt * tt * (3 - 2 * tt)) : 0;
     if (tA > 0) { HIC.load(); if (HIC.idx) { ctx.globalAlpha = tA; drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, HIC); ctx.globalAlpha = 1; } }
@@ -3434,7 +3451,8 @@ function paintVector() {
       if (!PIX.outerCv) {
         const W = PIX.w, H2 = PIX.h, tw = Math.ceil(W / 2), th = Math.ceil(H2 / 2), c = document.createElement('canvas'); c.width = tw; c.height = th;
         const cx = c.getContext('2d'), im = cx.createImageData(tw, th), d = im.data, ids = PIX.ids, ou = PIX.outer, mt = PIX.mtn;
-        for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) { const i = Math.min(H2 - 1, y * 2) * W + Math.min(W - 1, x * 2); if (!ids[i] && (ou[i] || (mt && mt[i] === 2))) { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } }
+        const riv = i => mt && (mt[i] === 2 || mt[i + 1] === 2 || mt[i + W] === 2 || mt[i + W + 1] === 2);   // клетка 2×2 с рекой — без вуали: русло видно и издали
+        for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) { const i = Math.min(H2 - 2, y * 2) * W + Math.min(W - 2, x * 2); if (!ids[i] && ou[i] && !riv(i)) { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } }
         cx.putImageData(im, 0, 0); PIX.outerCv = c;
       }
       const t = PIX.outerCv, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
@@ -3448,7 +3466,7 @@ function paintVector() {
     if (PIX.vtKey !== key) {
       const vt = PIX.vt; if (vt.width !== vw || vt.height !== vh) { vt.width = vw; vt.height = vh; }
       const vc = vt.getContext('2d'), im = vc.createImageData(vw, vh), d = im.data, ids = PIX.ids, pr = PIX.provReg, pc = PIX.pCol, po = PIX.pOwn, mt = PIX.mtn, W = PIX.w;
-      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v) { if (PIX.outer && (PIX.outer[i] || (mt && mt[i] === 2))) { const o = (y * vw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; } if (pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? (mt[i] === 2 ? 20 : mt[i] === 3 ? 115 : UI.ridgeA) : 190); } }
+      for (let y = 0; y < vh; y++) { const row = (Y0 + y) * W + X0; for (let x = 0; x < vw; x++) { const i = row + x, v = ids[i]; if (!v) { if (PIX.outer && PIX.outer[i] && !(mt && mt[i] === 2)) { const o = (y * vw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } continue; } if (pr[v] < 0 || po[v] < 0) continue; const m = mt && mt[i] && !PIX.pFree[v], c = pc[v], o = (y * vw + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; const gx = X0 + x, gy = Y0 + y; d[o + 3] = PIX.pFree[v] ? (((gx + gy) % 10 < 1 || (gx - gy + 99999) % 10 < 1) ? 120 : 0) : (m ? (mt[i] === 2 ? 20 : mt[i] === 3 ? 115 : UI.ridgeA) : 190); } }
       vc.putImageData(im, 0, 0); PIX.vtKey = key;
     }
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
