@@ -719,7 +719,7 @@ function icoLoad() {
     for (let i = 0; i < nt; i++, o += 6) { const b = dv.getUint8(o + 5); put(tg, dv.getUint16(o, true) / 8, dv.getUint16(o + 2, true) / 8, { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, r: dv.getUint8(o + 4) / 100, con: b & 1, idx: b >> 1, tone: TTN[i] != null ? +TTN[i] : -1 }); }
     if (t) {
       const S = t.j.sets;
-      for (const [set, v, x, y, w, c, tone] of t.j.items) put(sg, x, y, { set, v, x, y, w, c, tone: tone == null ? -1 : tone, r: S[set].r[v], an: S[set].anchor });
+      for (const [set, v, x, y, w, c, tone] of t.j.items) put(sg, x, y, { set, v, x, y, w, c, tone: tone == null ? -1 : tone, r: S[set].r[v], an: S[set].anchor, kd: set.startsWith('tree_s_') ? 2 : set.startsWith('tree_k_') ? 1 : 0 });
       for (const l of t.j.landmarks) if (!l.model) put(sg, l.x, l.y, Object.assign(l, { v: 0, r: S[l.set].r[0], an: S[l.set].anchor, lm: true, tone: l.tone == null ? -1 : l.tone }));
       Object.assign(TSP, { st: 2, atlas: t.at, sets: S, lms: t.j.landmarks, ischia: t.j.ischia, models: t.j.models || [], tones: t.j.tones || null });
       for (const md of TSP.models) { md.img = new Image(); md.img.onload = () => scheduleVector(); md.img.src = md.file; }
@@ -1068,19 +1068,15 @@ function landmarksLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = a; ctx.drawImage(t, 0, 0, tw, th, dpr * v.x + x0 * k, dpr * v.y + y0 * k, tw, th); ctx.restore();
   }
 }
-function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
-  const u = geoU(z); if (u <= 0 || ICO.st !== 2 || TSP.st !== 2) return;
-  const sc = 1, k = dpr * z, M = 150, q = [];   // тот же размер, что у запечённых в дальний вид: при приближении спрайты не прыгают, только становятся чётче
-  const get = g => { for (let cy = Math.floor((vy0 - 30) / ICO.CELL); cy <= Math.floor((vy1 + M) / ICO.CELL); cy++) for (let cx = Math.floor((vx0 - M) / ICO.CELL); cx <= Math.floor((vx1 + M) / ICO.CELL); cx++) { const a = g.get(cy * ICO.cw + cx); if (a) for (const o of a) q.push(o); } };
-  get(ICO.tg); get(ICO.sg); q.sort((a, b) => a.y - b.y);
-  ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y);
-  ctx.globalAlpha = Math.min(1, u * 8); modelsDraw(ctx, vx0, vy0, vx1, vy1);   // модели (Афон) — земля под спрайтами ctx.globalAlpha = Math.min(1, u * 8); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';   // живые спрайты стоят ровно на запечённых: быстро становятся непрозрачными — картинка не бледнеет
-  const A = TSP.atlas, N = ICO.N, sea = WV.mask;
-  for (const m of q) {
-    if (m.set) {
-      if (m.lm) continue;   // уникальные горы — отдельно, поверх границ (landmarksLive)
-      const r = m.r, w = m.w * sc, h = w * r[3] / r[2], x0 = m.x - w / 2, y0 = m.y - h * m.an;
-      if (x0 > vx1 || x0 + w < vx0 || y0 > vy1 || y0 + h < vy0) continue;
+// J3: рельеф и деревья вблизи — кэш кусков. Карта делится на квадраты 256×256 px экрана на ступени приближения (3×, 6×, 12×);
+// спрайты квадрата рисуются один раз в свой холст, дальше выводятся готовые холсты (между ступенями — масштабирование ближайшей сверху).
+// Кусков вне кадра не строим, далёкие освобождаются (не больше TCH.MAX). Отсев мелочи: купы — от 3×, одиночные деревья и кусты — от 5×.
+const TCH = { m: new Map(), use: 0, MAX: 320, P: 256 };
+function tchShow(m, f) { return m.kd === 2 ? f >= 2 : m.kd === 1 ? f >= 1 : true; }
+function spriteDraw(c0, m, k, vx0, vy0, vx1, vy1) {   // один спрайт в координатах карты на холсте c0 (k — px холста на px карты: для подрезки подножия у берега)
+  const sea = WV.mask;
+      const r = m.r, w = m.w, h = w * r[3] / r[2], x0 = m.x - w / 2, y0 = m.y - h * m.an;
+      if (x0 > vx1 || x0 + w < vx0 || y0 > vy1 || y0 + h < vy0) return;
       if ((m.c || m.lm) && sea) {   // берег: нижние 25 % высоты (подножие) — только над сушей, с мягким краем; верх может нависать над водой
         const tw = Math.max(1, Math.ceil(w * k)), th = Math.max(1, Math.ceil(h * k)), t = TL.tmp || (TL.tmp = document.createElement('canvas'));
         if (t.width < tw || t.height < th) { t.width = Math.max(t.width, tw); t.height = Math.max(t.height, th); }
@@ -1090,20 +1086,52 @@ function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
         const m2 = TL.m2 || (TL.m2 = document.createElement('canvas')); if (m2.width < tw || m2.height < th) { m2.width = Math.max(m2.width, tw); m2.height = Math.max(m2.height, th); }
         const mc = m2.getContext('2d'); mc.globalCompositeOperation = 'source-over'; mc.clearRect(0, 0, tw, th); mc.imageSmoothingQuality = 'high';
         mc.drawImage(seaBlur(), x0 / 2, y0 / 2, w / 2, h / 2, 0, 0, tw, th);
-        const gr = m.lm ? mc.createLinearGradient(0, th * 0.4, 0, th * 0.55) : mc.createLinearGradient(0, th * 0.62, 0, th * 0.8);   // у уникальных гор подножие ниже 55 % — режется по берегу раньше gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
+        const gr = m.lm ? mc.createLinearGradient(0, th * 0.4, 0, th * 0.55) : mc.createLinearGradient(0, th * 0.62, 0, th * 0.8); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');   // у уникальных гор подножие ниже 55 % — режется по берегу раньше 
         mc.globalCompositeOperation = 'destination-in'; mc.fillStyle = gr; mc.fillRect(0, 0, tw, th);
         c.globalCompositeOperation = 'destination-out'; c.drawImage(m2, 0, 0, tw, th, 0, 0, tw, th); c.globalCompositeOperation = 'source-over';
-        ctx.drawImage(t, 0, 0, tw, th, x0, y0, w, h);
-      } else ctx.drawImage(tintedSprite(m.set, m.v, m.tone), 0, 0, r[2], r[3], x0, y0, w, h);
-      continue;
-    }
-    if (m.idx !== undefined) {   // роща (старые кроны, реже)
-      const r = m.r * sc, px = Math.max(3, r * 4.2);
-      if (m.x + px < vx0 || m.x - px > vx1 || m.y - px > vy1 || m.y + px < vy0) continue;
-      ctx.drawImage(tintedTree(m.con, m.idx, m.tone), 0, 0, N, N, m.x - px / 2, m.y - px * 0.72, px, px);
-    }
+        c0.drawImage(t, 0, 0, tw, th, x0, y0, w, h);
+      } else c0.drawImage(tintedSprite(m.set, m.v, m.tone), 0, 0, r[2], r[3], x0, y0, w, h);
+}
+function tchBuild(L, f, cx, cy) {
+  const P = TCH.P, CS = P / L, X0 = cx * CS, Y0 = cy * CS, X1 = X0 + CS, Y1 = Y0 + CS, Mx = 150, q = [];
+  const g = ICO.sg; for (let gy = Math.floor((Y0 - 30) / ICO.CELL); gy <= Math.floor((Y1 + Mx) / ICO.CELL); gy++) for (let gx = Math.floor((X0 - Mx) / ICO.CELL); gx <= Math.floor((X1 + Mx) / ICO.CELL); gx++) { const a = g.get(gy * ICO.cw + gx); if (a) for (const o of a) if (!o.lm && tchShow(o, f)) q.push(o); }
+  q.sort((a, b) => a.y - b.y);
+  const cv = document.createElement('canvas'); cv.width = cv.height = P + 2; const c = cv.getContext('2d');   // запас 1 px по краям — без швов при масштабировании
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high'; c.setTransform(L, 0, 0, L, 1 - X0 * L, 1 - Y0 * L);
+  const e0 = 1 / L; for (const m of q) spriteDraw(c, m, L, X0 - e0, Y0 - e0, X1 + e0, Y1 + e0);
+  return { cv, use: 0 };
+}
+function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  const u = geoU(z); if (u <= 0 || ICO.st !== 2 || TSP.st !== 2) return;
+  const k = dpr * z, P = TCH.P, f = z >= 5 ? 2 : z >= 3 ? 1 : 0, LV = [3, 6, 12], L = k <= 3 * 1.41 ? 3 : k <= 6 * 1.41 ? 6 : 12;
+  ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y); ctx.globalAlpha = Math.min(1, u * 8);
+  modelsDraw(ctx, vx0, vy0, vx1, vy1);   // модели (Афон) — земля под спрайтами, живьём (монастыри меняются по ходу игры)
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  const t0 = performance.now(), mx = (vx0 + vx1) / 2, my = (vy0 + vy1) / 2;
+  const put = (Lq, fq, cx, cy, clip) => {   // вывести кусок ступени Lq; clip — прямоугольник экрана (для подмены с другой ступени)
+    const e = TCH.m.get(Lq + ':' + fq + ':' + cx + ':' + cy); if (!e) return false; e.use = ++TCH.use;
+    const CS = P / Lq, sx = dpr * v.x + cx * CS * k, sy = dpr * v.y + cy * CS * k, sz = CS * k;
+    const x0 = Math.round(sx), y0 = Math.round(sy), x1 = Math.round(sx + sz), y1 = Math.round(sy + sz);
+    if (clip) { ctx.save(); ctx.beginPath(); ctx.rect(clip[0], clip[1], clip[2], clip[3]); ctx.clip(); }
+    ctx.drawImage(e.cv, 1, 1, P, P, x0, y0, x1 - x0, y1 - y0); if (clip) ctx.restore(); return true; };
+  const CS = P / L, cx0 = Math.floor(vx0 / CS), cy0 = Math.floor(vy0 / CS), cx1 = Math.floor(vx1 / CS), cy1 = Math.floor(vy1 / CS), list = [];
+  for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) list.push([Math.hypot((cx + 0.5) * CS - mx, (cy + 0.5) * CS - my), cx, cy]);
+  list.sort((a, b) => a[0] - b[0]); let pending = false;
+  for (const [, cx, cy] of list) {
+    const key = L + ':' + f + ':' + cx + ':' + cy;
+    if (!TCH.m.has(key) && (performance.now() - t0 < 12 || !TCH.m.size)) TCH.m.set(key, tchBuild(L, f, cx, cy));
+    if (put(L, f, cx, cy)) continue;
+    pending = true;   // пока не построен — с соседней ступени (если есть), обрезано по своему квадрату
+    const sx = dpr * v.x + cx * CS * k, sy = dpr * v.y + cy * CS * k, clip = [Math.round(sx), Math.round(sy), Math.round(sx + CS * k) - Math.round(sx), Math.round(sy + CS * k) - Math.round(sy)];
+    let done = false;
+    for (const L2 of LV) { if (L2 === L || done) continue; for (const f2 of [f, 2, 1, 0]) { const C2 = P / L2; let all = true, any = false;
+        for (let y = Math.floor(cy * CS / C2); y <= Math.floor(((cy + 1) * CS - 1e-6) / C2); y++) for (let x = Math.floor(cx * CS / C2); x <= Math.floor(((cx + 1) * CS - 1e-6) / C2); x++) if (TCH.m.has(L2 + ':' + f2 + ':' + x + ':' + y)) any = true; else all = false;
+        if (!all) continue; for (let y = Math.floor(cy * CS / C2); y <= Math.floor(((cy + 1) * CS - 1e-6) / C2); y++) for (let x = Math.floor(cx * CS / C2); x <= Math.floor(((cx + 1) * CS - 1e-6) / C2); x++) put(L2, f2, x, y, clip);
+        done = any; if (done) break; } }
   }
   ctx.restore();
+  if (pending) scheduleVector();
+  if (TCH.m.size > TCH.MAX) { const old = [...TCH.m.entries()].sort((a, b) => a[1].use - b[1].use).slice(0, TCH.m.size - TCH.MAX); for (const [kk] of old) TCH.m.delete(kk); }
 }
 // Гладкая заливка держав вблизи: участок карты [X0..X1)×[Y0..Y1) в S раз подробнее. Для каждой «категории» (суша державы,
 // река, значок горы, лес, внешние земли) берётся маска 0/1, слегка размывается и интерполируется по подпикселям, а затем
