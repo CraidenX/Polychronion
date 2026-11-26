@@ -167,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 102, "date": "26.11.2026 23:16"};
+const GAME_VERSION = {"v": 103, "date": "26.11.2026 23:54"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2884,7 +2884,19 @@ function applyView() {
   UI.lastMove = performance.now();
   if (typeof scheduleVector === 'function') scheduleVector();
 }
-function zoomAt(f, cx, cy) { const v = UI.view; const nz = clamp(v.z * f, minZoom(), MAXZ); v.x = cx - (cx - v.x) * nz / v.z; v.y = cy - (cy - v.y) * nz / v.z; v.z = nz; clampView(); applyView(); }
+// K1: приближение — плавно (≈ 150–200 мс на шаг колёсика): цель копится, масштаб догоняет её экспоненциально; точка под курсором стоит на месте
+const ZA = { zt: 0, cx: 0, cy: 0, mx: 0, my: 0, raf: 0, t: 0 };
+function zoomAt(f, cx, cy) {
+  const v = UI.view; if (!ZA.raf) ZA.zt = v.z;
+  ZA.zt = clamp(ZA.zt * f, minZoom(), MAXZ); ZA.cx = cx; ZA.cy = cy; ZA.mx = (cx - v.x) / v.z; ZA.my = (cy - v.y) / v.z;
+  if (HEADLESS || typeof requestAnimationFrame === 'undefined') { zoomStep(1e9); return; }
+  if (!ZA.raf) { ZA.t = performance.now(); ZA.raf = requestAnimationFrame(zoomTick); }
+}
+function zoomStep(dt) {
+  const v = UI.view, k = 1 - Math.exp(-dt / 55), lz = Math.log(v.z) + (Math.log(ZA.zt) - Math.log(v.z)) * k, done = Math.abs(Math.log(ZA.zt) - lz) < 0.003;
+  const nz = done ? ZA.zt : Math.exp(lz); v.x = ZA.cx - ZA.mx * nz; v.y = ZA.cy - ZA.my * nz; v.z = nz; clampView(); applyView(); return done;
+}
+function zoomTick(now) { const dt = Math.min(50, now - ZA.t); ZA.t = now; if (zoomStep(dt)) { ZA.raf = 0; return; } ZA.raf = requestAnimationFrame(zoomTick); }
 function setupPanZoom() {
   const w = $('mapwrap'); let drag = null; const pts = new Map(); let pinch = null;
   w.addEventListener('wheel', e => { e.preventDefault(); const r = w.getBoundingClientRect(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
@@ -3230,7 +3242,7 @@ function icoLoad() {
       for (const md of TSP.models) { md.img = new Image(); md.img.onload = () => scheduleVector(); md.img.src = md.file; }
     }
     Object.assign(ICO, { st: 2, mg, tg, sg, CELL, cw, atlas: im, N: im.width / 10 });
-    if (t) pretintStart(t.j);
+    if (t) { pretintStart(t.j, true); const all = []; for (const a of sg.values()) for (const o of a) if (!o.lm) all.push(o); tchWorkerStart(t.at, t.j.sets, t.j.tones || null, all); }
     gdLoad();
     PIX.vtKey = ''; scheduleVector(); if (G && typeof renderMarkers === 'function') renderMarkers();
   }).catch(() => { ICO.st = 3; });
@@ -3396,7 +3408,6 @@ function polBorders(ctx, z, vx0, vy0, vx1, vy1, pa) {   // I4: полоса 8 px
     for (const [o, s2] of [[oa, sg], [ob, -sg]]) { if (!o || o === 'free' || !FACTIONS[o]) continue; offLine(get(band, o), g.pts, s2, bw / 2 / z); offLine(get(line, o), g.pts, s2, lw / 2 / z); }
   }
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
-  ctx.globalAlpha = 0.25 * pa; ctx.lineWidth = bw / z; for (const [o, p] of band) { ctx.strokeStyle = FACTIONS[o].color; ctx.stroke(p); }
   ctx.globalAlpha = pa; ctx.lineWidth = lw / z; for (const [o, p] of line) { ctx.strokeStyle = polDark(FACTIONS[o].color); ctx.stroke(p); }
   ctx.setLineDash([4 / z, 3 / z]); ctx.strokeStyle = 'rgba(40,30,25,.85)'; ctx.lineWidth = 1.3 / z; ctx.stroke(dash); ctx.setLineDash([]);
   ctx.restore();
@@ -3437,33 +3448,34 @@ function polFillBuild(vx0, vy0, vx1, vy1, kb) {
   }
   x.putImageData(im, 0, 0); POLF.c = { cv, X0, Y0, X1, Y1, kb, sig: POLF.sig };
 }
-function polFill(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {   // J1: внутри держав итоговая картинка обесцвечивается (~65 %) и высветляется, поверх — цвет державы, альфа 0,5
-  if (!PIX.ids || !G || !G.prov) return; polFillPrep();
-  const kz = dpr * z, M = MAPINFO, cw = ctx.canvas.width, ch = ctx.canvas.height;
-  // маска держав (точный цвет, альфа 255; море, ничейные и земли вне игры — пусто) в кадре — на отдельном холсте экрана
-  const mk = POLF.mk || (POLF.mk = document.createElement('canvas')); if (mk.width !== cw || mk.height !== ch) { mk.width = cw; mk.height = ch; }
-  const m = mk.getContext('2d'); m.setTransform(1, 0, 0, 1, 0, 0); m.globalCompositeOperation = 'copy'; m.globalAlpha = 1;
-  if (kz * PIX.s <= 2.5) {   // издали: пиксель карты держав не крупнее ~2,5 px экрана
-    const c = POLF.full, s = c.width / M.W; m.imageSmoothingEnabled = kz * PIX.s < 1;
-    const X0 = Math.max(0, vx0), Y0 = Math.max(0, vy0), X1 = Math.min(M.W, vx1), Y1 = Math.min(M.H, vy1);
-    m.clearRect(0, 0, cw, ch); m.globalCompositeOperation = 'source-over';
-    m.drawImage(c, X0 * s, Y0 * s, (X1 - X0) * s, (Y1 - Y0) * s, dpr * v.x + X0 * kz, dpr * v.y + Y0 * kz, (X1 - X0) * kz, (Y1 - Y0) * kz);
-  } else {
-    const kb = Math.pow(2, Math.ceil(Math.log2(kz) * 2 - 1e-6) / 2), c = POLF.c, moving = performance.now() - (UI.lastMove || 0) < 160;
-    const fits = c && c.sig === POLF.sig && Math.abs(c.kb - kb) < 1e-6 && vx0 >= c.X0 && vy0 >= c.Y0 && vx1 <= c.X1 && vy1 <= c.Y1;
-    if (!fits) { if (!moving || !c || c.sig !== POLF.sig) polFillBuild(vx0, vy0, vx1, vy1, kb); else { clearTimeout(POLF.t); POLF.t = setTimeout(scheduleVector, 180); } }
-    const g = POLF.c; m.clearRect(0, 0, cw, ch); m.globalCompositeOperation = 'source-over'; m.imageSmoothingEnabled = true;
-    m.drawImage(g.cv, dpr * v.x + g.X0 * kz, dpr * v.y + g.Y0 * kz, (g.X1 - g.X0) * kz, (g.Y1 - g.Y0) * kz);
-  }
-  // обработанный кадр: серое 65 % (фильтр холста), высветление (0,25 + 0,75 × серое ≈ белый поверх 16 %), цвет державы 0,5 — и только внутри маски
-  const sc = POLF.sc || (POLF.sc = document.createElement('canvas')); if (sc.width !== cw || sc.height !== ch) { sc.width = cw; sc.height = ch; }
-  const q = sc.getContext('2d'); q.setTransform(1, 0, 0, 1, 0, 0); q.globalAlpha = 1; q.globalCompositeOperation = 'copy';
-  if ('filter' in q) q.filter = 'grayscale(65%)';
-  q.drawImage(ctx.canvas, 0, 0); if ('filter' in q) q.filter = 'none';
-  q.globalCompositeOperation = 'source-over'; q.fillStyle = 'rgba(255,255,255,0.1625)'; q.fillRect(0, 0, cw, ch);
-  q.globalAlpha = 0.5; q.drawImage(mk, 0, 0); q.globalAlpha = 1;
-  q.globalCompositeOperation = 'destination-in'; q.drawImage(mk, 0, 0); q.globalCompositeOperation = 'source-over';
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(sc, 0, 0); ctx.restore();
+// K1: политический слой — три готовые текстуры на всю карту (разрешение карты держав, мягкие края), не пересчитываются при приближении:
+// обесцвечивание (режим «насыщенность», 65 %), высветление («экран» серым 0,25 = 0,25 + 0,75 × серое), цвет державы 0,5 + полоса у границ +0,25
+function polTex() {
+  polFillPrep(); if (POLF.tx && POLF.tx.sig === POLF.sig) return POLF.tx;
+  const W = PIX.w, H = PIX.h, ow = POLF.ow, cols = POLF.cols, N = W * H;
+  const bd = new Float32Array(N).fill(1e9);   // расстояние до границы с другой державой (или ничейной землёй), px карты держав
+  const ids = PIX.ids, other = (i, j) => ow[j] !== ow[i] && (ow[j] >= 0 || ids[j]);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (ow[i] < 0) continue;
+    if ((x > 0 && other(i, i - 1)) || (x < W - 1 && other(i, i + 1)) || (y > 0 && other(i, i - W)) || (y < H - 1 && other(i, i + W))) bd[i] = 0; }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; let m = bd[i]; if (x > 0) m = Math.min(m, bd[i - 1] + 1); if (y > 0) m = Math.min(m, bd[i - W] + 1); bd[i] = m; }
+  for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) { const i = y * W + x; let m = bd[i]; if (x < W - 1) m = Math.min(m, bd[i + 1] + 1); if (y < H - 1) m = Math.min(m, bd[i + W] + 1); bd[i] = m; }
+  const mk = (fill) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), im = x.createImageData(W, H), d = im.data;
+    for (let i = 0; i < N; i++) { const o = ow[i]; if (o < 0) continue; fill(d, i * 4, o, i); } x.putImageData(im, 0, 0);
+    const s2 = document.createElement('canvas'); s2.width = W; s2.height = H; const y2 = s2.getContext('2d'); if ('filter' in y2) y2.filter = 'blur(0.7px)'; y2.drawImage(c, 0, 0); return s2; };
+  const BW = 4 / PIX.s;   // полоса у границ: ≈ 4 px карты
+  const tx = { sig: POLF.sig,
+    sat: mk((d, q) => { d[q] = d[q + 1] = d[q + 2] = 128; d[q + 3] = 166; }),
+    scr: mk((d, q) => { d[q] = d[q + 1] = d[q + 2] = 64; d[q + 3] = 255; }),
+    col: mk((d, q, o, i) => { const c = cols[o]; d[q] = c[0]; d[q + 1] = c[1]; d[q + 2] = c[2]; d[q + 3] = Math.round(255 * (0.5 + (bd[i] < BW ? 0.25 * (1 - bd[i] / BW * 0.5) : 0))); }) };
+  return POLF.tx = tx;
+}
+function polFill(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  if (!PIX.ids || !G || !G.prov) return; const t = polTex(), M = MAPINFO, kz = dpr * z, s = t.col.width / M.W;
+  const X0 = Math.max(0, vx0), Y0 = Math.max(0, vy0), X1 = Math.min(M.W, vx1), Y1 = Math.min(M.H, vy1); if (X1 <= X0 || Y1 <= Y0) return;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  const put = (c, op) => { ctx.globalCompositeOperation = op; ctx.drawImage(c, X0 * s, Y0 * s, (X1 - X0) * s, (Y1 - Y0) * s, dpr * v.x + X0 * kz, dpr * v.y + Y0 * kz, (X1 - X0) * kz, (Y1 - Y0) * kz); };
+  put(t.sat, 'saturation'); put(t.scr, 'screen'); put(t.col, 'source-over');
+  ctx.restore();
 }
 /* --- подкраска спрайтов под землю (G1): вариант спрайта с цветом тона земли у подножия (mktone.py, 8 тонов), с сохранением яркости:
    у подножия ~60 %, к вершине ~15 %, снег не трогаем. Варианты делаются один раз по требованию и хранятся (не больше ~400) --- */
@@ -3487,12 +3499,13 @@ function tintCanvas(src, sx, sy, sw, sh, col, an, tb) {
 }
 // предзагрузка: копия атласа в обычной памяти и все подкрашенные варианты спрайтов — в фоне, кусками по ~10 мс
 // (пока игрок на титуле и во вступлении), начиная с ближайших к столице; к приближению всё уже готово
-function pretintStart(j) {
+function pretintStart(j, lite) {   // lite: куски строит фоновый поток (своя подкраска) — здесь только уникальные горы
   if (TSP.pre) return;
+  if (lite && (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined')) lite = false;
   const at = TSP.atlas, pc = document.createElement('canvas'); pc.width = at.width; pc.height = at.height;
   const px = pc.getContext('2d', { willReadFrequently: true }); px.drawImage(at, 0, 0); TSP.pxc = px;
   const seen = new Set(), q = [], cd = typeof REGION_DEFS !== 'undefined' && typeof RNAME !== 'undefined' && REGION_DEFS.find(d => RNAME[d[0]] === 'Константинополь'), cap = (cd && MAPINFO.pos[cd[0]]) || [2330, 1010];
-  for (const it of j.items) { const k = it[0] + ':' + it[1] + ':' + (it[6] == null ? -1 : it[6]); if (!seen.has(k)) { seen.add(k); q.push([Math.hypot(it[2] - cap[0], it[3] - cap[1]), it[0], it[1], it[6] == null ? -1 : it[6]]); } }
+  if (!lite) for (const it of j.items) { const k = it[0] + ':' + it[1] + ':' + (it[6] == null ? -1 : it[6]); if (!seen.has(k)) { seen.add(k); q.push([Math.hypot(it[2] - cap[0], it[3] - cap[1]), it[0], it[1], it[6] == null ? -1 : it[6]]); } }
   for (const l of j.landmarks) if (!l.model) q.push([0, l.set, 0, l.tone == null ? -1 : l.tone]);
   q.sort((a, b) => a[0] - b[0]); TSP.pre = { q, i: 0, n: q.length };
   const step = () => { const t0 = performance.now(), P = TSP.pre; while (P.i < P.n && performance.now() - t0 < 10) { const [, set, v, tone] = P.q[P.i++]; tintedSprite(set, v, tone); } if (P.i < P.n) setTimeout(step, 0); else P.done = true; };
@@ -3527,7 +3540,7 @@ function preloadAll() {
 }
 function prlFrac() {   // доля готовности тяжёлой части: плитки 60 %, подкраска спрайтов 30 %, атлас и детализация 10 %
   if (HEADLESS || location.protocol === 'file:') return 1;
-  const t = PRL.tilesN ? PRL.tiles / PRL.tilesN : 0, p = TSP.pre ? TSP.pre.i / Math.max(1, TSP.pre.n) : 0, o = (ICO.st >= 2 ? 0.5 : 0) + (GD.st === 2 ? 0.5 : 0);
+  const t = PRL.tilesN ? PRL.tiles / PRL.tilesN : 0, p = TCH.wst === 2 ? (TCH.preN ? TCH.pre / TCH.preN : 0) * (TSP.pre && TSP.pre.done ? 1 : 0.99) : TCH.wst < 0 || !TSP.pre ? (TSP.pre ? TSP.pre.i / Math.max(1, TSP.pre.n) : 0) : 0, o = (ICO.st >= 2 ? 0.5 : 0) + (GD.st === 2 ? 0.5 : 0);
   const f = t * 0.6 + p * 0.3 + o * 0.1; return f > 0.999 ? 1 : f;   // 0,6 + 0,3 + 0,1 в плавающей точке — не ровно 1
 }
 // J5: малые реки (rivers_small.json, mkrivvec.py) и мосты (bridges.json, mkgrid.py)
@@ -3628,7 +3641,12 @@ function landmarksLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
 // J3: рельеф и деревья вблизи — кэш кусков. Карта делится на квадраты 256×256 px экрана на ступени приближения (3×, 6×, 12×);
 // спрайты квадрата рисуются один раз в свой холст, дальше выводятся готовые холсты (между ступенями — масштабирование ближайшей сверху).
 // Кусков вне кадра не строим, далёкие освобождаются (не больше TCH.MAX). Отсев мелочи: купы — от 3×, одиночные деревья и кусты — от 5×.
-const TCH = { m: new Map(), use: 0, MAX: 320, P: 256 };
+// J3/K1: рельеф и деревья вблизи — кэш кусков. Квадраты 256×256 px экрана на ступенях 3×, 6×, 12×; кусок рисуется один раз и дальше выводится готовым.
+// K1: куски строятся в фоновом потоке (Web Worker + OffscreenCanvas: своя копия атласа, подкраска под землю, отрисовка); не больше 4 новых заказов
+// за кадр, остальные — в очереди по удалённости от центра экрана; заранее готовятся соседние ступени (ближе и дальше) и кольцо у краёв экрана.
+// Пока куска нужной ступени нет — растянутые куски соседних ступеней (сколько есть), а если нет ничего — живая отрисовка: пустых квадратов нет.
+// Без Worker/OffscreenCanvas — построение в основном потоке в паузах между кадрами. Отсев мелочи: купы — от 3×, одиночные деревья и кусты — от 5×.
+const TCH = { m: new Map(), use: 0, MAX: 360, P: 256, LV: [3, 6, 12], pend: new Set(), q: [], w: null, wst: 0, pre: 0, preN: 0 };
 function tchShow(m, f) { return m.kd === 2 ? f >= 2 : m.kd === 1 ? f >= 1 : true; }
 function spriteDraw(c0, m, k, vx0, vy0, vx1, vy1) {   // один спрайт в координатах карты на холсте c0 (k — px холста на px карты: для подрезки подножия у берега)
   const sea = WV.mask;
@@ -3649,7 +3667,17 @@ function spriteDraw(c0, m, k, vx0, vy0, vx1, vy1) {   // один спрайт �
         c0.drawImage(t, 0, 0, tw, th, x0, y0, w, h);
       } else c0.drawImage(tintedSprite(m.set, m.v, m.tone), 0, 0, r[2], r[3], x0, y0, w, h);
 }
-function tchBuild(L, f, cx, cy) {
+function hiRegion(ctx, X0, Y0, X1, Y1, clip, k, dpr, v) {   // участок дальних плиток (HI, с впечатанным рельефом) в прямоугольник экрана clip
+  if (!HI.idx) return false; const T = HI.idx.T; let ok = true;
+  ctx.save(); ctx.beginPath(); ctx.rect(clip[0], clip[1], clip[2], clip[3]); ctx.clip();
+  for (let ty = Math.floor(Y0 / T); ty <= Math.floor((Y1 - 1e-6) / T); ty++) for (let tx = Math.floor(X0 / T); tx <= Math.floor((X1 - 1e-6) / T); tx++) {
+    const key = tx + '_' + ty; if (!HI.has.has(key)) continue; let e = HI.img.get(key);
+    if (!e) { const im = new Image(); e = { im, ok: false }; im.onload = () => { (im.decode ? im.decode() : Promise.resolve()).catch(() => {}).then(() => { e.ok = true; scheduleVector(); }); }; im.src = HI.dir + '/' + key + '.jpg'; HI.img.set(key, e); }   // из кэша браузера
+    e.use = ++HI.use; if (!e.ok) { ok = false; continue; }
+    const iw = e.im.naturalWidth / 2, ih = e.im.naturalHeight / 2; ctx.drawImage(e.im, dpr * v.x + tx * T * k, dpr * v.y + ty * T * k, iw * k, ih * k); }
+  ctx.restore(); return ok;
+}
+function tchBuild(L, f, cx, cy) {   // построение куска в основном потоке (запасной путь)
   const P = TCH.P, CS = P / L, X0 = cx * CS, Y0 = cy * CS, X1 = X0 + CS, Y1 = Y0 + CS, Mx = 150, q = [];
   const g = ICO.sg; for (let gy = Math.floor((Y0 - 30) / ICO.CELL); gy <= Math.floor((Y1 + Mx) / ICO.CELL); gy++) for (let gx = Math.floor((X0 - Mx) / ICO.CELL); gx <= Math.floor((X1 + Mx) / ICO.CELL); gx++) { const a = g.get(gy * ICO.cw + gx); if (a) for (const o of a) if (!o.lm && tchShow(o, f)) q.push(o); }
   q.sort((a, b) => a.y - b.y);
@@ -3658,37 +3686,141 @@ function tchBuild(L, f, cx, cy) {
   const e0 = 1 / L; for (const m of q) spriteDraw(c, m, L, X0 - e0, Y0 - e0, X1 + e0, Y1 + e0);
   return { cv, use: 0 };
 }
+// фоновый поток: исходник — функция ниже (самодостаточная), запускается из Blob
+function tchWorkerMain() {
+  let A = null, AD = null, S = null, TONES = null, G = null, CELL = 64, CW = 0, SEA = null, SEAK = 0.5; const T = new Map();
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  function tint(set, v, tone) {
+    const key = set + ':' + v + ':' + tone; let c = T.get(key); if (c) return c;
+    const st = S[set], r = st.r[v], sw = r[2], sh = r[3], col = TONES && tone >= 0 ? TONES[tone] : null, tb = st.tint, T0 = tb ? tb[0] : 0.15, T1 = tb ? tb[1] : 0.6, an = st.anchor;
+    c = new OffscreenCanvas(sw, sh); const x = c.getContext('2d');
+    if (!col) { x.drawImage(A, r[0], r[1], sw, sh, 0, 0, sw, sh); T.set(key, c); return c; }
+    const im = AD.getImageData(r[0], r[1], sw, sh), d = im.data, cl = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 + 1e-4;
+    for (let yy = 0; yy < sh; yy++) {
+      const t = clamp(((yy + 0.5) / sh - 0.15) / Math.max(0.2, an - 0.15), 0, 1), w0 = T0 + (T1 - T0) * t * t * (3 - 2 * t);
+      for (let xx = 0; xx < sw; xx++) {
+        const o = (yy * sw + xx) * 4; if (!d[o + 3]) continue;
+        const R = d[o] / 255, Gg = d[o + 1] / 255, B = d[o + 2] / 255, lum = R * 0.3 + Gg * 0.59 + B * 0.11, mx = Math.max(R, Gg, B), mn = Math.min(R, Gg, B);
+        const white = clamp((lum - 0.74) / 0.14, 0, 1) * clamp(1 - (mx - mn) / (mx + 1e-4) / 0.25, 0, 1), w = w0 * (1 - white), k = lum / cl;
+        d[o] = 255 * (R * (1 - w) + Math.min(1, col[0] * k) * w); d[o + 1] = 255 * (Gg * (1 - w) + Math.min(1, col[1] * k) * w); d[o + 2] = 255 * (B * (1 - w) + Math.min(1, col[2] * k) * w);
+      }
+    }
+    x.putImageData(im, 0, 0); T.set(key, c); return c;
+  }
+  let tmp = null, m2 = null;
+  function sprite(c0, m, k, vx0, vy0, vx1, vy1) {
+    const r = S[m.set].r[m.v], w = m.w, h = w * r[3] / r[2], x0 = m.x - w / 2, y0 = m.y - h * S[m.set].anchor;
+    if (x0 > vx1 || x0 + w < vx0 || y0 > vy1 || y0 + h < vy0) return;
+    const sp = tint(m.set, m.v, m.tone);
+    if (m.c && SEA) {   // берег: подножие (62–80 % высоты и ниже) — только над сушей, мягкий край
+      const tw = Math.max(1, Math.ceil(w * k)), th = Math.max(1, Math.ceil(h * k));
+      if (!tmp || tmp.width < tw || tmp.height < th) { tmp = new OffscreenCanvas(Math.max(tw, tmp ? tmp.width : 0), Math.max(th, tmp ? tmp.height : 0)); m2 = new OffscreenCanvas(tmp.width, tmp.height); }
+      const c = tmp.getContext('2d'); c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, tw, th); c.drawImage(sp, 0, 0, sp.width, sp.height, 0, 0, tw, th);
+      const mc = m2.getContext('2d'); mc.globalCompositeOperation = 'source-over'; mc.clearRect(0, 0, tw, th); mc.drawImage(SEA, x0 * SEAK, y0 * SEAK, w * SEAK, h * SEAK, 0, 0, tw, th);
+      const gr = mc.createLinearGradient(0, th * 0.62, 0, th * 0.8); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
+      mc.globalCompositeOperation = 'destination-in'; mc.fillStyle = gr; mc.fillRect(0, 0, tw, th);
+      c.globalCompositeOperation = 'destination-out'; c.drawImage(m2, 0, 0, tw, th, 0, 0, tw, th); c.globalCompositeOperation = 'source-over';
+      c0.drawImage(tmp, 0, 0, tw, th, x0, y0, w, h);
+    } else c0.drawImage(sp, 0, 0, sp.width, sp.height, x0, y0, w, h);
+  }
+  function build(L, f, cx, cy, P) {
+    const CS = P / L, X0 = cx * CS, Y0 = cy * CS, X1 = X0 + CS, Y1 = Y0 + CS, Mx = 150, q = [];
+    for (let gy = Math.floor((Y0 - 30) / CELL); gy <= Math.floor((Y1 + Mx) / CELL); gy++) for (let gx = Math.floor((X0 - Mx) / CELL); gx <= Math.floor((X1 + Mx) / CELL); gx++) { const a = G.get(gy * CW + gx); if (a) for (const o of a) if (o.kd === 2 ? f >= 2 : o.kd === 1 ? f >= 1 : true) q.push(o); }
+    q.sort((a, b) => a.y - b.y);
+    const cv = new OffscreenCanvas(P + 2, P + 2), c = cv.getContext('2d'); c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+    c.setTransform(L, 0, 0, L, 1 - X0 * L, 1 - Y0 * L); const e0 = 1 / L;
+    for (const m of q) sprite(c, m, L, X0 - e0, Y0 - e0, X1 + e0, Y1 + e0);
+    return cv.transferToImageBitmap();
+  }
+  onmessage = e => {
+    const d = e.data;
+    if (d.t === 'init') {
+      A = d.atlas; S = d.sets; TONES = d.tones; CELL = d.cell; CW = d.cw;
+      const ac = new OffscreenCanvas(A.width, A.height); AD = ac.getContext('2d', { willReadFrequently: true }); AD.drawImage(A, 0, 0);
+      G = new Map(); for (const o of d.items) { const k = Math.floor(o.y / CELL) * CW + Math.floor(o.x / CELL); let a = G.get(k); if (!a) G.set(k, a = []); a.push(o); }
+      const keys = [], seen = new Set(); for (const o of d.items) { const k = o.set + ':' + o.v + ':' + o.tone; if (!seen.has(k)) { seen.add(k); keys.push(o); } }
+      let i = 0; const step = () => { const t0 = performance.now(); while (i < keys.length && performance.now() - t0 < 30) { const o = keys[i++]; tint(o.set, o.v, o.tone); } postMessage({ t: 'pre', i, n: keys.length }); if (i < keys.length) setTimeout(step, 0); };
+      step();
+    } else if (d.t === 'sea') { SEA = d.sea; SEAK = d.k; }
+    else if (d.t === 'build') { try { const bm = build(d.L, d.f, d.cx, d.cy, d.P); postMessage({ t: 'done', key: d.key, bm }, [bm]); } catch (err) { postMessage({ t: 'fail', key: d.key, err: String(err) }); } }
+  };
+}
+function tchWorkerStart(atlas, sets, tones, items) {   // запуск фонового потока; при неудаче — построение в основном потоке
+  if (TCH.wst || HEADLESS || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') { TCH.wst = TCH.wst || -1; return; }
+  TCH.wst = 1;
+  try {
+    const url = URL.createObjectURL(new Blob(['(' + tchWorkerMain.toString() + ')()'], { type: 'text/javascript' })), w = new Worker(url);
+    w.onmessage = e => { const d = e.data;
+      if (d.t === 'done') { TCH.pend.delete(d.key); TCH.m.set(d.key, { cv: d.bm, use: ++TCH.use }); scheduleVector(); }
+      else if (d.t === 'fail') { TCH.pend.delete(d.key); TCH.wst = -1; }
+      else if (d.t === 'pre') { TCH.pre = d.i; TCH.preN = d.n; } };
+    w.onerror = () => { TCH.wst = -1; };
+    createImageBitmap(atlas).then(bm => {
+      const it = items.map(o => ({ x: o.x, y: o.y, w: o.w, set: o.set, v: o.v, tone: o.tone, c: o.c ? 1 : 0, kd: o.kd }));
+      w.postMessage({ t: 'init', atlas: bm, sets: Object.fromEntries(Object.entries(sets).map(([k, s]) => [k, { r: s.r, anchor: s.anchor, tint: s.tint || null }])), tones, items: it, cell: ICO.CELL, cw: ICO.cw }, [bm]);
+      TCH.w = w; TCH.wst = 2;
+    }).catch(() => { TCH.wst = -1; });
+  } catch (e) { TCH.wst = -1; }
+}
+function tchSea() {   // маска моря (размытая) — в фоновый поток, как только готова
+  if (TCH.wst !== 2 || TCH.seaSent || !WV.mask) return; TCH.seaSent = true;
+  createImageBitmap(seaBlur()).then(bm => TCH.w.postMessage({ t: 'sea', sea: bm, k: seaBlur().width / MAPINFO.W }, [bm])).catch(() => {});
+}
+function tchPump() {   // очередь заказов: не больше 4 новых за кадр, в работе — не больше 12
+  if (TCH.wst !== 2) return; let n = 0;
+  TCH.q.sort((a, b) => a[0] - b[0]);
+  while (TCH.q.length && n < 4 && TCH.pend.size < 12) { const [, L, f, cx, cy, key] = TCH.q.shift(); if (TCH.m.has(key) || TCH.pend.has(key)) continue; TCH.pend.add(key); TCH.w.postMessage({ t: 'build', key, L, f, cx, cy, P: TCH.P }); n++; }
+}
 function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const u = geoU(z); if (u <= 0 || ICO.st !== 2 || TSP.st !== 2) return;
-  const k = dpr * z, P = TCH.P, f = z >= 5 ? 2 : z >= 3 ? 1 : 0, LV = [3, 6, 12], L = k <= 3 * 1.41 ? 3 : k <= 6 * 1.41 ? 6 : 12;
+  tchSea();
+  const k = dpr * z, P = TCH.P, f = z >= 5 ? 2 : z >= 3 ? 1 : 0, LV = TCH.LV, L = k <= 3 * 1.41 ? 3 : k <= 6 * 1.41 ? 6 : 12, W2 = TCH.wst === 2;
   ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y); ctx.globalAlpha = Math.min(1, u * 8);
   modelsDraw(ctx, vx0, vy0, vx1, vy1);   // модели (Афон) — земля под спрайтами, живьём (монастыри меняются по ходу игры)
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   const t0 = performance.now(), mx = (vx0 + vx1) / 2, my = (vy0 + vy1) / 2;
-  const put = (Lq, fq, cx, cy, clip) => {   // вывести кусок ступени Lq; clip — прямоугольник экрана (для подмены с другой ступени)
+  const put = (Lq, fq, cx, cy, clip) => {   // вывести кусок ступени Lq; clip — прямоугольник экрана (подмена с другой ступени)
     const e = TCH.m.get(Lq + ':' + fq + ':' + cx + ':' + cy); if (!e) return false; e.use = ++TCH.use;
     const CS = P / Lq, sx = dpr * v.x + cx * CS * k, sy = dpr * v.y + cy * CS * k, sz = CS * k;
     const x0 = Math.round(sx), y0 = Math.round(sy), x1 = Math.round(sx + sz), y1 = Math.round(sy + sz);
     if (clip) { ctx.save(); ctx.beginPath(); ctx.rect(clip[0], clip[1], clip[2], clip[3]); ctx.clip(); }
     ctx.drawImage(e.cv, 1, 1, P, P, x0, y0, x1 - x0, y1 - y0); if (clip) ctx.restore(); return true; };
+  const want = (Lq, fq, cx, cy, pr) => { const key = Lq + ':' + fq + ':' + cx + ':' + cy; if (!TCH.m.has(key) && !TCH.pend.has(key)) TCH.q.push([pr, Lq, fq, cx, cy, key]); };
+  if (W2) TCH.q.length = 0;   // очередь — заново каждый кадр (по текущему виду)
   const CS = P / L, cx0 = Math.floor(vx0 / CS), cy0 = Math.floor(vy0 / CS), cx1 = Math.floor(vx1 / CS), cy1 = Math.floor(vy1 / CS), list = [];
   for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) list.push([Math.hypot((cx + 0.5) * CS - mx, (cy + 0.5) * CS - my), cx, cy]);
   list.sort((a, b) => a[0] - b[0]); let pending = false;
-  for (const [, cx, cy] of list) {
+  for (const [d, cx, cy] of list) {
     const key = L + ':' + f + ':' + cx + ':' + cy;
-    if (!TCH.m.has(key) && (performance.now() - t0 < 12 || !TCH.m.size)) TCH.m.set(key, tchBuild(L, f, cx, cy));
+    if (!TCH.m.has(key)) {
+      if (W2) want(L, f, cx, cy, d);
+      else if (performance.now() - t0 < 12 || !TCH.m.size) TCH.m.set(key, tchBuild(L, f, cx, cy));
+    }
     if (put(L, f, cx, cy)) continue;
-    pending = true;   // пока не построен — с соседней ступени (если есть), обрезано по своему квадрату
+    pending = true;
     const sx = dpr * v.x + cx * CS * k, sy = dpr * v.y + cy * CS * k, clip = [Math.round(sx), Math.round(sy), Math.round(sx + CS * k) - Math.round(sx), Math.round(sy + CS * k) - Math.round(sy)];
-    let done = false;
-    for (const L2 of LV) { if (L2 === L || done) continue; for (const f2 of [f, 2, 1, 0]) { const C2 = P / L2; let all = true, any = false;
-        for (let y = Math.floor(cy * CS / C2); y <= Math.floor(((cy + 1) * CS - 1e-6) / C2); y++) for (let x = Math.floor(cx * CS / C2); x <= Math.floor(((cx + 1) * CS - 1e-6) / C2); x++) if (TCH.m.has(L2 + ':' + f2 + ':' + x + ':' + y)) any = true; else all = false;
-        if (!all) continue; for (let y = Math.floor(cy * CS / C2); y <= Math.floor(((cy + 1) * CS - 1e-6) / C2); y++) for (let x = Math.floor(cx * CS / C2); x <= Math.floor(((cx + 1) * CS - 1e-6) / C2); x++) put(L2, f2, x, y, clip);
-        done = any; if (done) break; } }
+    let any = false;   // подмена: куски соседних ступеней (ближайшая первой), сколько есть
+    for (const L2 of [...LV].sort((a, b) => Math.abs(Math.log(a / L)) - Math.abs(Math.log(b / L)))) { if (L2 === L) continue;
+      const C2 = P / L2, ya = Math.floor(cy * CS / C2), yb = Math.floor(((cy + 1) * CS - 1e-6) / C2), xa = Math.floor(cx * CS / C2), xb = Math.floor(((cx + 1) * CS - 1e-6) / C2);
+      for (const f2 of [f, 2, 1, 0]) { let got = 0; for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) if (put(L2, f2, x, y, clip)) got++; if (got) { any = true; break; } }
+      if (any) break; }
+    if (!any) {   // нет ничего — участок дальней плитки (там рельеф и деревья уже впечатаны): одна копия вместо живой отрисовки
+      const X0 = cx * CS, Y0 = cy * CS; if (!hiRegion(ctx, X0, Y0, X0 + CS, Y0 + CS, clip, k, dpr, v)) {
+        ctx.save(); ctx.beginPath(); ctx.rect(clip[0], clip[1], clip[2], clip[3]); ctx.clip(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y);   // и плитки нет — живьём
+        const g = ICO.sg, q = [];
+        for (let gy = Math.floor((Y0 - 30) / ICO.CELL); gy <= Math.floor((Y0 + CS + 150) / ICO.CELL); gy++) for (let gx = Math.floor((X0 - 150) / ICO.CELL); gx <= Math.floor((X0 + CS + 150) / ICO.CELL); gx++) { const a = g.get(gy * ICO.cw + gx); if (a) for (const o of a) if (!o.lm && tchShow(o, f)) q.push(o); }
+        q.sort((a, b) => a.y - b.y); for (const m of q) spriteDraw(ctx, m, k, X0, Y0, X0 + CS, Y0 + CS); ctx.restore(); }
+    }
+  }
+  if (W2) {   // заранее: кольцо у краёв экрана и соседние ступени (на шаг ближе и дальше) для того же вида
+    for (let cy = cy0 - 1; cy <= cy1 + 1; cy++) for (let cx = cx0 - 1; cx <= cx1 + 1; cx++) if (cy < cy0 || cy > cy1 || cx < cx0 || cx > cx1) want(L, f, cx, cy, 1e5 + Math.hypot((cx + 0.5) * CS - mx, (cy + 0.5) * CS - my));
+    for (const L2 of LV) { if (L2 === L || Math.abs(Math.log2(L2 / L)) > 1.01) continue; const C2 = P / L2, f2 = L2 > L ? (z * 2 >= 5 ? 2 : z * 2 >= 3 ? 1 : 0) : (z / 2 >= 5 ? 2 : z / 2 >= 3 ? 1 : 0);
+      for (let cy = Math.floor(vy0 / C2); cy <= Math.floor(vy1 / C2); cy++) for (let cx = Math.floor(vx0 / C2); cx <= Math.floor(vx1 / C2); cx++) want(L2, f2, cx, cy, 2e5 + Math.hypot((cx + 0.5) * C2 - mx, (cy + 0.5) * C2 - my)); }
+    tchPump(); if (TCH.q.length || TCH.pend.size) pending = true;
   }
   ctx.restore();
   if (pending) scheduleVector();
-  if (TCH.m.size > TCH.MAX) { const old = [...TCH.m.entries()].sort((a, b) => a[1].use - b[1].use).slice(0, TCH.m.size - TCH.MAX); for (const [kk] of old) TCH.m.delete(kk); }
+  if (TCH.m.size > TCH.MAX) { const old = [...TCH.m.entries()].sort((a, b) => a[1].use - b[1].use).slice(0, TCH.m.size - TCH.MAX); for (const [kk, e] of old) { if (e.cv.close) e.cv.close(); TCH.m.delete(kk); } }
 }
 // Гладкая заливка держав вблизи: участок карты [X0..X1)×[Y0..Y1) в S раз подробнее. Для каждой «категории» (суша державы,
 // река, значок горы, лес, внешние земли) берётся маска 0/1, слегка размывается и интерполируется по подпикселям, а затем
