@@ -291,6 +291,51 @@ for t in items:
     coast = land_frac(y, x, max(2, int(w * 0.35))) < 0.999 or land_frac(y + 3, x, max(2, int(w * 0.35))) < 0.999
     items2.append((y, name, x, v, w, int(coast)))
 items = items2
+# K5: поселения — круг без деревьев, скал и бугров (tools/settlements.json, mksettle.py); растительность −28 %, рощи на равнинах реже;
+#     в каждом квадрате 200×200 px рельеф и лес занимают не больше трети суши (лишнее — сначала одиночные деревья, потом купы, полог)
+ST = json.load(open(SP + 'settlements.json'))['settlements'] if os.path.exists(SP + 'settlements.json') else []
+CLR = {'город': 12, 'крепость': 9, 'монастырь': 6, 'деревня': 6}
+clr = np.zeros((H, W), bool); yy_, xx_ = np.ogrid[0:H, 0:W]
+for st_ in ST:
+    r_ = CLR.get(st_['type'], 6); x_, y_ = int(st_['x']), int(st_['y']); ys_, xs_ = slice(max(0, y_ - r_), y_ + r_ + 1), slice(max(0, x_ - r_), x_ + r_ + 1)
+    clr[ys_, xs_] |= (yy_[ys_] - y_) ** 2 + (xx_[:, xs_] - x_) ** 2 <= r_ * r_
+rv5 = np.random.default_rng(55); flat_ = ~hills_m & (passable < 0.5) & (impass < 0.5)
+def keep_(t):
+    y, name, x = t[0], t[1], t[2]
+    if name.startswith(('tree_', 'lego_hill', 'lego_rock')) and clr[y, x]: return False
+    if name.startswith('tree_'):
+        pk = 0.72 if not flat_[y, x] else (0.62 if name.startswith(('tree_can', 'tree_k')) else 0.72)   # рощи на равнинах — ещё реже
+        return rv5.random() < pk
+    return True
+n0 = len(items); items = [t for t in items if keep_(t)]
+# не больше трети суши под рельефом и лесом в квадрате 200×200 px: площадь — объединение «пятен» спрайтов (эллипс 0,8 × 0,5 ширины над точкой);
+# если больше — прореживаем деревья квадрата (сначала одиночные, потом купы и полог) по 20 % за проход
+from PIL import ImageDraw as _ID
+B = 200; area = {}; drop = set(); OVER = []
+for t in items: area.setdefault((t[0] // B, t[2] // B), []).append(t)
+def cover(ts, by, bx):
+    im_ = Image.new('L', (B, B), 0); d_ = _ID.Draw(im_)
+    for t in ts:
+        if id(t) in drop: continue
+        cx_, cy_, w_ = t[2] - bx * B, t[0] - by * B - 0.2 * t[4], t[4]
+        d_.ellipse((cx_ - 0.4 * w_, cy_ - 0.25 * w_, cx_ + 0.4 * w_, cy_ + 0.25 * w_), fill=255)
+    lm_ = land[by * B:(by + 1) * B, bx * B:(bx + 1) * B]; a_ = np.asarray(im_)[:lm_.shape[0], :lm_.shape[1]] > 0
+    return float((a_ & lm_).sum()) / max(1.0, float(lm_.sum()))
+for (by, bx), ts0 in area.items():
+    ts = ts0 + [t for (yy2, xx2) in ((by - 1, bx), (by, bx - 1), (by + 1, bx), (by, bx + 1), (by - 1, bx - 1), (by + 1, bx + 1), (by - 1, bx + 1), (by + 1, bx - 1)) for t in area.get((yy2, xx2), []) if abs(t[0] - (by * B + B / 2)) < B / 2 + 30 and abs(t[2] - (bx * B + B / 2)) < B / 2 + 30]
+    nt0 = sum(1 for t in ts0 if t[1].startswith('tree_'))
+    for it_ in range(12):
+        cv_ = cover(ts, by, bx)
+        if cv_ <= 1 / 3: break
+        trees_ = [t for t in ts0 if t[1].startswith('tree_') and id(t) not in drop]
+        if len(trees_) <= nt0 * 0.5: OVER.append(cv_); break   # не больше половины деревьев квадрата: дальше — горы и холмы сами по себе выше трети
+        for pref in ('tree_s_', 'tree_k_', 'tree_can_'):
+            c_ = [t for t in trees_ if t[1].startswith(pref)]
+            if c_: break
+        rv5.shuffle(c_)
+        for t in c_[:max(1, int(len(trees_) * 0.2))]: drop.add(id(t))
+items = [t for t in items if id(t) not in drop]
+print('K5: квадратов выше трети (горы и холмы)', len(OVER), 'из', len(area), '; поселений', len(ST), 'убрано спрайтов', n0 - len(items), '(из них по правилу трети', len(drop), ')')
 items.sort(key=lambda t: t[0])
 # ---------- классы местности для движения (те же, что на картинке) ----------
 # биты (несколько классов сразу — для скорости берётся минимальный множитель): 1 холмы, 2 лес, 4 проходимые горы, 8 непроходимые,

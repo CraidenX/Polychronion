@@ -1046,10 +1046,11 @@ function prlFrac() {   // доля готовности тяжёлой част�
   const f = t * 0.6 + p * 0.3 + o * 0.1; return f > 0.999 ? 1 : f;   // 0,6 + 0,3 + 0,1 в плавающей точке — не ровно 1
 }
 // K2: реки — граф (rivers.json, mkrivgraph.py) и мосты (bridges.json)
-const RIVS = { st: 0, lines: [], br: [] };
+const RIVS = { st: 0, lines: [], br: [], st5: [] };
 function rivLoad() {
   if (RIVS.st || HEADLESS || typeof fetch === 'undefined' || location.protocol === 'file:') return; RIVS.st = 1;
-  Promise.all([fetch('rivers.json').then(r => r.json()), fetch('bridges.json').then(r => r.json()).catch(() => ({ bridges: [] }))]).then(([j, b]) => {
+  Promise.all([fetch('rivers.json').then(r => r.json()), fetch('bridges.json').then(r => r.json()).catch(() => ({ bridges: [] })), fetch('settlements.json').then(r => r.json()).catch(() => ({ settlements: [] }))]).then(([j, b, se]) => {
+    RIVS.st5 = se.settlements || [];
     for (const e of j.edges) { const a = Float32Array.from(e.p); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.lines.push({ a, w: e.w, b: e.b, o: e.o, bb: [x0, y0, x1, y1] }); }
     RIVS.br = b.bridges || []; RIVS.st = 2; scheduleVector();
   }).catch(() => { RIVS.st = 3; });
@@ -1075,6 +1076,25 @@ function riversSmall(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   for (const g of G2) { const w = g.w * zs; ctx.strokeStyle = 'rgba(32,46,60,0.88)'; ctx.lineWidth = w + (g.b ? 1.8 : 1.1) * dpr; ctx.stroke(g.P); }                                     // кромка
   for (const g of G2) { const w = g.w * zs; ctx.strokeStyle = g.b ? 'rgb(58,98,132)' : 'rgb(64,104,136)'; ctx.lineWidth = w; ctx.stroke(g.P); }                                            // вода
   for (const g of G2) if (g.b) { const w = g.w * zs; ctx.strokeStyle = 'rgba(120,160,190,0.35)'; ctx.lineWidth = Math.max(1, w * 0.35); ctx.stroke(g.P); }                                // стремнина
+  ctx.restore();
+}
+// K5: временные значки поселений (tools/settlements.json): город — стены с башнями, крепость — башня, монастырь — крест, деревня — домик; вблизи (≥ 2,6×)
+function settleDraw(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  if (geoU(z) <= 0 || RIVS.st !== 2) return;
+  const k = dpr * z, s = (z >= 5 ? 9 : 7) * dpr;
+  ctx.save(); ctx.lineJoin = 'round'; ctx.globalAlpha = Math.min(1, geoU(z) * 8);
+  for (const st of RIVS.st5) {
+    if (st.x < vx0 - 3 || st.x > vx1 + 3 || st.y < vy0 - 3 || st.y > vy1 + 3) continue;
+    ctx.setTransform(1, 0, 0, 1, dpr * v.x + st.x * k, dpr * v.y + st.y * k);
+    ctx.fillStyle = 'rgba(20,14,8,0.3)'; ctx.beginPath(); ctx.ellipse(0, s * 0.15, s * 1.1, s * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e7dcc0'; ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 1.2 * dpr; ctx.beginPath();
+    if (st.type === 'город') { const w = s * 1.1, h = s * 0.7; ctx.rect(-w, -h, 2 * w, h); for (const xx of [-w, w - s * 0.5]) ctx.rect(xx, -h - s * 0.45, s * 0.5, h + s * 0.45); ctx.rect(-s * 0.25, -h - s * 0.7, s * 0.5, h + s * 0.7); }
+    else if (st.type === 'крепость') { ctx.rect(-s * 0.4, -s * 1.2, s * 0.8, s * 1.2); ctx.moveTo(-s * 0.55, -s * 1.2); ctx.lineTo(s * 0.55, -s * 1.2); }
+    else if (st.type === 'монастырь') { ctx.rect(-s * 0.7, -s * 0.6, s * 1.4, s * 0.6); ctx.moveTo(-s * 0.7, -s * 0.6); ctx.lineTo(0, -s * 1.05); ctx.lineTo(s * 0.7, -s * 0.6); }
+    else { ctx.moveTo(-s * 0.55, 0); ctx.lineTo(-s * 0.55, -s * 0.5); ctx.lineTo(0, -s * 0.95); ctx.lineTo(s * 0.55, -s * 0.5); ctx.lineTo(s * 0.55, 0); ctx.closePath(); }
+    ctx.fill(); ctx.stroke();
+    if (st.type === 'монастырь') { ctx.beginPath(); ctx.moveTo(0, -s * 1.05); ctx.lineTo(0, -s * 1.6); ctx.moveTo(-s * 0.22, -s * 1.38); ctx.lineTo(s * 0.22, -s * 1.38); ctx.stroke(); }
+  }
   ctx.restore();
 }
 // K3: мосты — каменный арочный мост поперёк реки (в духе значка перевала), размер на экране постоянный; виден с 2×
@@ -1473,6 +1493,7 @@ function paintVector() {
   riversSmall(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // J5: малые реки — линией (в ближних плитках их нет)
   terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);
   bridgesDraw(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // J5: мосты через большие реки
+  settleDraw(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // K5: временные значки поселений
   // (тонировка G6 заменена заливкой I4 — polFill поверх итоговой картинки)   // политическая карта: тонировка цветом державы (плавно при переключении)   // «Местность»: рельеф и рощи — каждый кадр, с коротким переходом
   if (TSP.st === 2 && z * dpr >= 1.2 && !(geoU(z) > 0)) { ctx.save(); ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); modelsDraw(ctx, vx0, vy0, vx1, vy1, false); ctx.restore(); }   // монастыри Афона — и издали, и на политической карте (модель уже запечена в плитки)
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
