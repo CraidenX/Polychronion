@@ -39,6 +39,7 @@ h2,h3{font-weight:normal;color:var(--gold2);margin:4px 0 8px}
 #ovl{image-rendering:auto}
 #selsvg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
 #veccv{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
+.ar .dir{display:inline-block;font-size:.85em;line-height:1;transform-origin:50% 50%}
 #wavecv{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
 #cloudcv{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
 #mapover{position:absolute;left:0;top:0;transform-origin:0 0;z-index:2;pointer-events:none}
@@ -166,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 87, "date": "26.11.2026 06:30"};
+const GAME_VERSION = {"v": 88, "date": "26.11.2026 07:12"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -808,30 +809,35 @@ const nearCity = (a, rid) => !GRID.ok || cellDist(armyCell(a), cityCell(rid)) <=
 // клетка войска: если не задана или не в его регионе — у города региона (новое войско, отступление, событие)
 function armyCell(a) {
   if (!GRID.ok) return 0;
-  if (a.cell == null || provReg(cellProv(a.cell)) !== RID(a.region)) { a.cell = cityCell(a.region); const k = G.armies.filter(x => x !== a && x.cell === a.cell).length; if (k) a.cell = snapCell(a.cell + (k % 3 - 1) + (k > 2 ? GRID.GW : -GRID.GW), provGraph().main[RID(a.region)], 3); a.route = null; }
+  if (a.cell == null || provReg(cellProv(a.cell)) !== RID(a.region)) { a.pos = null; a.cell = cityCell(a.region); const k = G.armies.filter(x => x !== a && x.cell === a.cell).length; if (k) a.cell = snapCell(a.cell + (k % 3 - 1) + (k > 2 ? GRID.GW : -GRID.GW), provGraph().main[RID(a.region)], 3); a.route = null; }
   return a.cell;
 }
-// A*: от клетки s до t; можно — только суша провинций из набора allow (и море, если seaOk). Возвращает {c: клетки, d: накопленные дни} или null
-function gridPath(s, t, allow, seaOk, maxN = 250000) {
+// куда войску можно: свои регионы, текущий и те, куда разрешён вход (война, союз); море — с флотом, без флота — только проливы
+function provAllow(a) {
+  const pg = provGraph(), cur = RID(a.region), key = a.owner + ':' + cur + ':' + G.year + ':' + G.season + ':' + (G.day || 0);
+  if (a._allowKey === key) return a._allow;
+  const regOk = {}, allow = new Uint8Array(pg.reg.length);
+  pg.reg.forEach((r, k) => { if (!r) return; if (!(r in regOk)) regOk[r] = r === cur || R(r).owner === a.owner || canEnter(a.owner, r); allow[k] = regOk[r] ? 1 : 0; });
+  a._allowKey = key; a._allow = allow; return allow;
+}
+// A* по сетке: от клетки s прямо до клетки t (8 соседей). Возвращает список клеток или null
+function gridPath(s, t, allow, sail, maxN = 300000) {
   const W = GRID.GW, Hh = GRID.GH, g = GRID.g, from = GRID.from, st = GRID.stamp, cl = GRID.closed, M = GRID.mult, F = GRID.flags, P = GRID.prov;
-  const gen = ++GRID.gen, ED = EDGE_DAYS(), vmax = MARCH_KM * MOVE.mult.road, vh = seaOk ? Math.max(SAIL_KM, vmax) : vmax;
+  const gen = ++GRID.gen, ED = EDGE_DAYS(), vh = Math.max(sail ? SAIL_KM : 0, MARCH_KM * MOVE.mult.road);
   const tx = t % W, ty = Math.floor(t / W), hf = c => Math.hypot((c % W - tx) * GRID.kx, (Math.floor(c / W) - ty) * GRID.ky) / vh;
-  const ok = c => (M[c] > 0 && allow.has(P[c] - 1)) || (seaOk && (F[c] & 32));
+  const ok = c => (F[c] & 1) ? (M[c] > 0 && allow[P[c] - 1] === 1) : ((F[c] & 64) || (sail && (F[c] & 32)));
   const heap = [], push = (f, c) => { heap.push([f, c]); let i = heap.length - 1; while (i > 0) { const q = (i - 1) >> 1; if (heap[q][0] <= heap[i][0]) break; [heap[q], heap[i]] = [heap[i], heap[q]]; i = q; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
   st[s] = gen; g[s] = 0; from[s] = -1; push(hf(s), s); let n = 0;
   while (heap.length && n++ < maxN) {
     const [, c] = pop(); if (cl[c] === gen) continue; cl[c] = gen;
-    if (c === t) {
-      const cells = []; let v = t; while (v >= 0) { cells.push(v); v = from[v]; } cells.reverse();
-      return { c: cells, d: cells.map(v => g[v]) };
-    }
+    if (c === t) { const cells = []; let v = t; while (v >= 0) { cells.push(v); v = from[v]; } return cells.reverse(); }
     const cx = c % W, cy = (c - cx) / W, sea = !(F[c] & 1);
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dy) continue; const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= W || y >= Hh) continue;
       const v = y * W + x; if (cl[v] === gen || !ok(v)) continue;
       const vsea = !(F[v] & 1), km = dx && dy ? GRID.kd : dx ? GRID.kx : GRID.ky;
-      let d = vsea || sea ? km / SAIL_KM : km / (MARCH_KM * M[v]);
+      let d = vsea || sea ? (sail ? km / SAIL_KM : km / MARCH_KM + (vsea && !sea ? 1 : 0)) : km / (MARCH_KM * M[v]);   // без флота пролив — на лодках: 20 км/день и день на переправу
       if (!vsea && !sea) { d += ED[edgeCode(c, dx, dy)]; if ((F[v] & 8) && !(F[c] & 8)) d += MOVE.pass; }
       const nd = g[c] + d; if (st[v] === gen && nd >= g[v]) continue;
       st[v] = gen; g[v] = nd; from[v] = c; push(nd + hf(v), v);
@@ -839,59 +845,123 @@ function gridPath(s, t, allow, seaOk, maxN = 250000) {
   }
   return null;
 }
-// маршрут войска по сетке: коридор — провинции пути (с текущей); если не вышло — регионы пути целиком
-function planRoute(a) {
-  const s = armyCell(a), path = a.path.filter(k => typeof k === 'number'); if (!path.length) return null;
-  const goalProv = path[path.length - 1], t = a.goal != null && cellProv(a.goal) === goalProv ? a.goal : snapCell(cityCell(provReg(goalProv)), goalProv);
-  const pg = provGraph(); let seaOk = false, v = armyProv(a);
-  for (const w of path) { const e = pg.adj[v].find(x => x.to === w); if (e && (e.t === 'sea' || e.t === 'strait')) seaOk = true; v = w; }
-  const key = a.owner + ':' + s + '>' + t + ':' + path.join(',');
-  if (GRID.cache.has(key)) return GRID.cache.get(key);
-  const allow = new Set([armyProv(a), ...path]);
-  let r = gridPath(s, t, allow, seaOk);
-  if (!r) { const regs = new Set([RID(a.region), ...path.map(k => pg.reg[k])]); const wide = new Set(); pg.reg.forEach((rr, k) => { if (regs.has(rr)) wide.add(k); }); r = gridPath(s, t, wide, seaOk); }
-  if (GRID.cache.size > 400) GRID.cache.delete(GRID.cache.keys().next().value);
-  if (!r) GRID.fails = (GRID.fails || 0) + 1; GRID.plans = (GRID.plans || 0) + 1;
-  GRID.cache.set(key, r); return r;
+// клетки вдоль отрезка между центрами клеток a и b (шаг — полклетки)
+function lineCells(a, b) {
+  const [x0, y0] = cellXY(a), [x1, y1] = cellXY(b), n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (GRID.C / 2))), out = [a];
+  for (let i = 1; i <= n; i++) { const c = cellAt(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n); if (c !== out[out.length - 1]) out.push(c); }
+  return out;
 }
-function routeDaysLeft(a) { const r = a.route; return r ? Math.max(0, r.d[r.d.length - 1] - (a.rt || 0)) : 0; }
-// войско на сетке: день пути. Вход в другой регион — как раньше (stepArmy: захват); сражение — враги в той же или соседней клетке
+// «натягивание нити»: узел убирается, если прямой отрезок между соседними узлами идёт только по клеткам не медленнее исходного участка,
+// не выходит в море, на непроходимые клетки и не пересекает больше рек (бродов, больших рек), чем исходный участок
+function pullString(cells, allow) {
+  const F = GRID.flags, M = GRID.mult, P = GRID.prov, W = GRID.GW;
+  const isLand = c => !!(F[c] & 1);
+  const cross = seq => { let f = 0, b = 0; for (let i = 1; i < seq.length; i++) { const a = seq[i - 1], c = seq[i], dx = c % W - a % W, dy = Math.floor(c / W) - Math.floor(a / W); if (Math.abs(dx) > 1 || Math.abs(dy) > 1) continue; const e = edgeCode(a, dx, dy); if (e === 1) f++; else if (e === 2) b++; } return [f, b]; };
+  const out = [cells[0]]; let i = 0;
+  while (i < cells.length - 1) {
+    let j = i + 1;
+    if (isLand(cells[i])) {
+      let minM = M[cells[i + 1]] || 0, best = i + 1;
+      for (let k = i + 2; k < cells.length && k < i + 80; k++) {
+        const c = cells[k]; if (!isLand(c)) break; minM = Math.min(minM, M[c]);
+        const ln = lineCells(cells[i], c); let good = true;
+        for (const q of ln) if (!isLand(q) || !M[q] || M[q] < minM - 1e-6 || allow[P[q] - 1] !== 1 || ((F[q] & 8) !== (F[c] & 8) && (F[q] & 8))) { good = false; break; }
+        if (good) { const [f1, b1] = cross(ln), [f0, b0] = cross(cells.slice(i, k + 1)); if (f1 > f0 || b1 > b0) good = false; }
+        if (good) best = k;
+      }
+      j = best;
+    }
+    out.push(cells[j]); i = j;
+  }
+  return out;
+}
+// сглаживание Catmull-Rom и время в пути вдоль кривой: скорость — 20 км/день × множитель клетки, переправы и перевалы — остановки на месте
+function buildRoute(x0, y0, nodes, sail) {
+  const pts = [[x0, y0]].concat(nodes.slice(1).map(cellXY));
+  const X = [], Y = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const n = Math.max(1, Math.ceil(Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) / 1.5));
+    for (let k = 0; k < n; k++) { const t = k / n, t2 = t * t, t3 = t2 * t;
+      X.push(0.5 * (2 * p1[0] + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3));
+      Y.push(0.5 * (2 * p1[1] + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)); }
+  }
+  const last = pts[pts.length - 1]; X.push(last[0]); Y.push(last[1]);
+  const k = MAPINFO.W / 5298, ED = EDGE_DAYS(), F = GRID.flags, M = GRID.mult, W = GRID.GW;
+  const RX = [X[0]], RY = [Y[0]], T = [0]; let t = 0, pc = cellAt(X[0], Y[0]), pm = M[pc] || MOVE.mult.plain;
+  for (let i = 1; i < X.length; i++) {
+    const c = cellAt(X[i], Y[i]), km = Math.hypot((X[i] - X[i - 1]) * 0.63 / k, (Y[i] - Y[i - 1]) * 0.82 / k), sea = !(F[c] & 1);
+    let m = sea ? 0 : M[c]; if (!sea && !m) m = pm; if (m) pm = m;
+    if (c !== pc && !sea && (F[pc] & 1)) {   // переход в соседнюю клетку: переправа, перевал — остановка
+      const dx = Math.sign(c % W - pc % W), dy = Math.sign(Math.floor(c / W) - Math.floor(pc / W));
+      const stop = ED[edgeCode(pc, dx, dy)] + ((F[c] & 8) && !(F[pc] & 8) ? MOVE.pass : 0);
+      if (stop) { RX.push(X[i - 1]); RY.push(Y[i - 1]); t += stop; T.push(t); }
+    }
+    if (sea && !sail && (F[pc] & 1)) t += 1;   // переправа на лодках
+    t += sea ? km / (sail ? SAIL_KM : MARCH_KM) : km / (MARCH_KM * m);
+    RX.push(X[i]); RY.push(Y[i]); T.push(t); pc = c;
+  }
+  return { x: RX.map(v => Math.round(v * 10) / 10), y: RY.map(v => Math.round(v * 10) / 10), t: T.map(v => Math.round(v * 1000) / 1000) };
+}
+// маршрут войска до клетки goal: A* напрямую, нить, сглаживание; кэш по началу, цели и владельцу
+function planRoute(a, goal) {
+  const s = armyCell(a); if (goal == null || goal === s) return null;
+  const allow = provAllow(a), sail = canSail(a.owner), key = a.owner + ':' + s + '>' + goal + ':' + sail;
+  let cells = GRID.cache.get(key);
+  if (cells === undefined) { cells = gridPath(s, goal, allow, sail); if (!cells) GRID.fails = (GRID.fails || 0) + 1; GRID.plans = (GRID.plans || 0) + 1; if (GRID.cache.size > 400) GRID.cache.delete(GRID.cache.keys().next().value); GRID.cache.set(key, cells); }
+  if (!cells || cells.length < 2) return null;
+  const [x0, y0] = a.pos || cellXY(s);
+  return buildRoute(x0, y0, pullString(cells, allow), sail);
+}
+function routeDaysLeft(a) { const r = a.route; return r ? Math.max(0, r.t[r.t.length - 1] - (a.rt || 0)) : 0; }
+// точка маршрута в момент t (дней от начала): координаты и направление
+function routeAt(r, t) {
+  const T = r.t, n = T.length; if (t <= 0) return [r.x[0], r.y[0], 0, 0];
+  if (t >= T[n - 1]) return [r.x[n - 1], r.y[n - 1], n - 1, n - 1];
+  let lo = 0, hi = n - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T[m] <= t) lo = m; else hi = m; }
+  const u = T[hi] > T[lo] ? (t - T[lo]) / (T[hi] - T[lo]) : 1;
+  return [r.x[lo] + (r.x[hi] - r.x[lo]) * u, r.y[lo] + (r.y[hi] - r.y[lo]) * u, lo, hi];
+}
+function routeHeading(r, i) { for (let j = Math.max(1, i); j < r.x.length; j++) { const dx = r.x[j] - r.x[j - 1], dy = r.y[j] - r.y[j - 1]; if (dx || dy) return Math.atan2(dy, dx); } return 0; }
 const gridFoe = (a, c) => G.armies.find(x => x !== a && atWar(a.owner, x.owner) && x.units.length && cellDist(armyCell(x), c) <= MEET);
+// день войска: время идёт на сутки, войско проходит по кривой; по пути — вход в регионы (stepArmy: захват) и встречи (бой)
 async function gridDay(a) {
   armyCell(a);
   { const foe = gridFoe(a, a.cell); if (foe) { const won = await fieldBattle(a, foe, R(provReg(cellProv(a.cell)) || a.region)); GRID.meets = (GRID.meets || 0) + 1; if (G.over) return; a.route = null; if (!won || !G.armies.includes(a)) { a.path = []; return; } } }
   if (!a.path.length) { a.route = null; return; }                    // «стоять»: остаётся там, где стоит
-  if (!a.route) { const r = planRoute(a); if (!r || r.c.length < 2) { a.path = []; a.route = null; return; } a.route = { c: r.c.slice(), d: r.d.slice() }; a.ri = 0; a.rt = 0; a.siege = 0; }
-  const R0 = a.route; a.rt += 1;
-  while (a.ri < R0.c.length - 1 && R0.d[a.ri + 1] <= a.rt) {
-    const nc = R0.c[a.ri + 1], np = cellProv(nc);
+  if (a.route && !a.route.t) a.route = null;   // старое сохранение
+  if (!a.route) { const r = planRoute(a, a.goal); if (!r) { a.path = []; a.route = null; return; } a.route = r; a.rt = 0; a.siege = 0; }
+  const R0 = a.route, t0 = a.rt || 0, t1 = t0 + 1; a.rt = t1;
+  const [, , i0] = routeAt(R0, t0), [, , i1] = routeAt(R0, t1);
+  for (let i = i0 + 1; i <= Math.min(i1 + 1, R0.x.length - 1); i++) {
+    if (R0.t[i] > t1) break;
+    const nc = cellAt(R0.x[i], R0.y[i]); if (nc === a.cell) continue;
+    const np = cellProv(nc);
     if (np >= 0 && np !== a.prov) {
       const rt = provReg(np);
       if (rt !== RID(a.region)) {
-        if (a.owner === 'byz' && !canEnter('byz', rt)) { a.path = []; a.route = null; return; }
+        if (a.owner === 'byz' && !canEnter('byz', rt)) { a.path = []; a.route = null; a.pos = [R0.x[i - 1], R0.y[i - 1]]; return; }
         await stepArmy(a, rt); if (G.over) return;
         if (!G.armies.includes(a) || RID(a.region) !== rt) { a.path = []; a.route = null; return; }
       }
-      a.prov = np; const i = a.path.indexOf(np); if (i >= 0) a.path.splice(0, i + 1); if (!a.path.length) a.path = [cellProv(R0.c[R0.c.length - 1])];
+      a.prov = np;
     }
-    a.cell = nc; a.ri++;
+    a.cell = nc; a.pos = [R0.x[i], R0.y[i]];
     const foe = gridFoe(a, nc);
     if (foe) {
       const won = await fieldBattle(a, foe, R(provReg(np >= 0 ? np : a.prov) || a.region)); if (G.over) return;
       GRID.meets = (GRID.meets || 0) + 1; a.route = null; if (!won || !G.armies.includes(a)) { a.path = []; return; }
-      break;   // после боя — новый расчёт пути на следующий день
+      return;   // после боя — новый расчёт пути на следующий день
     }
   }
-  if (a.route && a.ri >= a.route.c.length - 1) { a.route = null; a.path = []; }
+  const [px, py] = routeAt(R0, t1); a.pos = [px, py];
+  if (t1 >= R0.t[R0.t.length - 1]) { a.route = null; a.path = []; a.cell = a.goal != null ? a.goal : a.cell; }
 }
-function pathDays(a) { if (GRID.ok && a.path.length) { if (!a.route) { const r = planRoute(a); if (r) { a.route = { c: r.c.slice(), d: r.d.slice() }; a.ri = 0; a.rt = 0; } } return Math.round(routeDaysLeft(a)); } const g = provGraph(); let s = 0, v = armyProv(a); for (const w of a.path) { const e = g.adj[v].find(x => x.to === w); s += e ? e.d : 0; v = w; } return s; }
+function pathDays(a) { if (GRID.ok && a.path.length) { if (!a.route) { const r = planRoute(a, a.goal); if (r) { a.route = r; a.rt = 0; } } return Math.round(routeDaysLeft(a)); } const g = provGraph(); let s = 0, v = armyProv(a); for (const w of a.path) { const e = g.adj[v].find(x => x.to === w); s += e ? e.d : 0; v = w; } return s; }
 function findPath(a, to) { const p = findProvPath(a, to); return p; }
 // свой маршрут: продолжить путь от последней точки похода до новой провинции (Ctrl/Shift + щелчок)
 function addWaypoint(a, to, prov, cell) {
-  if (GRID.ok) {   // сетка: продолжение похода — путь до новой точки от конца текущего (маршрут пересчитывается целиком)
-    const last = a.path.length ? a.path[a.path.length - 1] : armyProv(a), p = prov === last ? [] : findProvPath(a, to, prov, last); if (!p) return false;
-    a.path = a.path.concat(p); if (!a.path.length) a.path = [prov]; a.goal = cell != null ? snapCell(cell, prov) : null; a.route = null; return !!pathDays(a) || true;
-  }
+  if (GRID.ok) return setArmyPath(a, to, prov, cell);   // сетка: приказ всегда в точку — путь пересчитывается напрямую
   const last = a.path.length ? a.path[a.path.length - 1] : armyProv(a);
   if (prov === last) return true;
   const p = findProvPath(a, to, prov, last); if (!p) return false;
@@ -913,16 +983,15 @@ function splitArmy(a, idx) {
 }
 function setArmyPath(a, to, prov, cell) {
   to = RID(to); a.route = null;
-  if (GRID.ok) {   // сетка: цель — клетка (щелчок), иначе город региона; путь по провинциям — только для «коридора» и решений
+  if (GRID.ok) {   // сетка: приказ в точку — клетка щелчка; щелчок по городу (или цель ИИ — регион) — к городу региона: осада/вход
     armyCell(a);
     const pg = provGraph(), goal = cell != null ? snapCell(cell, prov != null ? prov : cellProv(cell)) : (prov != null ? snapCell(cellAt(MAPINFO.provs[prov][1], MAPINFO.provs[prov][2]), prov) : cityCell(to));
     const gp = cellProv(goal); if (gp < 0) return false;
     if (goal === a.cell) { a.path = []; return true; }
     if (pg.reg[gp] !== RID(a.region) && !canEnter(a.owner, pg.reg[gp])) return false;
-    const p = gp === armyProv(a) ? [gp] : findProvPath(a, pg.reg[gp], gp); if (!p) return false;
-    a.path = p.length ? p : [gp]; a.goal = goal;
-    const r = planRoute(a); if (!r) { a.path = []; return false; }
-    a.route = { c: r.c.slice(), d: r.d.slice() }; a.ri = 0; a.rt = 0; return true;
+    a.goal = goal; a.path = [gp];   // a.path — только для подписи «поход в …» и признака «в пути»
+    const r = planRoute(a, goal); if (!r) { a.path = []; return false; }
+    a.route = r; a.rt = 0; return true;
   }
   if (to === RID(a.region) && (prov == null || prov === armyProv(a))) { a.path = []; return true; }
   if (to !== RID(a.region) && !canEnter(a.owner, to)) return false;
@@ -2432,8 +2501,9 @@ const Battle = (() => {
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 85, mapMode: 'geo', sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 85, dayTicks: true, mapMode: 'geo', sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
+try { UI.dayTicks = localStorage.getItem('poly_dayticks') !== 'off'; } catch (e) { }
 try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 190; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
 // перевал: [цвет пунктира, цвет подложки]
@@ -2890,7 +2960,7 @@ function provTip(cx, cy) {
 }
 function mapClick(e) {
   const t = e.target.closest('.ar,.rm');
-  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) { UI.selProv = null; clickRegion(t.dataset.reg); } return; }
+  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) { UI.selProv = null; UI.clickCell = null; clickRegion(t.dataset.reg); } return; }   // щелчок по городу — цель «осада/вход»
   const r = $('mapwrap').getBoundingClientRect();
   const mx = (e.clientX - r.left - UI.view.x) / UI.view.z, my = (e.clientY - r.top - UI.view.y) / UI.view.z;
   UI.clickCell = GRID.ok ? cellAt(mx, my) : null;   // сетка: войско идёт в эту клетку
@@ -3441,22 +3511,18 @@ function paintSelection(ctx, z) {
   // приказ: щелчок по любой провинции — войско идёт туда по провинциям (через хребты — только по перевалам)
   if (GRID.ok && UI.gridDbg) drawGridDebug(ctx, z);
   myArmies().forEach(x => {
-    if (GRID.ok) {   // сетка: маршрут по клеткам; у выбранного войска — точка на каждый день пути
-      if (!x.path.length) return; if (!x.route) pathDays(x); const r = x.route; if (!r) return;
-      const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)', ri = Math.max(0, x.ri || 0);
-      ctx.setLineDash(x === a ? [] : [w(10), w(6)]); ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 1.6 : 2.5); ctx.globalAlpha = x === a ? 0.4 : 1;
-      ctx.beginPath(); const p0 = armyXY(x); ctx.moveTo(p0[0], p0[1] + 4);
-      for (let i = ri + 1; i < r.c.length; i++) { const q = cellXY(r.c[i]); ctx.lineTo(q[0], q[1]); }
-      ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-      if (x === a) {
-        ctx.fillStyle = col; ctx.strokeStyle = 'rgba(255,240,220,.9)'; ctx.lineWidth = w(1);
-        const t0 = x.rt || 0; let next = Math.floor(t0) + 1, i = ri;
-        while (i < r.c.length - 1) {
-          if (r.d[i + 1] >= next) { const u = (next - r.d[i]) / Math.max(1e-6, r.d[i + 1] - r.d[i]), q0 = cellXY(r.c[i]), q1 = cellXY(r.c[i + 1]); ctx.beginPath(); ctx.arc(q0[0] + (q1[0] - q0[0]) * u, q0[1] + (q1[1] - q0[1]) * u, w(2.6), 0, 7); ctx.fill(); ctx.stroke(); next++; continue; }
-          i++;
+    if (GRID.ok) {   // сетка: сплошная линия по сглаженному пути; засечки по дням — по настройке (их частота показывает скорость)
+      if (!x.path.length) return; if (!x.route || !x.route.t) pathDays(x); const r = x.route; if (!r || !r.t) return;
+      const col = x === a ? 'rgba(190,30,30,.9)' : 'rgba(140,60,165,.75)', t0 = (x.rt || 0) + (UI.speed ? Math.min(1, clockAcc) : 0), [px, py, i0] = routeAt(r, t0);
+      ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 2.4 : 1.8); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(px, py); for (let i = i0 + 1; i < r.x.length; i++) ctx.lineTo(r.x[i], r.y[i]); ctx.stroke(); ctx.lineCap = 'butt';
+      if (x === a && UI.dayTicks) {
+        for (let d = Math.floor(t0) + 1; d < r.t[r.t.length - 1]; d++) {
+          const [qx, qy, j] = routeAt(r, d), h = routeHeading(r, j + 1), nx = -Math.sin(h) * w(5), ny = Math.cos(h) * w(5);
+          for (const [c, lw] of [['rgba(255,244,225,.85)', 3.6], [col, 1.8]]) { ctx.strokeStyle = c; ctx.lineWidth = w(lw); ctx.beginPath(); ctx.moveTo(qx - nx, qy - ny); ctx.lineTo(qx + nx, qy + ny); ctx.stroke(); }
         }
       }
-      const q = cellXY(r.c[r.c.length - 1]); ctx.beginPath(); ctx.arc(q[0], q[1], w(5), 0, 7); ctx.fillStyle = col; ctx.fill();
+      const n = r.x.length - 1; ctx.beginPath(); ctx.arc(r.x[n], r.y[n], w(4), 0, 7); ctx.fillStyle = col; ctx.fill();
       return;
     }
     if (!x.path.length && !x.leg) return; const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)';
@@ -3532,31 +3598,25 @@ function renderMarkers() {
 // флажки войск (обновляются каждый игровой день, отдельно от остальных подписей)
 function armyXY(a) {
   const P = MAPINFO.provs;
-  if (GRID.ok) {   // сетка: клетка войска; в пути — между клетками маршрута, плавно внутри дня
+  if (GRID.ok) {   // сетка: в пути — точка на сглаженном маршруте в текущий момент (каждый кадр); стоит — своя точка
     const r = a.route;
-    if (r && r.c.length > 1) {
-      const t = (a.rt || 0) + (UI.speed ? Math.min(1, clockAcc) : 0); let i = Math.max(0, a.ri || 0);
-      while (i < r.c.length - 1 && r.d[i + 1] <= t) i++;
-      if (i >= r.c.length - 1) { const q = cellXY(r.c[r.c.length - 1]); return [q[0], q[1] - 4]; }
-      const p0 = cellXY(r.c[i]), p1 = cellXY(r.c[i + 1]), u = clamp((t - r.d[i]) / Math.max(1e-6, r.d[i + 1] - r.d[i]), 0, 1);
-      return [p0[0] + (p1[0] - p0[0]) * u, p0[1] + (p1[1] - p0[1]) * u - 4];
-    }
-    const c = armyCell(a), q = cellXY(c), i = Math.max(0, G.armies.filter(x => !x.route && x.cell === c).indexOf(a));
+    if (r && r.t) { const [x, y, i] = routeAt(r, (a.rt || 0) + (UI.speed ? Math.min(1, clockAcc) : 0)); a.head = routeHeading(r, i + 1); return [x, y - 4]; }
+    const c = armyCell(a), q = a.pos && cellAt(a.pos[0], a.pos[1]) === c ? a.pos : cellXY(c), i = Math.max(0, G.armies.filter(x => !x.route && x.cell === c).indexOf(a));
     return [q[0] + i * 6, q[1] - 4 - i * 24];
   }
-  if (a.leg && typeof a.leg.from === 'number') { const q = roadPoint(a.leg.from, a.leg.to, legPos(a)); return [q[0], q[1] - 4]; }
   const k = armyProv(a), i = Math.max(0, G.armies.filter(x => !x.leg && x.prov === k).indexOf(a));
   return [P[k][1] + i * 6, P[k][2] - 4 - i * 24];
 }
 function moveMarkers() {
   const box = $('armymk'); if (!box) return;
-  for (const el of box.children) { const a = G.armies.find(x => x.id === +el.dataset.army); if (!a || !a.route) continue; const [x, y] = armyXY(a); el.style.left = x + 'px'; el.style.top = y + 'px'; }
+  for (const el of box.children) { const a = G.armies.find(x => x.id === +el.dataset.army); if (!a || !a.route) continue; const [x, y] = armyXY(a); el.style.left = x + 'px'; el.style.top = y + 'px'; const d = el.querySelector('.dir'); if (d) d.style.transform = `rotate(${(a.head || 0).toFixed(3)}rad)`; }
+  if (myArmies().some(x => x.route && x.id === UI.selArmy) || G.armies.some(x => x.route && x.owner === 'byz')) scheduleVector();   // линия маршрута — от текущей точки
 }
 function renderArmies() {
   const box = $('armymk'); if (!box || !G) return;
   box.innerHTML = G.armies.map(a => {
     const g = genOf(a), [x, y] = armyXY(a);
-    return `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''} ${a.leg ? 'moving' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${x}px;top:${y}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.path.length ? ' ➜' : ''}</div>`;
+    return `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''} ${a.leg ? 'moving' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${x}px;top:${y}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.route && GRID.ok ? ` <span class="dir" style="transform:rotate(${(a.head || 0).toFixed(3)}rad)">➤</span>` : a.path.length ? ' ➜' : ''}</div>`;   // в пути — стрелка-фигурка повёрнута по направлению движения
   }).join('');
 }
 
@@ -4347,6 +4407,7 @@ function showGfxMenu() {
    <button id="gCl">Облака: ${onoff(CL.on)}</button>
    <button id="gWv">Свет и зыбь на море: ${onoff(WV.on)}</button>
    <button id="gFm">Пена у берегов: ${onoff(WV.foam)}</button>
+   <button id="gDT">Засечки по дням на маршруте: ${UI.dayTicks ? 'есть' : 'нет'}</button>
    <button id="gBack">← Назад</button><button id="gClose" class="main">Закрыть</button></div>`);
   const st = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
   $('gStyle').onclick = () => { save(); st('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); location.reload(); };
@@ -4355,6 +4416,7 @@ function showGfxMenu() {
   $('gPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; st('poly_passcol', UI.passcol); scheduleVector(); showGfxMenu(); };
   $('gCl').onclick = () => { CL.on = !CL.on; st('poly_clouds', CL.on ? 'on' : 'off'); showGfxMenu(); };
   $('gWv').onclick = () => { WV.on = !WV.on; st('poly_waves', WV.on ? 'on' : 'off'); showGfxMenu(); };
+  $('gDT').onclick = () => { UI.dayTicks = !UI.dayTicks; st('poly_dayticks', UI.dayTicks ? 'on' : 'off'); scheduleVector(); showGfxMenu(); };
   $('gFm').onclick = () => { WV.foam = !WV.foam; st('poly_foam', WV.foam ? 'on' : 'off'); showGfxMenu(); };
   $('gBack').onclick = showMenu; $('gClose').onclick = closeModal;
 }

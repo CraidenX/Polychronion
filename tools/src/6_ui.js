@@ -2,8 +2,9 @@
 /* ---------- 5. ИНТЕРФЕЙС ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 85, mapMode: 'geo', sborder: 'black', passcol: 'black' };
+const UI = { tab: 'map', sel: null, selArmy: null, view: { x: 0, y: 0, z: 0.6 }, ridgeA: 85, dayTicks: true, mapMode: 'geo', sborder: 'black', passcol: 'black' };
 // хребты: в цвет владельца (по умолчанию) или всегда своего, коричневого цвета — настройка в меню
+try { UI.dayTicks = localStorage.getItem('poly_dayticks') !== 'off'; } catch (e) { }
 try { if (localStorage.getItem('poly_ridge') === 'own') UI.ridgeA = 190; UI.sborder = localStorage.getItem('poly_sborder') || 'black'; UI.passcol = localStorage.getItem('poly_passcol') || 'black'; } catch (e) { }
 // граница держав: чёрная, красная или без неё (настройка в меню)
 // перевал: [цвет пунктира, цвет подложки]
@@ -460,7 +461,7 @@ function provTip(cx, cy) {
 }
 function mapClick(e) {
   const t = e.target.closest('.ar,.rm');
-  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) { UI.selProv = null; clickRegion(t.dataset.reg); } return; }
+  if (t) { if (t.dataset.army) clickArmy(+t.dataset.army); else if (t.dataset.reg) { UI.selProv = null; UI.clickCell = null; clickRegion(t.dataset.reg); } return; }   // щелчок по городу — цель «осада/вход»
   const r = $('mapwrap').getBoundingClientRect();
   const mx = (e.clientX - r.left - UI.view.x) / UI.view.z, my = (e.clientY - r.top - UI.view.y) / UI.view.z;
   UI.clickCell = GRID.ok ? cellAt(mx, my) : null;   // сетка: войско идёт в эту клетку
@@ -1011,22 +1012,18 @@ function paintSelection(ctx, z) {
   // приказ: щелчок по любой провинции — войско идёт туда по провинциям (через хребты — только по перевалам)
   if (GRID.ok && UI.gridDbg) drawGridDebug(ctx, z);
   myArmies().forEach(x => {
-    if (GRID.ok) {   // сетка: маршрут по клеткам; у выбранного войска — точка на каждый день пути
-      if (!x.path.length) return; if (!x.route) pathDays(x); const r = x.route; if (!r) return;
-      const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)', ri = Math.max(0, x.ri || 0);
-      ctx.setLineDash(x === a ? [] : [w(10), w(6)]); ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 1.6 : 2.5); ctx.globalAlpha = x === a ? 0.4 : 1;
-      ctx.beginPath(); const p0 = armyXY(x); ctx.moveTo(p0[0], p0[1] + 4);
-      for (let i = ri + 1; i < r.c.length; i++) { const q = cellXY(r.c[i]); ctx.lineTo(q[0], q[1]); }
-      ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-      if (x === a) {
-        ctx.fillStyle = col; ctx.strokeStyle = 'rgba(255,240,220,.9)'; ctx.lineWidth = w(1);
-        const t0 = x.rt || 0; let next = Math.floor(t0) + 1, i = ri;
-        while (i < r.c.length - 1) {
-          if (r.d[i + 1] >= next) { const u = (next - r.d[i]) / Math.max(1e-6, r.d[i + 1] - r.d[i]), q0 = cellXY(r.c[i]), q1 = cellXY(r.c[i + 1]); ctx.beginPath(); ctx.arc(q0[0] + (q1[0] - q0[0]) * u, q0[1] + (q1[1] - q0[1]) * u, w(2.6), 0, 7); ctx.fill(); ctx.stroke(); next++; continue; }
-          i++;
+    if (GRID.ok) {   // сетка: сплошная линия по сглаженному пути; засечки по дням — по настройке (их частота показывает скорость)
+      if (!x.path.length) return; if (!x.route || !x.route.t) pathDays(x); const r = x.route; if (!r || !r.t) return;
+      const col = x === a ? 'rgba(190,30,30,.9)' : 'rgba(140,60,165,.75)', t0 = (x.rt || 0) + (UI.speed ? Math.min(1, clockAcc) : 0), [px, py, i0] = routeAt(r, t0);
+      ctx.strokeStyle = col; ctx.lineWidth = w(x === a ? 2.4 : 1.8); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(px, py); for (let i = i0 + 1; i < r.x.length; i++) ctx.lineTo(r.x[i], r.y[i]); ctx.stroke(); ctx.lineCap = 'butt';
+      if (x === a && UI.dayTicks) {
+        for (let d = Math.floor(t0) + 1; d < r.t[r.t.length - 1]; d++) {
+          const [qx, qy, j] = routeAt(r, d), h = routeHeading(r, j + 1), nx = -Math.sin(h) * w(5), ny = Math.cos(h) * w(5);
+          for (const [c, lw] of [['rgba(255,244,225,.85)', 3.6], [col, 1.8]]) { ctx.strokeStyle = c; ctx.lineWidth = w(lw); ctx.beginPath(); ctx.moveTo(qx - nx, qy - ny); ctx.lineTo(qx + nx, qy + ny); ctx.stroke(); }
         }
       }
-      const q = cellXY(r.c[r.c.length - 1]); ctx.beginPath(); ctx.arc(q[0], q[1], w(5), 0, 7); ctx.fillStyle = col; ctx.fill();
+      const n = r.x.length - 1; ctx.beginPath(); ctx.arc(r.x[n], r.y[n], w(4), 0, 7); ctx.fillStyle = col; ctx.fill();
       return;
     }
     if (!x.path.length && !x.leg) return; const col = x === a ? 'rgba(200,30,30,.95)' : 'rgba(150,60,170,.85)';
@@ -1102,31 +1099,25 @@ function renderMarkers() {
 // флажки войск (обновляются каждый игровой день, отдельно от остальных подписей)
 function armyXY(a) {
   const P = MAPINFO.provs;
-  if (GRID.ok) {   // сетка: клетка войска; в пути — между клетками маршрута, плавно внутри дня
+  if (GRID.ok) {   // сетка: в пути — точка на сглаженном маршруте в текущий момент (каждый кадр); стоит — своя точка
     const r = a.route;
-    if (r && r.c.length > 1) {
-      const t = (a.rt || 0) + (UI.speed ? Math.min(1, clockAcc) : 0); let i = Math.max(0, a.ri || 0);
-      while (i < r.c.length - 1 && r.d[i + 1] <= t) i++;
-      if (i >= r.c.length - 1) { const q = cellXY(r.c[r.c.length - 1]); return [q[0], q[1] - 4]; }
-      const p0 = cellXY(r.c[i]), p1 = cellXY(r.c[i + 1]), u = clamp((t - r.d[i]) / Math.max(1e-6, r.d[i + 1] - r.d[i]), 0, 1);
-      return [p0[0] + (p1[0] - p0[0]) * u, p0[1] + (p1[1] - p0[1]) * u - 4];
-    }
-    const c = armyCell(a), q = cellXY(c), i = Math.max(0, G.armies.filter(x => !x.route && x.cell === c).indexOf(a));
+    if (r && r.t) { const [x, y, i] = routeAt(r, (a.rt || 0) + (UI.speed ? Math.min(1, clockAcc) : 0)); a.head = routeHeading(r, i + 1); return [x, y - 4]; }
+    const c = armyCell(a), q = a.pos && cellAt(a.pos[0], a.pos[1]) === c ? a.pos : cellXY(c), i = Math.max(0, G.armies.filter(x => !x.route && x.cell === c).indexOf(a));
     return [q[0] + i * 6, q[1] - 4 - i * 24];
   }
-  if (a.leg && typeof a.leg.from === 'number') { const q = roadPoint(a.leg.from, a.leg.to, legPos(a)); return [q[0], q[1] - 4]; }
   const k = armyProv(a), i = Math.max(0, G.armies.filter(x => !x.leg && x.prov === k).indexOf(a));
   return [P[k][1] + i * 6, P[k][2] - 4 - i * 24];
 }
 function moveMarkers() {
   const box = $('armymk'); if (!box) return;
-  for (const el of box.children) { const a = G.armies.find(x => x.id === +el.dataset.army); if (!a || !a.route) continue; const [x, y] = armyXY(a); el.style.left = x + 'px'; el.style.top = y + 'px'; }
+  for (const el of box.children) { const a = G.armies.find(x => x.id === +el.dataset.army); if (!a || !a.route) continue; const [x, y] = armyXY(a); el.style.left = x + 'px'; el.style.top = y + 'px'; const d = el.querySelector('.dir'); if (d) d.style.transform = `rotate(${(a.head || 0).toFixed(3)}rad)`; }
+  if (myArmies().some(x => x.route && x.id === UI.selArmy) || G.armies.some(x => x.route && x.owner === 'byz')) scheduleVector();   // линия маршрута — от текущей точки
 }
 function renderArmies() {
   const box = $('armymk'); if (!box || !G) return;
   box.innerHTML = G.armies.map(a => {
     const g = genOf(a), [x, y] = armyXY(a);
-    return `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''} ${a.leg ? 'moving' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${x}px;top:${y}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.path.length ? ' ➜' : ''}</div>`;
+    return `<div class="ar ${a.owner === 'byz' ? 'mine' : ''} ${UI.selArmy === a.id ? 'sela' : ''} ${a.leg ? 'moving' : ''}" data-army="${a.id}" title="${esc(a.name)}${g ? ' — ' + esc(g.name) : ''}" style="left:${x}px;top:${y}px;background:${FACTIONS[a.owner].color}">${g ? '⚑' : '⚐'} ${armyLabel(a)}${a.siege ? ' ⚔' + a.siege : ''}${a.route && GRID.ok ? ` <span class="dir" style="transform:rotate(${(a.head || 0).toFixed(3)}rad)">➤</span>` : a.path.length ? ' ➜' : ''}</div>`;   // в пути — стрелка-фигурка повёрнута по направлению движения
   }).join('');
 }
 
@@ -1917,6 +1908,7 @@ function showGfxMenu() {
    <button id="gCl">Облака: ${onoff(CL.on)}</button>
    <button id="gWv">Свет и зыбь на море: ${onoff(WV.on)}</button>
    <button id="gFm">Пена у берегов: ${onoff(WV.foam)}</button>
+   <button id="gDT">Засечки по дням на маршруте: ${UI.dayTicks ? 'есть' : 'нет'}</button>
    <button id="gBack">← Назад</button><button id="gClose" class="main">Закрыть</button></div>`);
   const st = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
   $('gStyle').onclick = () => { save(); st('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); location.reload(); };
@@ -1925,6 +1917,7 @@ function showGfxMenu() {
   $('gPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; st('poly_passcol', UI.passcol); scheduleVector(); showGfxMenu(); };
   $('gCl').onclick = () => { CL.on = !CL.on; st('poly_clouds', CL.on ? 'on' : 'off'); showGfxMenu(); };
   $('gWv').onclick = () => { WV.on = !WV.on; st('poly_waves', WV.on ? 'on' : 'off'); showGfxMenu(); };
+  $('gDT').onclick = () => { UI.dayTicks = !UI.dayTicks; st('poly_dayticks', UI.dayTicks ? 'on' : 'off'); scheduleVector(); showGfxMenu(); };
   $('gFm').onclick = () => { WV.foam = !WV.foam; st('poly_foam', WV.foam ? 'on' : 'off'); showGfxMenu(); };
   $('gBack').onclick = showMenu; $('gClose').onclick = closeModal;
 }

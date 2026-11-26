@@ -58,6 +58,19 @@ gy, gx = np.mgrid[0:GH, 0:GW]
 for p in json.load(open(SP + 'umap/passes.json')):
     flags[((gx * C + 3 - p[2]) ** 2 + (gy * C + 3 - p[3]) ** 2 <= 15 ** 2) & (L >= 0.5)] |= 8
 flags[((cls & 8) > 0) & ((flags & 8) == 0) & (L >= 0.5)] |= 16
+# проливы: морская клетка, у которой суша в пределах 2 клеток с двух противоположных сторон — войско без флота переходит её вброд/на лодках
+FLAGS['strait'] = 64
+lc = L >= 0.5
+def near(dy, dx):
+    r = np.zeros_like(lc)
+    for k in (1, 2):
+        sh = np.zeros_like(lc); ys_, xs_ = slice(max(0, dy * k), GH + min(0, dy * k)), slice(max(0, dx * k), GW + min(0, dx * k))
+        yd, xd = slice(max(0, -dy * k), GH + min(0, -dy * k)), slice(max(0, -dx * k), GW + min(0, -dx * k))
+        sh[yd, xd] = lc[ys_, xs_]; r |= sh
+    return r
+st = np.zeros_like(lc)
+for dy, dx in ((1, 0), (0, 1), (1, 1), (1, -1)): st |= near(dy, dx) & near(-dy, -dx)
+flags[st & ((flags & 32) > 0)] |= 64
 # опорная точка клетки: ближайший к центру пиксель суши не на реке (для проверки переправ)
 rv = np.load(SP + 'umap/rivers.npy') > 46
 off = np.array([(i // C, i % C) for i in range(C * C)]); dc = np.hypot(off[:, 0] - 2.5, off[:, 1] - 2.5)
@@ -104,6 +117,6 @@ json.dump({'_': 'Сетка перемещений (mkgrid.py). grid.bin: заг
            'km': 'шаг по x ≈ 6·0,63 км, по y ≈ 6·0,82 км'}, open(OUT + '/grid.json', 'w'), ensure_ascii=False, indent=1)
 e = edge
 print('сетка', GW, 'x', GH, 'суша', int((flags & 1 > 0).sum()), 'зона', int((flags & 2 > 0).sum()), 'море', int((flags & 32 > 0).sum()),
-      'дороги', int((flags & 4 > 0).sum()), 'перевалы', int((flags & 8 > 0).sum()), 'непроходимые', int((flags & 16 > 0).sum()),
+      'дороги', int((flags & 4 > 0).sum()), 'проливы', int((flags & 64 > 0).sum()), 'перевалы', int((flags & 8 > 0).sum()), 'непроходимые', int((flags & 16 > 0).sum()),
       'бродов', int(sum(((e >> (2 * s)) & 3 == 1).sum() for s in range(4))), 'больших рек', int(sum(((e >> (2 * s)) & 3 == 2).sum() for s in range(4))),
       'без провинции в зоне', int(((flags & 2) > 0).sum() - ((prov > 0) & ((flags & 2) > 0)).sum()), 'КБ', os.path.getsize(OUT + '/grid.bin') // 1024)
