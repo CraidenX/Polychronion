@@ -22,13 +22,15 @@ LANDS = nd.gaussian_filter(land.astype(np.float32), 1.2)
 RIV = np.load(SP + 'umap/rivers.npy') > 46
 # что рисуем: спрайты (без перевалов, они — тоже спрайты) и уникальные горы; деревья рощ
 items = []   # (y, kind, data)
-for set_, v, x, y, w, c in TSJ['items']: items.append((y, 's', (set_, v, x, y, w, c)))
+TONES = np.array(TSJ.get('tones', [[0.5, 0.45, 0.35]] * 8), np.float32)
+for it in TSJ['items']: set_, v, x, y, w, c = it[:6]; items.append((y, 's', (set_, v, x, y, w, c, np.array(it[7] if len(it) > 7 else TONES[4], np.float32))))
 for l in TSJ['landmarks']:
     if l.get('model'): continue          # модель (Афон) рисуется отдельно
-    items.append((l['y'], 's', (l['set'], 0, l['x'], l['y'], l['w'], 1)))
+    items.append((l['y'], 's', (l['set'], 0, l['x'], l['y'], l['w'], 2, np.array(l.get('col', TONES[4]), np.float32))))   # 2 — уникальная гора (подножие режется по берегу раньше)
+TT = TSJ.get('treeTones', {}).get(VAR, '')
 b = open(OUT + f'/icons_t{VAR}.bin', 'rb').read(); nm, nt = struct.unpack('<II', b[:8]); o = 8 + nm * 48
 for i in range(nt):
-    tx, ty, r, f = struct.unpack('<HHBB', b[o + i * 6:o + i * 6 + 6]); items.append((ty / 8, 't', (tx / 8, ty / 8, r / 100, f & 1, f >> 1)))
+    tx, ty, r, f = struct.unpack('<HHBB', b[o + i * 6:o + i * 6 + 6]); items.append((ty / 8, 't', (tx / 8, ty / 8, r / 100, f & 1, f >> 1, int(TT[i]) if i < len(TT) else 4)))
 MODELS = TSJ.get('models', [])           # модели, заменяющие кусок карты (часть D: Афон)
 items.sort(key=lambda t: t[0])
 CELL = 128; grid = {}
@@ -43,10 +45,20 @@ def sprite(set_, v, w):   # спрайт набора нужной ширины 
         ww = max(2, key[2]); hh = max(2, round(r[3] * ww / r[2])); _cache[key] = im.resize((ww, hh), Image.LANCZOS)
         if len(_cache) > 6000: _cache.clear()
     return _cache[key]
+# подкраска под землю с сохранением яркости: у подножия ~60 %, к вершине плавно до ~15 %; белое (снег) не трогаем
+def tint(im, col, an=0.78):
+    a = np.asarray(im).astype(np.float32) / 255; rgb = a[..., :3]; h = a.shape[0]
+    lum = rgb @ np.array([0.3, 0.59, 0.11], np.float32); cl = float(col @ np.array([0.3, 0.59, 0.11], np.float32)) + 1e-4
+    tgt = np.clip(col[None, None, :] * (lum / cl)[..., None], 0, 1)
+    yy = (np.arange(h)[:, None] + 0.5) / h; t = np.clip((yy - 0.15) / max(0.2, an - 0.15), 0, 1); wgt = 0.15 + 0.45 * t * t * (3 - 2 * t)
+    mx, mn = rgb.max(2), rgb.min(2); white = np.clip((lum - 0.74) / 0.14, 0, 1) * np.clip(1 - (mx - mn) / (mx + 1e-4) / 0.25, 0, 1)
+    wgt = (wgt * (1 - white))[..., None]
+    a[..., :3] = rgb * (1 - wgt) + tgt * wgt
+    return Image.fromarray((a * 255).astype(np.uint8), 'RGBA')
 _tc = {}
-def tree(con, k, px):
-    key = (con, k, px)
-    if key not in _tc: _tc[key] = TREES.crop((k * NT, con * NT, k * NT + NT, con * NT + NT)).resize((px, px), Image.LANCZOS)
+def tree(con, k, px, tn=4):
+    key = (con, k, px, tn)
+    if key not in _tc: _tc[key] = tint(TREES.crop((k * NT, con * NT, k * NT + NT, con * NT + NT)).resize((px, px), Image.LANCZOS), TONES[tn], 0.72)
     return _tc[key]
 outd = OUT + f'/hi_wc{VAR}'; os.makedirs(outd, exist_ok=True)
 full = np.asarray(Image.open(OUT + f'/map_wc{VAR}.jpg').convert('RGB')).copy()
@@ -74,20 +86,20 @@ for tx_, ty_ in idx['tiles']:
     seen.sort(key=lambda t: t[0])
     for y_, kind, d in seen:
         if kind == 's':
-            set_, v, x, y, w, coast = d; an = SETS[set_]['anchor']
-            sp = sprite(set_, v, w * K); px0 = int(round((x - X0) * K - sp.width / 2)); py0 = int(round((y - Y0) * K - sp.height * an))
+            set_, v, x, y, w, coast, col = d; an = SETS[set_]['anchor']
+            sp = tint(sprite(set_, v, w * K), col, an); px0 = int(round((x - X0) * K - sp.width / 2)); py0 = int(round((y - Y0) * K - sp.height * an))
             if px0 > tw or py0 > th or px0 + sp.width < 0 or py0 + sp.height < 0: continue
             if coast:   # подножие (62–80 % высоты и ниже) — только над сушей
                 a = np.asarray(sp).astype(np.float32); hh, ww = a.shape[:2]
-                yy = (np.arange(hh) + 0.5) / hh; ramp = np.clip((yy - 0.62) / 0.18, 0, 1)[:, None]
+                yy = (np.arange(hh) + 0.5) / hh; ramp = (np.clip((yy - 0.4) / 0.15, 0, 1) if coast == 2 else np.clip((yy - 0.62) / 0.18, 0, 1))[:, None]
                 gx = np.clip(((np.arange(ww) + px0) / K + X0).astype(int), 0, W - 1); gy = np.clip(((np.arange(hh) + py0) / K + Y0).astype(int), 0, H - 1)
                 ls = LANDS[gy[:, None], gx[None, :]]
                 a[..., 3] *= 1 - ramp * (1 - np.clip((ls - 0.25) / 0.5, 0, 1)); sp = Image.fromarray(a.astype(np.uint8), 'RGBA')
             lay.alpha_composite(sp, (px0, py0)) if px0 >= 0 and py0 >= 0 and px0 + sp.width <= tw and py0 + sp.height <= th else lay.paste(Image.alpha_composite(lay.crop((px0, py0, px0 + sp.width, py0 + sp.height)), sp), (px0, py0))
             mtn.paste(255, (px0, py0), sp.getchannel('A').point(lambda q: 255 if q > 128 else 0))
         else:
-            x, y, r, con, k = d; px = max(3, int(round(r * 4.2 * K)))
-            sp = tree(con, k, px); px0 = int(round((x - X0) * K - px / 2)); py0 = int(round((y - Y0) * K - px * 0.72))
+            x, y, r, con, k, tn = d; px = max(3, int(round(r * 4.2 * K)))
+            sp = tree(con, k, px, tn); px0 = int(round((x - X0) * K - px / 2)); py0 = int(round((y - Y0) * K - px * 0.72))
             if px0 > tw or py0 > th or px0 + px < 0 or py0 + px < 0: continue
             lay.paste(Image.alpha_composite(lay.crop((px0, py0, px0 + px, py0 + px)), sp), (px0, py0))
             tre.paste(255, (px0, py0), sp.getchannel('A').point(lambda q: 255 if q > 128 else 0))

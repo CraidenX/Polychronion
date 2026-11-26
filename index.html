@@ -167,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 92, "date": "26.11.2026 07:59"};
+const GAME_VERSION = {"v": 93, "date": "26.11.2026 08:47"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2943,7 +2943,7 @@ function outerAtClient(clientX, clientY) {
 }
 // уникальная гора под курсором (только вблизи, где она нарисована)
 function landmarkAt(cx, cy) {
-  if (TSP.st !== 2 || (UI.mapMode === 'geo' ? geoU(UI.view.z) < 0.5 : UI.view.z * Math.min(2, window.devicePixelRatio || 1) < 1.8)) return null;
+  if (TSP.st !== 2 || geoU(UI.view.z) < 0.5) return null;
   const r = $('mapwrap').getBoundingClientRect(), mx = (cx - r.left - UI.view.x) / UI.view.z, my = (cy - r.top - UI.view.y) / UI.view.z;
   for (const l of TSP.lms) { if (l.box) { if (mx >= l.box[0] && mx <= l.box[2] && my >= l.box[1] && my <= l.box[3]) return l; continue; } const rr = l.r, h = l.w * rr[3] / rr[2]; if (Math.abs(mx - l.x) < l.w * 0.4 && my > l.y - h * l.an * 0.9 && my < l.y + h * (1 - l.an) * 0.5) return l; }
   return null;
@@ -3186,7 +3186,7 @@ function vecCache() {
   const st = (list, color, px) => { ctx.beginPath(); for (const g of list) { const q = g.pts; ctx.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) ctx.lineTo(q[i], q[i + 1]); } ctx.strokeStyle = color; ctx.lineWidth = px / s; ctx.stroke(); };
   const C = VEC.cls;
   st(C.c, 'rgba(14,22,38,1)', 1.2); st(C.p, 'rgba(255,255,255,.35)', 0.6); st(C.r, 'rgba(40,28,40,.75)', 0.9);
-  st(C.e, 'rgba(18,12,18,.95)', 1.4); if (SBORDER[UI.sborder]) st(C.s, SBORDER[UI.sborder], 1.4);
+  st(C.e, 'rgba(18,12,18,.95)', 1.4); if (SBORDER[UI.sborder] && UI.mapMode !== 'pol') st(C.s, SBORDER[UI.sborder], 1.4);
   return VEC.cache = cv;
 }
 /* --- значки вблизи: горы и деревья акварельной подложки, нарисованные игрой заново (icons{WCV}.bin + trees.png, готовит mkwater.py) —
@@ -3211,16 +3211,17 @@ function icoLoad() {
       for (let j = 0; j < 25; j++) m.prof.push(dv.getUint8(o + 23 + j) / 200);
       put(mg, m.x, m.y, m);
     }
-    for (let i = 0; i < nt; i++, o += 6) { const b = dv.getUint8(o + 5); put(tg, dv.getUint16(o, true) / 8, dv.getUint16(o + 2, true) / 8, { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, r: dv.getUint8(o + 4) / 100, con: b & 1, idx: b >> 1 }); }
+    const TTN = (t && t.j.treeTones && t.j.treeTones[WCV]) || '';   // тон земли у каждого дерева (mktone.py)
+    for (let i = 0; i < nt; i++, o += 6) { const b = dv.getUint8(o + 5); put(tg, dv.getUint16(o, true) / 8, dv.getUint16(o + 2, true) / 8, { x: dv.getUint16(o, true) / 8, y: dv.getUint16(o + 2, true) / 8, r: dv.getUint8(o + 4) / 100, con: b & 1, idx: b >> 1, tone: TTN[i] != null ? +TTN[i] : -1 }); }
     if (t) {
       const S = t.j.sets;
-      for (const [set, v, x, y, w, c] of t.j.items) put(sg, x, y, { set, v, x, y, w, c, r: S[set].r[v], an: S[set].anchor });
-      for (const l of t.j.landmarks) if (!l.model) put(sg, l.x, l.y, Object.assign(l, { v: 0, r: S[l.set].r[0], an: S[l.set].anchor, lm: true }));
-      Object.assign(TSP, { st: 2, atlas: t.at, sets: S, lms: t.j.landmarks, ischia: t.j.ischia, models: t.j.models || [] });
+      for (const [set, v, x, y, w, c, tone] of t.j.items) put(sg, x, y, { set, v, x, y, w, c, tone: tone == null ? -1 : tone, r: S[set].r[v], an: S[set].anchor });
+      for (const l of t.j.landmarks) if (!l.model) put(sg, l.x, l.y, Object.assign(l, { v: 0, r: S[l.set].r[0], an: S[l.set].anchor, lm: true, tone: l.tone == null ? -1 : l.tone }));
+      Object.assign(TSP, { st: 2, atlas: t.at, sets: S, lms: t.j.landmarks, ischia: t.j.ischia, models: t.j.models || [], tones: t.j.tones || null });
       for (const md of TSP.models) { md.img = new Image(); md.img.onload = () => scheduleVector(); md.img.src = md.file; }
     }
     Object.assign(ICO, { st: 2, mg, tg, sg, CELL, cw, atlas: im, N: im.width / 10 });
-    PIX.vtKey = ''; scheduleVector();
+    PIX.vtKey = ''; scheduleVector(); if (G && typeof renderMarkers === 'function') renderMarkers();
   }).catch(() => { ICO.st = 3; });
 }
 // нарисовать участок [X0..X1)×[Y0..Y1) на холст c в масштабе S: деревья, нарисованные горы и холмы — в одной очереди от дальних к ближним (по y)
@@ -3291,6 +3292,154 @@ function modelsDraw(ctx, vx0, vy0, vx1, vy1, withModel = true) {
     }
   }
 }
+/* --- политический режим (G6): не заливка, а тонировка — цвет державы с яркостью земли поверх всего (земля, горы, рощи), режимом «цвет»;
+   сила k — от расстояния до границы державы: у границы ~0,75, в глубине ~0,3 (переход ~25 px экрана). Поле расстояний считается
+   по маске держав в четверть разрешения — только при смене владельцев; слой тонировки — при смене масштаба (после остановки) --- */
+function polA() {   // доля политического режима (плавное переключение за 0,3 с)
+  const to = UI.mapMode === 'pol' ? 1 : 0; if (UI.polT0 == null) return to;
+  const t = clamp((performance.now() - UI.polT0) / 300, 0, 1); if (t < 1) scheduleVector(); else UI.polT0 = null;
+  return UI.polFrom + (to - UI.polFrom) * t * t * (3 - 2 * t);
+}
+// своя палитра: насыщенные цвета без серых, почти белых и почти чёрных; у соседей — разные тона
+let POLCOL = null;
+function POLC() {
+  if (POLCOL) return POLCOL;
+  const hsl = hex => { const n = parseInt(hex.slice(1), 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    let h = 0; if (d) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return [h * 60, d ? d / (1 - Math.abs(2 * l - 1)) : 0, l]; };
+  const css = (h, s, l) => `hsl(${Math.round(h)},${Math.round(s * 100)}%,${Math.round(l * 100)}%)`;
+  // соседство держав — по соседству их регионов на старте
+  const nb = {}; for (const id in NEIGH) { const o = R(id) && R(id).owner; if (!o) continue; for (const n of NEIGH[id]) { const p = R(n.to) && R(n.to).owner; if (p && p !== o) { (nb[o] = nb[o] || new Set()).add(p); } } }
+  const fs = Object.keys(FACTIONS).sort((a, b) => Object.values(G ? G.regions : {}).filter(r => r.owner === b).length - Object.values(G ? G.regions : {}).filter(r => r.owner === a).length);
+  const hue = {}, out = {}, dh = (a, b) => { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); };
+  for (const f of ['byz', ...fs.filter(f => f !== 'byz')]) {
+    if (f === 'free' || f === 'rebel' && false) continue;
+    const [h0, s0, l0] = hsl(FACTIONS[f].color || '#808080'), grey = s0 < 0.3 || l0 < 0.14 || l0 > 0.86;
+    const used = [...(nb[f] || [])].filter(o => o in hue).map(o => hue[o]);
+    const score = h => used.length ? Math.min(...used.map(u => dh(h, u))) : 180;
+    const earth = c => c > 32 && c < 190;   // жёлто-зелёные тона совпадают с травой и степью — тонировка ими не видна
+    let h = h0;
+    if (grey || earth(h0) || score(h0) < 34) { let best = h0, bs = -1; for (let k = 0; k < 72; k++) { const c = (k * 5 + (grey ? 0 : h0)) % 360; if (earth(c)) continue; const sc = score(c) - (grey ? 0 : dh(c, h0) * 0.15); if (sc > bs) { bs = sc; best = c; } } h = best; }
+    hue[f] = h; out[f] = css(h, clamp(Math.max(s0, 0.62), 0.62, 0.85), clamp(l0, 0.4, 0.56));
+  }
+  out.byz = css(hsl(FACTIONS.byz.color)[0], 0.75, 0.42);
+  return POLCOL = out;
+}
+const darkCol = c => c.replace(/hsl\((\d+),(\d+)%,(\d+)%\)/, (m, h, s, l) => `hsl(${h},${Math.min(95, +s + 10)}%,${Math.round(+l * 0.6)}%)`);   // затемнён на 40 %
+function ownerAtMap(x, y) { if (!PIX.ids || !G) return null; const px = Math.floor(x / PIX.s), py = Math.floor(y / PIX.s); if (px < 0 || py < 0 || px >= PIX.w || py >= PIX.h) return null; const v = PIX.ids[py * PIX.w + px]; return v ? G.prov[v - 1] : null; }
+const POLT = { sig: '', fidx: null, own: null, dist: null, cv: null, zk: 0 };
+function polField() {   // владельцы в четверть разрешения и расстояние до границы державы (в px карты)
+  const sig = (G.prov || []).join(','); if (sig === POLT.sig && POLT.own) return;
+  POLT.sig = sig; POLT.cv = null;
+  const S = 4, W = PIX.w, H = PIX.h, w = Math.ceil(W / S), h = Math.ceil(H / S), own = new Int16Array(w * h).fill(-1), fl = Object.keys(FACTIONS), fi = {}; fl.forEach((f, i) => fi[f] = i);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = PIX.ids[Math.min(H - 1, y * S + 2) * W + Math.min(W - 1, x * S + 2)]; if (v) { const o = G.prov[v - 1]; own[y * w + x] = o && o in fi ? fi[o] : -1; } }
+  const INF = 1e9, d = new Float32Array(w * h).fill(INF);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x, o = own[i]; if (o < 0) continue;
+    if ((x > 0 && own[i - 1] !== o && own[i - 1] >= 0) || (x < w - 1 && own[i + 1] !== o && own[i + 1] >= 0) || (y > 0 && own[i - w] !== o && own[i - w] >= 0) || (y < h - 1 && own[i + w] !== o && own[i + w] >= 0)) d[i] = 0; }
+  const D1 = 1, D2 = Math.SQRT2;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; let m = d[i]; if (x > 0) m = Math.min(m, d[i - 1] + D1); if (y > 0) { m = Math.min(m, d[i - w] + D1); if (x > 0) m = Math.min(m, d[i - w - 1] + D2); if (x < w - 1) m = Math.min(m, d[i - w + 1] + D2); } d[i] = m; }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) { const i = y * w + x; let m = d[i]; if (x < w - 1) m = Math.min(m, d[i + 1] + D1); if (y < h - 1) { m = Math.min(m, d[i + w] + D1); if (x < w - 1) m = Math.min(m, d[i + w + 1] + D2); if (x > 0) m = Math.min(m, d[i + w - 1] + D2); } d[i] = m; }
+  Object.assign(POLT, { S, w, h, own, dist: d, fl });
+}
+function polLayer(zk) {   // RGBA: цвет державы, альфа = сила тонировки (зависит от масштаба)
+  const { w, h, own, dist, fl, S } = POLT, c = POLT.cv || document.createElement('canvas'); if (c.width !== w) { c.width = w; c.height = h; }
+  const x = c.getContext('2d'), im = x.createImageData(w, h), d = im.data, PC = POLC(), rgb = {};
+  const tmp = document.createElement('canvas').getContext('2d');
+  const toRgb = f => { if (rgb[f]) return rgb[f]; tmp.fillStyle = PC[f] || '#888'; const m = tmp.fillStyle.match(/[0-9a-f]{2}/gi); return rgb[f] = m ? m.map(q => parseInt(q, 16)) : [128, 128, 128]; };
+  for (let i = 0; i < w * h; i++) { const o = own[i]; if (o < 0) continue; const f = fl[o]; if (f === 'free' || !PC[f]) continue;
+    const ds = dist[i] * S * zk, k = 0.38 + 0.42 * Math.exp(-ds / 12), c3 = toRgb(f), q = i * 4; d[q] = c3[0]; d[q + 1] = c3[1]; d[q + 2] = c3[2]; d[q + 3] = k * 255; }
+  x.putImageData(im, 0, 0); POLT.cv = c; POLT.zk = zk;
+}
+function polOverlay(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  const pa = polA(); if (pa <= 0 || !PIX.ids || !G || !G.prov) return;
+  polField();
+  const moving = performance.now() - (UI.lastMove || 0) < 160;
+  if (!POLT.cv || (Math.abs(Math.log(POLT.zk / z)) > 0.08 && !moving)) polLayer(z);
+  else if (Math.abs(Math.log(POLT.zk / z)) > 0.08) { clearTimeout(POLT.t); POLT.t = setTimeout(scheduleVector, 180); }
+  const M = MAPINFO, c = POLT.cv, sx = c.width / M.W;
+  if (!POLT.riv && PIX.mtn) {   // маска рек: русла не тонируются — вода остаётся водой
+    const W = PIX.w, H = PIX.h, rc = document.createElement('canvas'); rc.width = W; rc.height = H; const rx = rc.getContext('2d'), im = rx.createImageData(W, H), d = im.data, mt = PIX.mtn;
+    for (let i = 0; i < W * H; i++) if (mt[i] === 2) d[i * 4 + 3] = 255;
+    rx.putImageData(im, 0, 0); POLT.riv = rc;
+  }
+  const X0 = Math.max(0, vx0), Y0 = Math.max(0, vy0), cw = ctx.canvas.width, ch = ctx.canvas.height;
+  const sc = POLT.scr || (POLT.scr = document.createElement('canvas')); if (sc.width !== cw || sc.height !== ch) { sc.width = cw; sc.height = ch; }
+  const s2 = sc.getContext('2d'); s2.setTransform(1, 0, 0, 1, 0, 0); s2.globalCompositeOperation = 'copy'; s2.imageSmoothingEnabled = true;
+  s2.drawImage(c, X0 * sx, Y0 * sx, (vx1 - X0) * sx, (vy1 - Y0) * sx, dpr * (v.x + X0 * z), dpr * (v.y + Y0 * z), (vx1 - X0) * z * dpr, (vy1 - Y0) * z * dpr);
+  if (POLT.riv) { const r = POLT.riv, k = r.width / M.W; s2.globalCompositeOperation = 'destination-out'; s2.drawImage(r, X0 * k, Y0 * k, (vx1 - X0) * k, (vy1 - Y0) * k, dpr * (v.x + X0 * z), dpr * (v.y + Y0 * z), (vx1 - X0) * z * dpr, (vy1 - Y0) * z * dpr); }
+  s2.globalCompositeOperation = 'source-over';
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'color'; ctx.globalAlpha = pa; ctx.drawImage(sc, 0, 0); ctx.restore();
+}
+// границы держав в политическом режиме: с каждой стороны — линия в цвете своей державы (затемнённом), ничейные — пунктир
+function polBorders(ctx, z, vx0, vy0, vx1, vy1, pa) {
+  const C = VEC.cls; if (!C || !G || !G.prov) return; const PC = POLC(), off = 0.8 / z, lw = 1.6 / z, paths = new Map(), dash = new Path2D();
+  const side = g => { if (g.side != null) return g.side; const q = g.pts, n = q.length / 2, i = Math.max(0, Math.floor(n / 2) - 1); const dx = q[i * 2 + 2] - q[i * 2], dy = q[i * 2 + 3] - q[i * 2 + 1], L = Math.hypot(dx, dy) || 1, mx = (q[i * 2] + q[i * 2 + 2]) / 2, my = (q[i * 2 + 1] + q[i * 2 + 3]) / 2, nx = -dy / L * 1.5, ny = dx / L * 1.5;
+    const pv = (x, y) => { const px = Math.floor(x / PIX.s), py = Math.floor(y / PIX.s); return PIX.ids[py * PIX.w + px] - 1; }; return g.side = pv(mx + nx, my + ny) === g.a ? 1 : pv(mx - nx, my - ny) === g.a ? -1 : 1; };
+  const offLine = (path, q, sg) => { const n = q.length / 2; for (let i = 0; i < n; i++) { const i0 = Math.max(0, i - 1), i1 = Math.min(n - 1, i + 1), dx = q[i1 * 2] - q[i0 * 2], dy = q[i1 * 2 + 1] - q[i0 * 2 + 1], L = Math.hypot(dx, dy) || 1, x = q[i * 2] - dy / L * off * sg, y = q[i * 2 + 1] + dx / L * off * sg; if (i) path.lineTo(x, y); else path.moveTo(x, y); } };
+  for (const g of C.s) {
+    if (g.x1 < vx0 || g.x0 > vx1 || g.y1 < vy0 || g.y0 > vy1) continue;
+    const oa = G.prov[g.a], ob = G.prov[g.b];
+    if (oa === 'free' || ob === 'free' || !oa || !ob) { const q = g.pts; dash.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) dash.lineTo(q[i], q[i + 1]); }
+    const sg = side(g);
+    for (const [o, s2] of [[oa, sg], [ob, -sg]]) { if (!o || o === 'free' || !PC[o]) continue; const col = darkCol(PC[o]); let p = paths.get(col); if (!p) paths.set(col, p = new Path2D()); offLine(p, g.pts, s2); }
+  }
+  ctx.save(); ctx.globalAlpha = pa; ctx.lineJoin = 'round'; ctx.lineWidth = lw;
+  for (const [col, p] of paths) { ctx.strokeStyle = col; ctx.stroke(p); }
+  ctx.setLineDash([4 / z, 3 / z]); ctx.strokeStyle = 'rgba(40,30,25,.85)'; ctx.lineWidth = 1.3 / z; ctx.stroke(dash); ctx.setLineDash([]);
+  ctx.restore();
+}
+/* --- подкраска спрайтов под землю (G1): вариант спрайта с цветом тона земли у подножия (mktone.py, 8 тонов), с сохранением яркости:
+   у подножия ~60 %, к вершине ~15 %, снег не трогаем. Варианты делаются один раз по требованию и хранятся (не больше ~400) --- */
+const TINT = { c: new Map() };
+function tintCanvas(src, sx, sy, sw, sh, col, an) {
+  const c = document.createElement('canvas'); c.width = sw; c.height = sh; const x = c.getContext('2d'); x.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  if (!col) return c;
+  const im = x.getImageData(0, 0, sw, sh), d = im.data, cl = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 + 1e-4;
+  for (let yy = 0; yy < sh; yy++) {
+    const t = clamp(((yy + 0.5) / sh - 0.15) / Math.max(0.2, an - 0.15), 0, 1), w0 = 0.15 + 0.45 * t * t * (3 - 2 * t);
+    for (let xx = 0; xx < sw; xx++) {
+      const o = (yy * sw + xx) * 4; if (!d[o + 3]) continue;
+      const r = d[o] / 255, g = d[o + 1] / 255, b = d[o + 2] / 255, lum = r * 0.3 + g * 0.59 + b * 0.11, mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const white = clamp((lum - 0.74) / 0.14, 0, 1) * clamp(1 - (mx - mn) / (mx + 1e-4) / 0.25, 0, 1), w = w0 * (1 - white), k = lum / cl;
+      d[o] = 255 * (r * (1 - w) + Math.min(1, col[0] * k) * w); d[o + 1] = 255 * (g * (1 - w) + Math.min(1, col[1] * k) * w); d[o + 2] = 255 * (b * (1 - w) + Math.min(1, col[2] * k) * w);
+    }
+  }
+  x.putImageData(im, 0, 0); return c;
+}
+function tintGet(key, make) {
+  let c = TINT.c.get(key); if (c) { TINT.c.delete(key); TINT.c.set(key, c); return c; }
+  c = make(); TINT.c.set(key, c); if (TINT.c.size > 400) TINT.c.delete(TINT.c.keys().next().value); return c;
+}
+function tintedSprite(set, v, tone) {
+  const S = TSP.sets[set], r = S.r[v], col = TSP.tones && tone >= 0 ? TSP.tones[tone] : null;
+  return tintGet(set + ':' + v + ':' + tone, () => tintCanvas(TSP.atlas, r[0], r[1], r[2], r[3], col, S.anchor));
+}
+function tintedTree(con, idx, tone) {
+  const N = ICO.N, col = TSP.tones && tone >= 0 ? TSP.tones[tone] : null;
+  return tintGet('t' + con + ':' + idx + ':' + tone, () => tintCanvas(ICO.atlas, idx * N, con * N, N, N, col, 0.72));
+}
+// уникальные горы вблизи — поверх границ (G4); в политическом режиме — с тем же оттенком державы
+function landmarksLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+  const u = geoU(z); if (u <= 0 || TSP.st !== 2) return;
+  const k = dpr * z, a = Math.min(1, u * 8), pa = polA();
+  for (const m of TSP.lms) {
+    if (m.model || !m.r) continue;
+    const r = m.r, w = m.w, h = w * r[3] / r[2], x0 = m.x - w / 2, y0 = m.y - h * m.an;
+    if (x0 > vx1 || x0 + w < vx0 || y0 > vy1 || y0 + h < vy0) continue;
+    const tw = Math.max(1, Math.ceil(w * k)), th = Math.max(1, Math.ceil(h * k)), t = TL.lmc || (TL.lmc = document.createElement('canvas'));
+    if (t.width < tw || t.height < th) { t.width = Math.max(t.width, tw); t.height = Math.max(t.height, th); }
+    const c = t.getContext('2d'); c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.clearRect(0, 0, tw, th); c.imageSmoothingQuality = 'high';
+    c.drawImage(tintedSprite(m.set, 0, m.tone), 0, 0, r[2], r[3], 0, 0, tw, th);
+    if (WV.mask) {   // подножие — по берегу (мягкий край), с 50 % высоты вниз
+      const m2 = TL.m2 || (TL.m2 = document.createElement('canvas')); if (m2.width < tw || m2.height < th) { m2.width = Math.max(m2.width, tw); m2.height = Math.max(m2.height, th); }
+      const mc = m2.getContext('2d'); mc.globalCompositeOperation = 'source-over'; mc.clearRect(0, 0, tw, th); mc.drawImage(seaBlur(), x0 / 2, y0 / 2, w / 2, h / 2, 0, 0, tw, th);
+      const gr = mc.createLinearGradient(0, th * 0.4, 0, th * 0.55); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
+      mc.globalCompositeOperation = 'destination-in'; mc.fillStyle = gr; mc.fillRect(0, 0, tw, th);
+      c.globalCompositeOperation = 'destination-out'; c.drawImage(m2, 0, 0, tw, th, 0, 0, tw, th);
+    }
+    if (pa > 0) { const o = ownerAtMap(m.x, m.y); if (o && POLC()[o]) { c.globalCompositeOperation = 'source-atop'; c.globalAlpha = 1; c.fillStyle = POLC()[o]; c.globalCompositeOperation = 'color'; c.globalAlpha = 0.3 * pa; c.fillRect(0, 0, tw, th); c.globalAlpha = 1; c.globalCompositeOperation = 'destination-in'; c.drawImage(tintedSprite(m.set, 0, m.tone), 0, 0, r[2], r[3], 0, 0, tw, th); } }
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = a; ctx.drawImage(t, 0, 0, tw, th, dpr * v.x + x0 * k, dpr * v.y + y0 * k, tw, th); ctx.restore();
+  }
+}
 function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const u = geoU(z); if (u <= 0 || ICO.st !== 2 || TSP.st !== 2) return;
   const sc = 1, k = dpr * z, M = 150, q = [];   // тот же размер, что у запечённых в дальний вид: при приближении спрайты не прыгают, только становятся чётче
@@ -3301,28 +3450,29 @@ function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const A = TSP.atlas, N = ICO.N, sea = WV.mask;
   for (const m of q) {
     if (m.set) {
+      if (m.lm) continue;   // уникальные горы — отдельно, поверх границ (landmarksLive)
       const r = m.r, w = m.w * sc, h = w * r[3] / r[2], x0 = m.x - w / 2, y0 = m.y - h * m.an;
       if (x0 > vx1 || x0 + w < vx0 || y0 > vy1 || y0 + h < vy0) continue;
       if ((m.c || m.lm) && sea) {   // берег: нижние 25 % высоты (подножие) — только над сушей, с мягким краем; верх может нависать над водой
         const tw = Math.max(1, Math.ceil(w * k)), th = Math.max(1, Math.ceil(h * k)), t = TL.tmp || (TL.tmp = document.createElement('canvas'));
         if (t.width < tw || t.height < th) { t.width = Math.max(t.width, tw); t.height = Math.max(t.height, th); }
         const c = t.getContext('2d'); c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, tw, th); c.imageSmoothingQuality = 'high';
-        c.drawImage(A, r[0], r[1], r[2], r[3], 0, 0, tw, th);
+        c.drawImage(tintedSprite(m.set, m.v, m.tone), 0, 0, r[2], r[3], 0, 0, tw, th);
         // маска «море под подножием»: море (размытое на 2–3 px) × плавная полоса от 62 % до 80 % высоты спрайта — без прямоугольной подрезки
         const m2 = TL.m2 || (TL.m2 = document.createElement('canvas')); if (m2.width < tw || m2.height < th) { m2.width = Math.max(m2.width, tw); m2.height = Math.max(m2.height, th); }
         const mc = m2.getContext('2d'); mc.globalCompositeOperation = 'source-over'; mc.clearRect(0, 0, tw, th); mc.imageSmoothingQuality = 'high';
         mc.drawImage(seaBlur(), x0 / 2, y0 / 2, w / 2, h / 2, 0, 0, tw, th);
-        const gr = mc.createLinearGradient(0, th * 0.62, 0, th * 0.8); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
+        const gr = m.lm ? mc.createLinearGradient(0, th * 0.4, 0, th * 0.55) : mc.createLinearGradient(0, th * 0.62, 0, th * 0.8);   // у уникальных гор подножие ниже 55 % — режется по берегу раньше gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)');
         mc.globalCompositeOperation = 'destination-in'; mc.fillStyle = gr; mc.fillRect(0, 0, tw, th);
         c.globalCompositeOperation = 'destination-out'; c.drawImage(m2, 0, 0, tw, th, 0, 0, tw, th); c.globalCompositeOperation = 'source-over';
         ctx.drawImage(t, 0, 0, tw, th, x0, y0, w, h);
-      } else ctx.drawImage(A, r[0], r[1], r[2], r[3], x0, y0, w, h);
+      } else ctx.drawImage(tintedSprite(m.set, m.v, m.tone), 0, 0, r[2], r[3], x0, y0, w, h);
       continue;
     }
     if (m.idx !== undefined) {   // роща (старые кроны, реже)
       const r = m.r * sc, px = Math.max(3, r * 4.2);
       if (m.x + px < vx0 || m.x - px > vx1 || m.y - px > vy1 || m.y + px < vy0) continue;
-      ctx.drawImage(ICO.atlas, m.idx * N, m.con * N, N, N, m.x - px / 2, m.y - px * 0.72, px, px);
+      ctx.drawImage(tintedTree(m.con, m.idx, m.tone), 0, 0, N, N, m.x - px / 2, m.y - px * 0.72, px, px);
     }
   }
   ctx.restore();
@@ -3421,16 +3571,16 @@ function paintVector() {
     }
     const k = (img.naturalWidth || img.width) / M.W;
     ctx.drawImage(img, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
-    if (z * dpr >= 1.15 && HI.idx && !(TSP.st === 2 && UI.mapMode === 'geo' && geoU(z) >= 1 && HIC.idx)) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче (в «Местности» с 3× их целиком закрывают чистые)
+    if (z * dpr >= 1.15 && HI.idx && !(TSP.st === 2 && geoU(z) >= 1 && HIC.idx)) drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS);   // вблизи — плитки вдвое чётче (в «Местности» с 3× их целиком закрывают чистые)
     // вблизи — подложка без гор и деревьев: их рисует ближний уровень рельефа (плавно, вместе с ним)
-    const tt = clamp((z * dpr - 1.8) / 1.6, 0, 1), tA = TSP.st === 2 ? (UI.mapMode === 'geo' ? geoU(z) : tt * tt * (3 - 2 * tt)) : 0;
+    const tt = clamp((z * dpr - 1.8) / 1.6, 0, 1), tA = TSP.st === 2 ? geoU(z) : 0;
     if (tA > 0) { HIC.load(); if (HIC.idx) { ctx.globalAlpha = tA; drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, HIC); ctx.globalAlpha = 1; } }
-    if (UI.mapMode === 'geo') groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // резкая фактура земли при сильном приближении
+    groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // резкая фактура земли при сильном приближении
   } else { ctx.fillStyle = '#808080'; ctx.fillRect(dx0, dy0, dx1 - dx0, dy1 - dy0); }
   // раскраска держав: вблизи — видимая часть в полном разрешении, на отдалении — общий холст вполовину разрешения
   // вблизи — гладкая заливка с подпикселями и резкими значками гор и лесов. Пересчёт дорогой: пока карту двигают, показываем
   // последний готовый чёткий кадр (растянутый), а пересчитываем после остановки. Между 1,8× и 3,4× — плавный переход.
-  const zd = z * dpr, shS = clamp(Math.round(zd / 2), 1, 10), shGeo = UI.mapMode === 'geo', sk = PIX.sk;
+  const zd = z * dpr, shS = clamp(Math.round(zd / 2), 1, 10), shGeo = true, sk = PIX.sk;   // обе карты — на основе «Местности»: политическая — тонировка и цветные границы поверх
   if (zd >= 1.5) icoLoad();
   const shSame = sk && sk.geo === shGeo && sk.ver === PIX.shInv && sk.ico === (ICO.st === 2 && (shGeo || UI.ridgeA < 190));
   const shFits = shSame && sk.S === shS && vx0 >= sk.X0 && vy0 >= sk.Y0 && vx1 <= sk.X1 && vy1 <= sk.Y1;
@@ -3446,7 +3596,7 @@ function paintVector() {
   const drawSharp = () => { if (!shA) return; const k = PIX.sk, [sx0, sy0] = toS(k.X0, k.Y0), [sx1, sy1] = toS(k.X1, k.Y1); ctx.globalAlpha = shA; ctx.imageSmoothingQuality = 'high'; ctx.drawImage(k.cv, sx0, sy0, sx1 - sx0, sy1 - sy0); ctx.globalAlpha = 1; };
   const shFull = shA >= 1 && skNow.X0 <= vx0 && skNow.Y0 <= vy0 && skNow.X1 >= vx1 && skNow.Y1 >= vy1;
   if (shFull) drawSharp();   // чёткий кадр закрывает весь экран
-  else if (UI.mapMode === 'geo') {   // «Местность»: державы без заливки; земли за краем зоны — сплошная вуаль (вместе с руслами), затем чёткий слой вблизи
+  else if (true) {   // обе карты: державы без заливки; земли за краем зоны — сплошная вуаль (вместе с руслами), затем чёткий слой вблизи
     if (PIX.ids && PIX.outer) {
       if (!PIX.outerCv) {
         const W = PIX.w, H2 = PIX.h, tw = Math.ceil(W / 2), th = Math.ceil(H2 / 2), c = document.createElement('canvas'); c.width = tw; c.height = th;
@@ -3472,9 +3622,10 @@ function paintVector() {
     const [sx0, sy0] = toS(X0, Y0), [sx1, sy1] = toS(X1, Y1);
     ctx.drawImage(PIX.vt, sx0, sy0, sx1 - sx0, sy1 - sy0);
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
-  if (!shFull && UI.mapMode !== 'geo') drawSharp();   // переход и края: чёткий слой поверх быстрого
-  if (UI.mapMode === 'geo') terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // «Местность»: рельеф и рощи — каждый кадр, с коротким переходом
-  if (TSP.st === 2 && z * dpr >= 1.2 && !(UI.mapMode === 'geo' && geoU(z) > 0)) { ctx.save(); ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); modelsDraw(ctx, vx0, vy0, vx1, vy1, false); ctx.restore(); }   // монастыри Афона — и издали, и на политической карте (модель уже запечена в плитки)
+  if (false) drawSharp();   // переход и края: чёткий слой поверх быстрого
+  terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);
+  polOverlay(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // политическая карта: тонировка цветом державы (плавно при переключении)   // «Местность»: рельеф и рощи — каждый кадр, с коротким переходом
+  if (TSP.st === 2 && z * dpr >= 1.2 && !(geoU(z) > 0)) { ctx.save(); ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); modelsDraw(ctx, vx0, vy0, vx1, vy1, false); ctx.restore(); }   // монастыри Афона — и издали, и на политической карте (модель уже запечена в плитки)
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   // границы
@@ -3485,6 +3636,7 @@ function paintVector() {
     ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
     ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
     if (moving) clearTimeout(VEC.settle), VEC.settle = setTimeout(scheduleVector, 160);
+    const pa0 = polA(); if (pa0 > 0) polBorders(ctx, z, vx0, vy0, vx1, vy1, pa0);
   } else if (VEC.cls) {
     const far = z * M.W / 4000 < 0.55;
     const stroke = (list, color, px) => {
@@ -3495,13 +3647,14 @@ function paintVector() {
       }
       ctx.strokeStyle = color; ctx.lineWidth = px / z; ctx.stroke();
     };
-    const C = VEC.cls;
+    const C = VEC.cls, pa = polA();
     stroke(C.c, 'rgba(150,170,190,.28)', 3.2);
     stroke(C.c, 'rgba(14,22,38,1)', 1.9);
-    if (!far) stroke(C.p, 'rgba(255,255,255,.42)', 0.8);
-    stroke(C.r, 'rgba(40,28,40,.75)', 1.4);
+    if (!far) stroke(C.p, pa > 0.5 ? 'rgba(255,250,240,.28)' : 'rgba(255,255,255,.42)', pa > 0.5 ? 0.6 : 0.8);
+    stroke(C.r, pa > 0.5 ? 'rgba(40,28,40,.38)' : 'rgba(40,28,40,.75)', pa > 0.5 ? 1.0 : 1.4);
     stroke(C.e, 'rgba(18,12,18,.95)', 2.2);
-    if (SBORDER[UI.sborder]) stroke(C.s, SBORDER[UI.sborder], 2.6);
+    if (pa < 1 && SBORDER[UI.sborder]) { ctx.globalAlpha = 1 - pa; stroke(C.s, SBORDER[UI.sborder], 2.6); ctx.globalAlpha = 1; }
+    if (pa > 0) polBorders(ctx, z, vx0, vy0, vx1, vy1, pa);   // политическая: граница — линия в цвете каждой державы (затемнённом), без чёрного контура
     // перевалы: пунктир поперёк хребта
     if (M.passes && M.passes.length && !far) {
       const pc = PASSCOL[UI.passcol] || PASSCOL.black;
@@ -3516,6 +3669,7 @@ function paintVector() {
       ctx.setLineDash([]); ctx.lineCap = 'butt';
     }
   }
+  landmarksLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // уникальные горы вблизи — поверх границ (границы под ними)
   if (G) paintSelection(ctx, z);
 }
 // выделение региона и провинции, морские пути, маршруты войск — тоже на камере
@@ -3619,10 +3773,21 @@ function scheduleVector() { if (VEC.raf) return; VEC.raf = requestAnimationFrame
 function drawSelection() { SELP.key = ''; scheduleVector(); }
 function scouted(f) { return courtHeroes().some(h => h.role === 'spy' && h.mission && h.mission.type === 'scout' && h.mission.target === f); }
 function armyLabel(a) { const n = armyMen(a); if (a.owner === 'byz' || scouted(a.owner)) return fmt(n); return '~' + fmt(Math.round(n / 500) * 500 || 500); }
+// подпись области не ставится на уникальную гору: сдвиг к ближайшему свободному месту рядом с горой
+function labelPos(id) {
+  const p = MAPINFO.pos[id]; if (!p || TSP.st !== 2) return p;
+  for (const l of TSP.lms) {
+    if (!l.r || l.model) continue; const h = l.w * l.r[3] / l.r[2], x0 = l.x - l.w * 0.45, x1 = l.x + l.w * 0.45, y0 = l.y - h * l.an * 0.95, y1 = l.y + h * (1 - l.an);
+    if (p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1) continue;
+    const c = [[p[0], y1 + 9], [x0 - 22, p[1]], [x1 + 22, p[1]], [p[0], y0 - 8]];
+    return c.sort((a, b) => Math.hypot(a[0] - p[0], a[1] - p[1]) - Math.hypot(b[0] - p[0], b[1] - p[1]))[0];
+  }
+  return p;
+}
 function renderMarkers() {
   const M = MAPINFO; let h = '';
   for (const d of REGION_DEFS) {
-    const id = d[0], r = R(id), p = M.pos[id];
+    const id = d[0], r = R(id), p = labelPos(id);
     const besieged = G.armies.some(a => a.region === id && atWar(a.owner, r.owner));
     h += `<div class="rm ${id === 'konst' ? 'cap' : ''} ${UI.sel === id ? 'selr' : ''} ${besieged ? 'siege' : ''}" data-reg="${id}" style="left:${p[0]}px;top:${p[1]}px">
       <span class="dot" style="background:${FACTIONS[r.owner].color}"></span> <span class="nm">${esc(RNAME[id])}</span><br><span class="fx">${'▮'.repeat(Math.min(6, r.fort))}${r.owner === 'byz' ? ' ' + Math.round(r.mood) + '☺' : ''}</span></div>`;
@@ -3658,7 +3823,7 @@ function renderArmies() {
 }
 
 // режимы карты: «Политическая» (цвета держав поверх местности) и «Местность» (горы, реки, моря без заливки)
-function setMapMode(m) { UI.mapMode = m; const b = $('zmode'); if (b) { b.classList.toggle('on', m === 'geo'); b.title = m === 'geo' ? 'Режим карты: местность (M — политическая)' : 'Режим карты: политическая (M — местность)'; } $('markers').classList.toggle('geo', m === 'geo'); PIX.vtKey = ''; VEC.cache = null; scheduleVector(); }
+function setMapMode(m) { if (m !== UI.mapMode) { UI.polFrom = polA(); UI.polT0 = performance.now(); } UI.mapMode = m; const b = $('zmode'); if (b) { b.classList.toggle('on', m === 'geo'); b.title = m === 'geo' ? 'Режим карты: местность (M — политическая)' : 'Режим карты: политическая (M — местность)'; } $('markers').classList.toggle('geo', m === 'geo'); PIX.vtKey = ''; VEC.cache = null; scheduleVector(); }
 
 /* --- облака: отдельный холст поверх карты, медленно плывут по ветру (карта при этом не перерисовывается) --- */
 const CL = { on: true, sprites: [], list: [], last: 0 };
@@ -3997,14 +4162,14 @@ function volcFrame(now) {
   let cv = $('volccv');
   if (!cv) { const w = $('mapwrap'); if (!w) return; cv = document.createElement('canvas'); cv.id = 'volccv'; cv.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:1'; w.insertBefore(cv, $('cloudcv')); }
   const v = UI.view, dpr = Math.min(2, window.devicePixelRatio || 1), zd = v.z * dpr;
-  const show = TSP.st === 2 && G && UI.tab === 'map' && (UI.mapMode === 'geo' ? v.z > GEO_T0 : zd >= 1.8) && !document.hidden && !$('app').classList.contains('hidden');
+  const show = TSP.st === 2 && G && UI.tab === 'map' && v.z > GEO_T0 && !document.hidden && !$('app').classList.contains('hidden');
   if (now - VCV.last > 1000) volcEvents();
   if (!show) { if (cv.width) cv.width = 0; VCV.last = now; return; }
   if (now - VCV.last < 40) return; VCV.t += Math.min(0.2, (now - VCV.last) / 1000); VCV.last = now;
   const wrap = $('mapwrap'), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
   if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Hd * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Hd * dpr); cv.style.width = Wd + 'px'; cv.style.height = Hd + 'px'; }
   const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height);
-  const tt = clamp((zd - 1.8) / 1.6, 0, 1), vis = UI.mapMode === 'geo' ? geoU(v.z) : tt * tt * (3 - 2 * tt), T = VCV.t, Y = gameYear();
+  const tt = clamp((zd - 1.8) / 1.6, 0, 1), vis = geoU(v.z), T = VCV.t, Y = gameYear();
   x.setTransform(dpr * v.z, 0, 0, dpr * v.z, dpr * v.x, dpr * v.y);
   const vx0 = -v.x / v.z, vy0 = -v.y / v.z, vx1 = vx0 + Wd / v.z, vy1 = vy0 + Hd / v.z;
   const A = TSP.atlas, S = TSP.sets, wl = Math.hypot(WIND[0], WIND[1]), wx = WIND[0] / wl, wy = WIND[1] / wl;
@@ -4438,7 +4603,6 @@ function showGfxMenu() {
   const onoff = v => v ? 'включены' : 'выключены';
   modal(`<h2>Графика</h2><div class="btnrow" style="flex-direction:column">
    <button id="gStyle">Стиль карты: ${STYLENAMES[MAPSTYLE] || MAPSTYLE} (сменить — страница перезагрузится, игра сохранится)</button>
-   <button id="gRidge">${UI.ridgeA === 85 ? 'Горы на политической карте: видны сквозь цвет державы (скрыть)' : 'Горы на политической карте: скрыты под цветом державы (показать)'}</button>
    <button id="gSB">Граница держав: ${{ black: 'чёрная', red: 'красная', none: 'нет' }[UI.sborder]} (сменить)</button>
    <button id="gPC">Перевалы: ${{ black: 'чёрные', red: 'красные', brown: 'коричневые' }[UI.passcol]} (сменить)</button>
    <button id="gCl">Облака: ${onoff(CL.on)}</button>
@@ -4448,7 +4612,7 @@ function showGfxMenu() {
    <button id="gBack">← Назад</button><button id="gClose" class="main">Закрыть</button></div>`);
   const st = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
   $('gStyle').onclick = () => { save(); st('poly_style', { wc: 'wc2', wc2: 'sat', sat: 'wc' }[MAPSTYLE] || 'wc'); location.reload(); };
-  $('gRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; st('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); drawOverlay(); PIX.vtKey = ''; scheduleVector(); showGfxMenu(); };
+  if ($('gRidge')) $('gRidge').onclick = () => { UI.ridgeA = UI.ridgeA === 85 ? 190 : 85; st('poly_ridge', UI.ridgeA === 85 ? 'owner' : 'own'); drawOverlay(); PIX.vtKey = ''; scheduleVector(); showGfxMenu(); };
   $('gSB').onclick = () => { UI.sborder = { black: 'red', red: 'none', none: 'black' }[UI.sborder]; st('poly_sborder', UI.sborder); VEC.cache = null; scheduleVector(); showGfxMenu(); };
   $('gPC').onclick = () => { UI.passcol = { black: 'red', red: 'brown', brown: 'black' }[UI.passcol]; st('poly_passcol', UI.passcol); scheduleVector(); showGfxMenu(); };
   $('gCl').onclick = () => { CL.on = !CL.on; st('poly_clouds', CL.on ? 'on' : 'off'); showGfxMenu(); };

@@ -278,6 +278,11 @@ if NOI:
     SC = 0.88 / 1.18 / 1.1   # итоговая насыщенность ≈ 0,88: paint() в конце ещё раз поднимает насыщенность (×1,18) и контраст (×1,2)
     TEX = {'grass': _tex('grass', SC * 0.85, 0.92), 'steppe': _tex('steppe', SC, 1.0), 'maquis': _tex('maquis', SC, 1.0),
            'sand': _tex('sand', SC, 1.0), 'marsh': _tex('marsh', SC, 1.0)}
+    # промежуточные оттенки между травой и степью: выгоревшая трава (50/50 с тёплым оттенком) и оливковая степь
+    TEX['burnt'] = [np.clip((g + st) * 0.5 * np.array([1.05, 1.0, 0.86], np.float32), 0, 1) for g, st in zip(TEX['grass'], TEX['steppe'])]
+    TEX['olive'] = [np.clip((st * 0.75 + g * 0.25) * np.array([0.92, 1.0, 0.78], np.float32), 0, 1) for g, st in zip(TEX['grass'], TEX['steppe'])]
+    # «зелёность» эталона — по всей карте сразу, размыта на ~15 px: переход трава ↔ степь шириной 30–60 px, без швов между плитками
+    GREEN = nd.gaussian_filter(np.clip((ecol[..., 1] - (ecol[..., 0] + ecol[..., 2]) / 2 - 0.005) / 0.05, 0, 1), 15).astype(np.float32)
     # общие для всей карты поля шума (без швов между плитками): сдвиг весов классов и смешение двух масштабов текстуры
     _r = np.random.default_rng(31)
     NZQ = nd.gaussian_filter(_r.standard_normal(((H + 3) // 4, (W + 3) // 4)).astype(np.float32), 1.3); NZQ /= NZQ.std()
@@ -298,24 +303,29 @@ if NOI:
             for r in st['r']:
                 h_ = r[3]; ya = int(h_ * st['anchor']); band = ATL[r[1] + max(0, ya - h_ // 6):r[1] + ya, r[0]:r[0] + r[2]]
                 m_ = band[..., 3] > 0.8; FOOT[n].append(band[..., :3][m_].mean(0) if m_.any() else np.array([0.5, 0.45, 0.35], np.float32))
-        FEET = [(it[2], it[3], it[4], FOOT[it[0]][it[1]]) for it in TSJ['items'] if not it[0].startswith('pass')] + [(l['x'], l['y'], l['w'], FOOT[l['set']][0]) for l in TSJ['landmarks']]
+        FEET = [(it[2], it[3], it[4], FOOT[it[0]][it[1]]) for it in TSJ['items'] if not it[0].startswith('pass')] + [(l['x'], l['y'], l['w'], FOOT[l['set']][0]) for l in TSJ['landmarks'] if not l.get('model') and l['set'] in FOOT]
         FEET = np.array([(x, y, w, *c) for x, y, w, c in FEET], np.float32)
     except Exception as e:
         print('подошвы: нет данных спрайтов', e); FEET = np.zeros((0, 6), np.float32)
     def close_land(bl, x0, y0, x1, y1):
         h2, w2 = bl.shape[:2]
         tcc = TC[y0:y1, x0:x1]; isl = tcc != 255; ref = ecol[y0:y1, x0:x1]
-        green = nd.gaussian_filter(np.clip((ref[..., 1] - (ref[..., 0] + ref[..., 2]) / 2 - 0.005) / 0.05, 0, 1), 6)   # трава или степь — плавно, без лоскутов
+        green = GREEN[y0:y1, x0:x1]
         ys = np.arange(y0, y1)[:, None] * np.ones((1, x1 - x0))
         q = lambda F: _crop4(F, x0, y0, x1, y1, 1)
         nz = q(NZQ)
         bit = lambda b: ((tcc & b) > 0) & isl
         hill = bit(1) | bit(4) | bit(8)
+        # трава ↔ степь по «зелёности» g: степь (g≈0) → оливковая степь (0,25) → выгоревшая трава (0,5) → трава (≥0,75); класс «степь» — всегда степь
+        g = np.where(bit(64), 0.0, green)
+        plain = ~hill & ~bit(32) & ~bit(16)
         w = {'sand': bit(32) * 1.0, 'marsh': bit(16) * 1.0,
              'maquis': (hill | ((DSEA[y0:y1, x0:x1] < 45) & (ys > SOUTH))) * 1.0,
-             'steppe': (bit(64) | ~hill) * (1 - green) * 1.0, 'grass': (~hill & ~bit(64)) * green * 1.0}
-        w['maquis'] *= (1 - w['sand']) * (1 - w['marsh']); w['steppe'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh']); w['grass'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh'])
-        for k in w: w[k] = np.clip(nd.gaussian_filter(w[k], 3.0) + 0.12 * nz * (w[k] > 0.05), 0, None)
+             'steppe': plain * np.clip((0.25 - g) / 0.25, 0, 1), 'olive': plain * np.clip(1 - np.abs(g - 0.25) / 0.25, 0, 1),
+             'burnt': plain * np.clip(1 - np.abs(g - 0.5) / 0.25, 0, 1), 'grass': plain * np.clip((g - 0.5) / 0.25, 0, 1)}
+        w['maquis'] *= (1 - w['sand']) * (1 - w['marsh'])
+        for k in ('steppe', 'olive', 'burnt', 'grass'): w[k] = w[k] * (1 - w['maquis'])
+        for k in w: w[k] = np.clip(nd.gaussian_filter(w[k], 3.0) + 0.04 * nz * (w[k] > 0.05), 0, None)   # без «камуфляжа»: шум слабый
         tot = sum(w.values()) + 1e-6
         gy = (y0 * 2 + np.arange(h2))[:, None]; gx = (x0 * 2 + np.arange(w2))[None, :]
         mx = _crop4(MXQ, x0, y0, x1, y1, 2)[:h2, :w2][..., None]

@@ -221,11 +221,26 @@ def grade(im, name):
     return Image.fromarray(np.dstack([np.clip(rgb, 0, 255), a[..., 3]]).astype(np.uint8), 'RGBA')
 used = {t[1] for t in items} | {l['set'] for l in lms if not l.get('model')} | {'lm_etna_active', 'lm_etna_erupt', 'athos_monasteries', 'athos_karyes'}
 spr = []
+# неровное подножие уникальных гор: нижние ~45 % альфы × «рваный край» (расстояние от края минус шум двух масштабов: ~3 % и ~1 % ширины);
+# одинаковый для состояний одной горы (Этна: спокойна / активна / извергается) — шум по имени горы, размер у них общий
+def ragged_foot(im, name):
+    a = np.asarray(im).astype(np.float32); al = a[..., 3] / 255; h, w = al.shape
+    base = name.split('_')[1] if name.startswith('lm_etna') else name
+    r = np.random.default_rng(sum(map(ord, base)))
+    nb = nd.gaussian_filter(r.standard_normal((h, w)).astype(np.float32), w * 0.03); nb = (nb - nb.min()) / (np.ptp(nb) + 1e-9)
+    ns = nd.gaussian_filter(r.standard_normal((h, w)).astype(np.float32), w * 0.01); ns = (ns - ns.min()) / (np.ptp(ns) + 1e-9)
+    d = nd.distance_transform_edt(al > 0.5)
+    edge = d - (nb * 0.03 * w * 1.4 + ns * 0.01 * w * 1.4)
+    mask = np.clip(edge / (0.012 * w), 0, 1); mask = mask * mask * (3 - 2 * mask)
+    yy = (np.arange(h)[:, None] + 0.5) / h; f = np.clip((yy - 0.5) / 0.1, 0, 1)   # с 55 % высоты вниз — рвём край, вершина чёткая
+    a[..., 3] = al * (1 - f * (1 - mask)) * 255
+    return Image.fromarray(a.astype(np.uint8), 'RGBA')
 for n in sorted(used):
     for k in range(NV[n]):
         im = grade(Image.open(f'{ART}/{n}/peak_{k}.png').convert('RGBA'), n)
         mw = 900 if n.startswith(('lm_', 'pass_')) else 270
         if im.width > mw: im = im.resize((mw, max(1, round(im.height * mw / im.width))), Image.LANCZOS)
+        if n.startswith('lm_'): im = ragged_foot(im, n)
         spr.append((n, k, im))
 AW = 4096; x = y = rowh = 0; rects = {}
 spr.sort(key=lambda t: -t[2].height)

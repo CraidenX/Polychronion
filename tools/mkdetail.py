@@ -14,14 +14,17 @@ ecol = np.asarray(Image.open(SP + 'terrain/color.jpg').convert('RGB')).astype(np
 # веса классов — как в mkwater.py (close_land), но для всей карты сразу (в четверть разрешения)
 q = lambda a: a[::4, ::4]
 tc = q(TC); isl = tc != 255; ref = q(ecol)
-green = nd.gaussian_filter(np.clip((ref[..., 1] - (ref[..., 0] + ref[..., 2]) / 2 - 0.005) / 0.05, 0, 1), 1.5)
+green = nd.gaussian_filter(np.clip((ecol[..., 1] - (ecol[..., 0] + ecol[..., 2]) / 2 - 0.005) / 0.05, 0, 1), 15)[::4, ::4]   # как в mkwater.py (GREEN)
 dsea = q(nd.distance_transform_edt(~(WP & ~land)).astype(np.float32))
 ys = np.arange(0, H, 4)[:, None] * np.ones((1, tc.shape[1]))
 bit = lambda b: ((tc & b) > 0) & isl
 hill = bit(1) | bit(4) | bit(8)
+g = np.where(bit(64), 0.0, green); plain = ~hill & ~bit(32) & ~bit(16)
+st = plain * np.clip((0.25 - g) / 0.25, 0, 1); ol = plain * np.clip(1 - np.abs(g - 0.25) / 0.25, 0, 1)
+bu = plain * np.clip(1 - np.abs(g - 0.5) / 0.25, 0, 1); gr = plain * np.clip((g - 0.5) / 0.25, 0, 1)
 w = {'sand': bit(32) * 1.0, 'marsh': bit(16) * 1.0, 'maquis': (hill | ((dsea < 45) & (ys > 866))) * 1.0,
-     'steppe': (bit(64) | ~hill) * (1 - green), 'grass': (~hill & ~bit(64)) * green}
-w['maquis'] *= (1 - w['sand']) * (1 - w['marsh']); w['steppe'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh']); w['grass'] *= (1 - w['maquis']) * (1 - w['sand']) * (1 - w['marsh'])
+     'steppe': st + 0.75 * ol + 0.5 * bu, 'grass': gr + 0.25 * ol + 0.5 * bu}   # выгоревшая трава и оливковая степь — детали обеих текстур
+w['maquis'] *= (1 - w['sand']) * (1 - w['marsh']); w['steppe'] *= (1 - w['maquis']); w['grass'] *= (1 - w['maquis'])
 for k in w: w[k] = nd.gaussian_filter(w[k], 0.75)
 tot = sum(w.values()) + 1e-6
 w['steppe'] = w['steppe'] + w['marsh']   # болото — редкое: деталь степи
