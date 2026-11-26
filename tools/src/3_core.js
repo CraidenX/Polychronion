@@ -28,6 +28,20 @@ function syncProv() {
     const gi = REGION_IDX[id]; for (let k = 0; k < P.length; k++) if (P[k][0] === gi) G.prov[k] = r.owner;
     r._po = r.owner;
   }
+  passSync();
+}
+// K6: перевалы — подготовка механики. У каждого перевала (MAPINFO.passes: [провинция А, провинция Б, x1, y1, x2, y2]) — состояние в G.passes:
+// owner — владелец (держава обеих сторон; при разных — прежний, пока держит хотя бы одну сторону, иначе хозяин стороны А),
+// fort — укрепление (0 — нет; уровни — после механики), winterClosed — закрыт зимой (высокие перевалы: высота клетки ≥ PASS_WINTER_H у. м)
+const PASS_WINTER_H = 490;   // у. м (поле высот K4): из 10 перевалов зимой закрыты 5 самых высоких
+function passSync() {
+  const Q = MAPINFO && MAPINFO.passes; if (!Q || !G || !G.prov) return;
+  if (!G.passes || G.passes.length !== Q.length) G.passes = Q.map((q, i) => ({ id: i, owner: null, fort: 0, winterClosed: null }));
+  for (let i = 0; i < Q.length; i++) {
+    const q = Q[i], ps = G.passes[i], a = G.prov[q[0]], b = G.prov[q[1]];
+    ps.owner = a === b ? a : (ps.owner && (ps.owner === a || ps.owner === b) ? ps.owner : a);
+    if (ps.winterClosed == null && GRID.ok && GRID.hgt) { const c = Math.floor((q[3] + q[5]) / 2 / GRID.C) * GRID.GW + Math.floor((q[2] + q[4]) / 2 / GRID.C); ps.winterClosed = (GRID.hgt[c] || 0) >= PASS_WINTER_H; }
+  }
 }
 const fname = f => (G && G.fnames && G.fnames[f]) || FACTIONS[f].name;
 const fshort = f => (G && G.fshort && G.fshort[f]) || FACTIONS[f].short;

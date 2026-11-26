@@ -456,6 +456,12 @@ function outerAtClient(clientX, clientY) {
   return outerAt(px, py);
 }
 // уникальная гора под курсором (только вблизи, где она нарисована)
+function passAt(cx, cy) {   // K6: значок перевала под курсором
+  const Q = MAPINFO.passes; if (!Q || !G || !G.passes || UI.view.z < 0.8) return null;
+  const r = $('mapwrap').getBoundingClientRect(), z = UI.view.z, mx = (cx - r.left - UI.view.x) / z, my = (cy - r.top - UI.view.y) / z, rr = Math.max(6 / z, 2.4);
+  for (let i = 0; i < Q.length; i++) { const q = Q[i], x = (q[2] + q[4]) / 2 + rr * 1.8, y = (q[3] + q[5]) / 2; if (Math.abs(mx - x) < rr * 1.6 && Math.abs(my - y) < rr * 1.8) return [q, G.passes[i]]; }
+  return null;
+}
 function bridgeAt(cx, cy) {   // K3: мост под курсором (значок ~ 22 px экрана)
   if (RIVS.st !== 2 || UI.view.z < 2) return null;
   const r = $('mapwrap').getBoundingClientRect(), mx = (cx - r.left - UI.view.x) / UI.view.z, my = (cy - r.top - UI.view.y) / UI.view.z, R2 = 12 / UI.view.z;
@@ -469,7 +475,8 @@ function landmarkAt(cx, cy) {
   return null;
 }
 function provTip(cx, cy) {
-  const t = $('ptip'), lm = landmarkAt(cx, cy), bz = bridgeAt(cx, cy);
+  const t = $('ptip'), lm = landmarkAt(cx, cy), bz = bridgeAt(cx, cy), pz = passAt(cx, cy);
+  if (pz) { const [q, ps] = pz, nm = i => esc(MAPINFO.provs[q[i]][4].replace(/,\s*земля\s*\d+$/, '')); t.innerHTML = `<b>Перевал</b> · ${nm(0)} — ${nm(1)}<br><span class="muted">Владелец: ${ps.owner && FACTIONS[ps.owner] ? esc(fshort(ps.owner)) : '—'} · укрепление: ${ps.fort ? ps.fort : 'нет'}${ps.winterClosed ? ' · зимой закрыт' : ''}</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; }
   if (bz) { t.innerHTML = `<b>${esc(bz[3] || 'Мост')}</b><br><span class="muted">Каменный мост через большую реку${bz[4] === 'город' ? ' у города' : bz[4] === 'дорога' ? ' на дороге' : ''}: переправа без задержки. Без моста большую реку не перейти.</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; }
   if (lm) { t.innerHTML = `<b>${esc(lm.name)}</b><br><span class="muted">${esc(lm.info)}</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; }
   const k = provAt(cx, cy);
@@ -1536,6 +1543,16 @@ function paintVector() {
         ctx.setLineDash([]); ctx.strokeStyle = pc[1]; ctx.lineWidth = Math.max(5.5 / z, 2.2); ctx.stroke();
         ctx.setLineDash([Math.max(5 / z, 2.2), Math.max(3.5 / z, 1.5)]); ctx.strokeStyle = pc[0]; ctx.lineWidth = Math.max(3 / z, 1.2); ctx.stroke();
       }
+      ctx.setLineDash([]);
+      M.passes.forEach((q, i) => {   // K6: значок перевала — щит цвета владельца у середины тропы (снежинка — закрыт зимой)
+        const ps = G && G.passes && G.passes[i]; if (!ps) return; const mx = (q[2] + q[4]) / 2, my = (q[3] + q[5]) / 2;
+        if (mx < vx0 - 20 || mx > vx1 + 20 || my < vy0 - 20 || my > vy1 + 20) return;
+        const r = Math.max(6 / z, 2.4), cx = mx + r * 1.8, cy = my;
+        ctx.beginPath(); ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy - r); ctx.lineTo(cx + r, cy + r * 0.2); ctx.quadraticCurveTo(cx + r, cy + r * 1.1, cx, cy + r * 1.4); ctx.quadraticCurveTo(cx - r, cy + r * 1.1, cx - r, cy + r * 0.2); ctx.closePath();
+        ctx.fillStyle = ps.owner && FACTIONS[ps.owner] ? FACTIONS[ps.owner].color : '#a0a0a0'; ctx.fill(); ctx.strokeStyle = '#1e140a'; ctx.lineWidth = Math.max(1.2 / z, 0.4); ctx.stroke();
+        if (ps.fort) { ctx.fillStyle = '#f2e6c8'; ctx.fillRect(cx - r * 0.45, cy - r * 0.55, r * 0.9, r * 0.9); }
+        if (ps.winterClosed) { ctx.strokeStyle = '#eef6ff'; ctx.lineWidth = Math.max(1 / z, 0.35); ctx.beginPath(); for (let k = 0; k < 3; k++) { const a = k * Math.PI / 3; ctx.moveTo(cx + r * 1.15 + Math.cos(a) * r * 0.45, cy - r * 1.1 + Math.sin(a) * r * 0.45); ctx.lineTo(cx + r * 1.15 - Math.cos(a) * r * 0.45, cy - r * 1.1 - Math.sin(a) * r * 0.45); } ctx.stroke(); }
+      });
       ctx.setLineDash([]); ctx.lineCap = 'butt';
     }
   }
