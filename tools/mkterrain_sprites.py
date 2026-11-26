@@ -84,8 +84,30 @@ ISLANDS = {'lm_stromboli', 'lm_vulcano'}
 lab_, n_ = nd.label(land); cy_, cx_ = np.array(nd.center_of_mass(land, lab_, range(1, n_ + 1))).T; sz_ = nd.sum(land, lab_, range(1, n_ + 1))
 # ручные точки (landmarks.json): пиксели карты и ширина; правятся по скриншотам. LANDMARKS выше — исходные широта/долгота (справочно)
 lms = [dict(l, w=float(l['w'])) for l in json.load(open(SP + 'landmarks.json'))['landmarks']]
+# ---------- модели, заменяющие кусок карты: Афон (lm_athos_base) — вписывается по рамке суши полуострова Акти ----------
+models = []
 lm_block = np.zeros((H, W), bool)
 for l in lms:
+    if l.get('model') != 'athos': continue
+    from PIL import Image as _I
+    A_ = np.asarray(_I.open(ART + '/lm_athos_base/sheet.webp').convert('RGB')).astype(np.float32)
+    ml = nd.binary_opening(~(np.clip(((A_[..., 0] + A_[..., 2]) / 2 - A_[..., 1] - 60) / 80, 0, 1) > 0.5))
+    sy_, sx_ = np.nonzero(ml); sx0, sx1, sy0, sy1 = sx_.min(), sx_.max() + 1, sy_.min(), sy_.max() + 1
+    BX = (1683, 1068, 1764, 1129); sub = land[BX[1]:BX[3], BX[0]:BX[2]].copy(); sub[:, :1687 - BX[0]] = False   # отрезано по перешейку x ≈ 1687
+    lb, nl_ = nd.label(sub); pen = lb == (np.argmax(nd.sum(sub, lb, range(1, nl_ + 1))) + 1)
+    py_, px_ = np.nonzero(pen); mx0, mx1, my0, my1 = BX[0] + px_.min(), BX[0] + px_.max() + 1, BX[1] + py_.min(), BX[1] + py_.max() + 1
+    kx, ky = (mx1 - mx0) / (sx1 - sx0), (my1 - my0) / (sy1 - sy0)
+    pk = _I.open(ART + '/lm_athos_base/peak_0.png').convert('RGBA'); dx, dy = sx0 - 3, sy0 - 3   # peak_0 — вырезка листа с отступом 3 px
+    box = [round(mx0 + (dx - sx0) * kx, 2), round(my0 + (dy - sy0) * ky, 2), round(mx0 + (dx + pk.width - sx0) * kx, 2), round(my0 + (dy + pk.height - sy0) * ky, 2)]
+    pk.resize((600, round(pk.height * 600 / pk.width)), _I.LANCZOS).save(OUT + '/athos_model.webp', quality=88, method=6)
+    SL = json.load(open(SP + 'terrain_kit/athos_slots.json'))
+    slots = {k: [round(mx0 + (x - sx0) * kx, 2), round(my0 + (y - sy0) * ky, 2)] for k, (x, y) in SL['slots'].items()}
+    models.append({'id': 'athos', 'file': 'athos_model.webp', 'box': box, 'land': [int(mx0), int(my0), int(mx1), int(my1)], 'isthmus': 1687,
+                   'slots': slots, 'w': {'ord': round(72 * kx, 2), 'ruin': round(72 * kx, 2), 'big': round(84 * kx, 2), 'karyes': round(80 * kx, 2)}, 'anchor': SL['anchor']})
+    l['box'] = box
+    lm_block[int(box[1]):int(box[3]) + 1, int(box[0]):int(box[2]) + 1] = True      # под моделью — ни гор, ни холмов, ни деревьев
+for l in lms:
+    if l.get('model'): continue
     r0 = int(l['w'] * 0.6) + 2; x, y = int(l['x']), int(l['y'])
     ys, xs = slice(max(0, y - r0), min(H, y + r0)), slice(max(0, x - r0), min(W, x + r0))
     gy, gx = np.mgrid[ys, xs]
@@ -197,7 +219,7 @@ def grade(im, name):
     lum = rgb @ np.array([0.3, 0.59, 0.11], np.float32)
     rgb = (lum[..., None] + (rgb - lum[..., None]) * sat) * np.array(tint, np.float32)
     return Image.fromarray(np.dstack([np.clip(rgb, 0, 255), a[..., 3]]).astype(np.uint8), 'RGBA')
-used = {t[1] for t in items} | {l['set'] for l in lms} | {'lm_etna_active', 'lm_etna_erupt'}
+used = {t[1] for t in items} | {l['set'] for l in lms if not l.get('model')} | {'lm_etna_active', 'lm_etna_erupt', 'athos_monasteries', 'athos_karyes'}
 spr = []
 for n in sorted(used):
     for k in range(NV[n]):
@@ -213,9 +235,9 @@ for n, k, im in spr:
 atlas = Image.new('RGBA', (AW, y + rowh), (0, 0, 0, 0))
 for n, k, im in spr: r = rects[n][k]; atlas.paste(im, (r[0], r[1]))
 atlas.save(OUT + '/terrain_atlas.webp', quality=86, method=6)
-sets = {n: {'anchor': ANCHOR.get(n, next((l['anchor'] for l in lms if l['set'] == n), 0.78)), 'r': [rects[n][k] for k in range(NV[n])]} for n in rects}
+sets = {n: {'anchor': ANCHOR.get(n, next((l['anchor'] for l in lms if l['set'] == n), 0.78)) if not n.startswith('athos_') else 0.78, 'r': [rects[n][k] for k in range(NV[n])]} for n in rects}
 for n in ('lm_etna_active', 'lm_etna_erupt'): sets[n]['anchor'] = sets['lm_etna']['anchor']
-json.dump({'sets': sets, 'items': [[t[1], t[3], t[2], t[0], t[4], t[5]] for t in items], 'landmarks': lms,
+json.dump({'sets': sets, 'items': [[t[1], t[3], t[2], t[0], t[4], t[5]] for t in items], 'landmarks': lms, 'models': models,
            'ischia': [round(v, 1) for v in topx(13.90, 40.73)]},
           open(OUT + '/terrain_sprites.json', 'w'), ensure_ascii=False, separators=(',', ':'))
 # ---------- деревья для ближнего уровня: без тех, что под уникальными горами и на непроходимых хребтах ----------

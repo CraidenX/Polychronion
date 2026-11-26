@@ -166,7 +166,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 86, "date": "26.11.2026 06:24"};
+const GAME_VERSION = {"v": 87, "date": "26.11.2026 06:30"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -2875,7 +2875,7 @@ function outerAtClient(clientX, clientY) {
 function landmarkAt(cx, cy) {
   if (TSP.st !== 2 || (UI.mapMode === 'geo' ? geoU(UI.view.z) < 0.5 : UI.view.z * Math.min(2, window.devicePixelRatio || 1) < 1.8)) return null;
   const r = $('mapwrap').getBoundingClientRect(), mx = (cx - r.left - UI.view.x) / UI.view.z, my = (cy - r.top - UI.view.y) / UI.view.z;
-  for (const l of TSP.lms) { const rr = l.r, h = l.w * rr[3] / rr[2]; if (Math.abs(mx - l.x) < l.w * 0.4 && my > l.y - h * l.an * 0.9 && my < l.y + h * (1 - l.an) * 0.5) return l; }
+  for (const l of TSP.lms) { if (l.box) { if (mx >= l.box[0] && mx <= l.box[2] && my >= l.box[1] && my <= l.box[3]) return l; continue; } const rr = l.r, h = l.w * rr[3] / rr[2]; if (Math.abs(mx - l.x) < l.w * 0.4 && my > l.y - h * l.an * 0.9 && my < l.y + h * (1 - l.an) * 0.5) return l; }
   return null;
 }
 function provTip(cx, cy) {
@@ -3065,7 +3065,7 @@ function vecClassify() {
   const c = [], p = [], r = [], s = [], e = [];
   for (const g of VEC.segs) {
     const a = g.a, b = g.b;
-    if (a === -1 || b === -1) { c.push(g); continue; }
+    if (a === -1 || b === -1) { if (!(typeof TSP !== 'undefined' && TSP.models && TSP.models.some(md => g.x0 >= md.isthmus && g.x1 <= md.land[2] + 3 && g.y0 >= md.land[1] - 3 && g.y1 <= md.land[3] + 3))) c.push(g); continue; }   // берег под моделью (Афон) не обводим
     if (a < 0 || b < 0) { e.push(g); continue; }
     if (own(a) !== own(b)) s.push(g); else if (P[a][0] !== P[b][0]) r.push(g); else p.push(g);
   }
@@ -3110,8 +3110,9 @@ function icoLoad() {
     if (t) {
       const S = t.j.sets;
       for (const [set, v, x, y, w, c] of t.j.items) put(sg, x, y, { set, v, x, y, w, c, r: S[set].r[v], an: S[set].anchor });
-      for (const l of t.j.landmarks) put(sg, l.x, l.y, Object.assign(l, { v: 0, r: S[l.set].r[0], an: S[l.set].anchor, lm: true }));
-      Object.assign(TSP, { st: 2, atlas: t.at, sets: S, lms: t.j.landmarks, ischia: t.j.ischia });
+      for (const l of t.j.landmarks) if (!l.model) put(sg, l.x, l.y, Object.assign(l, { v: 0, r: S[l.set].r[0], an: S[l.set].anchor, lm: true }));
+      Object.assign(TSP, { st: 2, atlas: t.at, sets: S, lms: t.j.landmarks, ischia: t.j.ischia, models: t.j.models || [] });
+      for (const md of TSP.models) { md.img = new Image(); md.img.onload = () => scheduleVector(); md.img.src = md.file; }
     }
     Object.assign(ICO, { st: 2, mg, tg, sg, CELL, cw, atlas: im, N: im.width / 10 });
     PIX.vtKey = ''; scheduleVector();
@@ -3159,12 +3160,39 @@ function seaBlur() {
   if (TL.seab) return TL.seab; const m = WV.mask, c = document.createElement('canvas'); c.width = m.width; c.height = m.height;
   const x = c.getContext('2d'); x.filter = 'blur(1.2px)'; x.drawImage(m, 0, 0); return TL.seab = c;
 }
+/* --- Афон: модель полуострова Акти с ячейками монастырей (часть D). Состояние ячеек — G.athos (пусто, руины, обычный, крупный);
+   Карея — всегда свой спрайт. Смена состояния — setAthosSlot (хук ATHOS.hook для будущих событий; игровой роли пока нет) --- */
+const ATHOS = { order: ['chilandar', 'zograf', 'esphigmenou', 'panteleimon', 'karyes', 'vatopedi', 'iviron', 'lavra'],
+  names: { chilandar: 'Хиландар', zograf: 'Зограф', esphigmenou: 'Эсфигмен', panteleimon: 'Пантелеймон', karyes: 'Карея', vatopedi: 'Ватопед', iviron: 'Ивирон', lavra: 'Великая Лавра' },
+  start: { lavra: 'big', vatopedi: 'big', iviron: 'ord', chilandar: 'ord', zograf: 'ord', panteleimon: 'ord', esphigmenou: 'ord', karyes: 'ord' },
+  hook(slot, state, prev) { /* сюда автор подключит последствия: slot — место, state — 'none' | 'ruin' | 'ord' | 'big' */ } };
+function athosState() { if (!G) return ATHOS.start; if (!G.athos) G.athos = Object.assign({}, ATHOS.start); return G.athos; }
+function setAthosSlot(slot, state) { const st = athosState(), prev = st[slot]; if (!(slot in ATHOS.names) || prev === state) return; st[slot] = state; ATHOS.hook(slot, state, prev); scheduleVector(); }
+function modelsDraw(ctx, vx0, vy0, vx1, vy1, withModel = true) {
+  if (TSP.st !== 2 || !TSP.models) return;
+  for (const md of TSP.models) {
+    const b = md.box; if (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1) continue;
+    if (withModel && md.img && md.img.complete && md.img.naturalWidth) ctx.drawImage(md.img, b[0], b[1], b[2] - b[0], b[3] - b[1]);
+    if (md.id !== 'athos') continue;
+    const st = athosState(), S = TSP.sets, A = TSP.atlas, sl = Object.entries(md.slots).sort((p, q) => p[1][1] - q[1][1]);
+    for (const [k, [x, y]] of sl) {
+      const s = st[k]; if (!s || s === 'none') continue;
+      const set = k === 'karyes' ? 'athos_karyes' : 'athos_monasteries'; if (!S[set]) continue;
+      const v = k === 'karyes' ? 0 : { ruin: 0, ord: 3, big: 6 }[s] + [...k].reduce((a, c) => a + c.charCodeAt(0), 0) % 3;
+      const r = S[set].r[v], w = k === 'karyes' ? md.w.karyes : md.w[s] || md.w.ord, h = w * r[3] / r[2];
+      if (s === 'ruin') ctx.filter = 'brightness(0.72) saturate(0.75)';   // руины — темнее: на карте их видно
+      ctx.drawImage(A, r[0], r[1], r[2], r[3], x - w / 2, y - h * md.anchor, w, h);
+      if (s === 'ruin') ctx.filter = 'none';
+    }
+  }
+}
 function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const u = geoU(z); if (u <= 0 || ICO.st !== 2 || TSP.st !== 2) return;
   const sc = 1, k = dpr * z, M = 150, q = [];   // тот же размер, что у запечённых в дальний вид: при приближении спрайты не прыгают, только становятся чётче
   const get = g => { for (let cy = Math.floor((vy0 - 30) / ICO.CELL); cy <= Math.floor((vy1 + M) / ICO.CELL); cy++) for (let cx = Math.floor((vx0 - M) / ICO.CELL); cx <= Math.floor((vx1 + M) / ICO.CELL); cx++) { const a = g.get(cy * ICO.cw + cx); if (a) for (const o of a) q.push(o); } };
   get(ICO.tg); get(ICO.sg); q.sort((a, b) => a.y - b.y);
-  ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y); ctx.globalAlpha = Math.min(1, u * 8);   // живые спрайты стоят ровно на запечённых: быстро становятся непрозрачными — картинка не бледнеет ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.save(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y);
+  ctx.globalAlpha = Math.min(1, u * 8); modelsDraw(ctx, vx0, vy0, vx1, vy1);   // модели (Афон) — земля под спрайтами ctx.globalAlpha = Math.min(1, u * 8); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';   // живые спрайты стоят ровно на запечённых: быстро становятся непрозрачными — картинка не бледнеет
   const A = TSP.atlas, N = ICO.N, sea = WV.mask;
   for (const m of q) {
     if (m.set) {
@@ -3339,6 +3367,7 @@ function paintVector() {
   } else if (PIX.tint) { const t = PIX.tint, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0); }
   if (!shFull && UI.mapMode !== 'geo') drawSharp();   // переход и края: чёткий слой поверх быстрого
   if (UI.mapMode === 'geo') terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // «Местность»: рельеф и рощи — каждый кадр, с коротким переходом
+  if (TSP.st === 2 && z * dpr >= 1.2 && !(UI.mapMode === 'geo' && geoU(z) > 0)) { ctx.save(); ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); modelsDraw(ctx, vx0, vy0, vx1, vy1, false); ctx.restore(); }   // монастыри Афона — и издали, и на политической карте (модель уже запечена в плитки)
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y);
   ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
   // границы
@@ -3895,6 +3924,7 @@ function volcFrame(now) {
   };
   const glow = (cx, cy, r, a) => { if (a <= 0) return; const g = x.createRadialGradient(cx, cy, 0, cx, cy, r); g.addColorStop(0, `rgba(255,170,60,${a * vis})`); g.addColorStop(0.4, `rgba(255,90,20,${a * vis * 0.5})`); g.addColorStop(1, 'rgba(255,60,0,0)'); x.globalCompositeOperation = 'lighter'; x.fillStyle = g; x.fillRect(cx - r, cy - r, r * 2, r * 2); x.globalCompositeOperation = 'source-over'; };
   for (const l of TSP.lms) {
+    if (!l.r) continue;   // модели (Афон) — без дыма
     const r = l.r, h = l.w * r[3] / r[2], top = l.y - h * l.an, cx = l.x, cy = top + h * 0.1;
     if (l.x + l.w < vx0 || l.x - l.w > vx1 || l.y + h < vy0 || top - h * 2 > vy1) continue;
     if (l.set === 'lm_etna') {

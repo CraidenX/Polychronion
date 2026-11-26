@@ -56,6 +56,17 @@ for tx_, ty_ in idx['tiles']:
     X0, Y0 = tx_ * T, ty_ * T
     base = Image.open(OUT + f'/hi_wc{VAR}c/{tx_}_{ty_}.jpg').convert('RGBA'); tw, th = base.size
     X1, Y1 = X0 + tw / K, Y0 + th / K
+    # под моделью (Афон) суша полуострова и береговая обводка не рисуются: заливаем их соседним морем — и в ближней подложке тоже
+    for md in MODELS:
+        lx0, ly0, lx1, ly1 = md['land']
+        if lx1 + 4 < X0 or lx0 - 4 > X1 or ly1 + 4 < Y0 or ly0 - 4 > Y1: continue
+        pm = np.zeros((H, W), bool); pm[ly0 - 2:ly1 + 2, md['isthmus']:lx1 + 2] = land[ly0 - 2:ly1 + 2, md['isthmus']:lx1 + 2]
+        pm = nd.binary_dilation(pm, iterations=3); pm[:, :md['isthmus']] = False
+        mk = np.asarray(Image.fromarray(pm[Y0:Y0 + th // K, X0:X0 + tw // K].astype(np.uint8) * 255).resize((tw, th), Image.NEAREST)) > 0
+        if mk.any():
+            a = np.asarray(base).copy(); _, (iy, ix) = nd.distance_transform_edt(mk, return_indices=True); a[mk] = a[iy[mk], ix[mk]]
+            a[..., :3] = np.where(mk[..., None], nd.gaussian_filter(a[..., :3].astype(np.float32), (3, 3, 0)), a[..., :3]).astype(np.uint8)
+            base = Image.fromarray(a, 'RGBA'); base.convert('RGB').save(OUT + f'/hi_wc{VAR}c/{tx_}_{ty_}.jpg', quality=84, optimize=True, progressive=True)
     lay = Image.new('RGBA', (tw, th), (0, 0, 0, 0)); mtn = Image.new('L', (tw, th), 0); tre = Image.new('L', (tw, th), 0)
     seen = []
     for cy in range(int((Y0 - 60) // CELL), int((Y1 + 200) // CELL) + 1):
@@ -80,13 +91,15 @@ for tx_, ty_ in idx['tiles']:
             if px0 > tw or py0 > th or px0 + px < 0 or py0 + px < 0: continue
             lay.paste(Image.alpha_composite(lay.crop((px0, py0, px0 + px, py0 + px)), sp), (px0, py0))
             tre.paste(255, (px0, py0), sp.getchannel('A').point(lambda q: 255 if q > 128 else 0))
-    for md in MODELS:   # модели, заменяющие кусок карты (Афон): уже собранная картинка с прозрачностью, рамка в пикселях карты
+    out = base
+    for md in MODELS:   # модели, заменяющие кусок карты (Афон): картинка с прозрачностью в рамке (пиксели карты) — под спрайтами
         mx0, my0, mx1, my1 = md['box']
         if mx1 < X0 or mx0 > X1 or my1 < Y0 or my0 > Y1: continue
         im = Image.open(OUT + '/' + md['file']).convert('RGBA').resize((int(round((mx1 - mx0) * K)), int(round((my1 - my0) * K))), Image.LANCZOS)
         px0, py0 = int(round((mx0 - X0) * K)), int(round((my0 - Y0) * K))
-        lay.paste(Image.alpha_composite(lay.crop((px0, py0, px0 + im.width, py0 + im.height)), im), (px0, py0))
-    out = Image.alpha_composite(base, lay).convert('RGB')
+        out = out.copy(); out.paste(Image.alpha_composite(out.crop((px0, py0, px0 + im.width, py0 + im.height)), im), (px0, py0))
+        mtn.paste(165, (px0, py0), im.getchannel('A').point(lambda q: 255 if q > 128 else 0))
+    out = Image.alpha_composite(out, lay).convert('RGB')
     out.save(f'{outd}/{tx_}_{ty_}.jpg', quality=84, optimize=True, progressive=True)
     # дальний вид 1× и маска рельефа
     w1, h1 = tw // K, th // K

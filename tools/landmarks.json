@@ -52,14 +52,15 @@
    "obj": null
   },
   {
-   "set": "lm_athos",
+   "set": "lm_athos_base",
    "name": "Афон",
-   "x": 1747,
-   "y": 1119,
-   "w": 53.3,
-   "anchor": 0.78,
+   "x": 1720,
+   "y": 1101,
+   "w": 67,
+   "anchor": 0.5,
    "info": "Святая Гора — монашеская республика, сердце православного монашества.",
-   "obj": null
+   "obj": null,
+   "model": "athos"
   },
   {
    "set": "lm_sinai",
