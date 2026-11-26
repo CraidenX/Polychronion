@@ -1,0 +1,42 @@
+{
+ "sheet_size": [
+  1447,
+  1087
+ ],
+ "slot_width": 72,
+ "anchor": 0.78,
+ "slots": {
+  "chilandar": [
+   420,
+   335
+  ],
+  "zograf": [
+   265,
+   415
+  ],
+  "esphigmenou": [
+   540,
+   440
+  ],
+  "panteleimon": [
+   455,
+   545
+  ],
+  "karyes": [
+   650,
+   525
+  ],
+  "vatopedi": [
+   775,
+   530
+  ],
+  "iviron": [
+   870,
+   625
+  ],
+  "lavra": [
+   1010,
+   885
+  ]
+ }
+}

@@ -1,8 +1,11 @@
 // Безголовый прогон партий: node sim.js [партий] [политика: smart|passive|random]
 globalThis.__HEADLESS__ = true;
 const fs = require('fs'), vm = require('vm');
+// сетка перемещений (grid.bin) — если есть; без неё — прежнее движение по дорогам провинций
+try { if (!process.env.NOGRID) { const b = fs.readFileSync(__dirname + '/../grid.bin'); globalThis.__GRID_BUF__ = b.buffer.slice(b.byteOffset, b.byteOffset + b.length); } } catch (e) { }
 const src = fs.readFileSync(__dirname + '/game.js', 'utf8');
 vm.runInThisContext(src + `
+globalThis.GRID_STATS = () => ({ ok: GRID.ok, plans: GRID.plans, fails: GRID.fails, meets: GRID.meets });
 globalThis.API = { get G(){return G}, newGame, runPrologue, endTurn, myArmies, myRegions, R, NEIGH, atWar, armyPower, garPower, setArmyPath, recruit, courtHeroes, hire, setMission, assignGeneral, genOf, computeIncome, playerStorm, factionAlive, FACTIONS, UNIT, linkOk, canEnter, defPower, newArmyAt, RNAME, setEvChooser: f => { eventChooser = f; }, BAL, siegeTurns, heroArmy, ANATOLIA, manualBuild };`);
 const A = globalThis.API;
 const N = +process.argv[2] || 10, POL = process.argv[3] || 'smart';
@@ -46,7 +49,7 @@ async function smartArmies() {
   const threatened = A.myRegions().filter(r => G.armies.some(x => x.region === r.id && A.atWar('byz', x.owner)));
   for (const a of A.myArmies()) {
     const here = A.R(a.region);
-    if (A.atWar('byz', here.owner)) { if (A.armyPower(a) > A.garPower(here) * (1 + here.fort * 0.35) * 1.8) await A.playerStorm(a); continue; }
+    if (A.atWar('byz', here.owner)) { if (!a.path.length) A.setArmyPath(a, here.id); if (A.armyPower(a) > A.garPower(here) * (1 + here.fort * 0.35) * 1.8) await A.playerStorm(a); continue; }   // на сетке: осада и штурм — у города
     if (a.path.length) continue;
     const pow = A.armyPower(a);
     // защита
@@ -82,7 +85,7 @@ async function smartArmies() {
     const G = A.G, F = G.final || {};
     const owners = {}; Object.values(G.regions).forEach(r => owners[r.owner] = (owners[r.owner] || 0) + 1);
     results.push({ over: G.over, year: G.year, regs: A.myRegions().length, peak: G.stats.peakRegions, tr: Math.round(G.treasury), order: Math.round(G.order), church: Math.round(G.church), pr: Math.round(G.prestige), score: F.score, title: F.title, w: G.stats.won, l: G.stats.lost, mort: F.mort && Math.round(F.mort * 100), owners: JSON.stringify(owners) });
-    console.log(JSON.stringify(results[results.length - 1])); if (G.over === "konst") console.log(G.log.slice(0, 14).map(l => l.d + " " + l.t).join("\n"));
+    console.log(JSON.stringify(results[results.length - 1])); if (globalThis.GRID_STATS) console.log('сетка:', JSON.stringify(globalThis.GRID_STATS())); if (G.over === "konst") console.log(G.log.slice(0, 14).map(l => l.d + " " + l.t).join("\n"));
   }
   const avg = k => (results.reduce((s, r) => s + (r[k] || 0), 0) / results.length).toFixed(1);
   console.log(`ИТОГ ${POL}: пало ${results.filter(r => r.over === 'konst').length}/${N}, ср.очки ${avg('score')}, ср.областей ${avg('regs')}, казна ${avg('tr')}, порядок ${avg('order')}, побед ${avg('w')} поражений ${avg('l')}`);

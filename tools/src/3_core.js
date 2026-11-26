@@ -91,6 +91,7 @@ async function dayTick() {
     if (a.path.length && typeof a.path[0] === 'string') a.path = [];        // старое сохранение: путь по регионам
     if (a.leg && typeof a.leg.from === 'string') a.leg = null;
     armyProv(a);
+    if (GRID.ok) { a.leg = null; await gridDay(a); if (G.over) return; continue; }
     if (a.leg) {
       // приказ изменился (или «стоять»): войско поворачивает назад
       if (a.leg.to !== a.prov && a.path[0] !== a.leg.to) a.leg = { from: a.leg.to, to: a.prov, t: a.leg.dur - a.leg.t, dur: a.leg.dur, back: true };
@@ -285,6 +286,7 @@ function roadPts(from, to) {
 // провинция, где стоит войско (если не задана или не совпадает с регионом — главная провинция региона)
 function armyProv(a) {
   const g = provGraph(), r = RID(a.region);
+  if (GRID.ok && a.cell != null) { const p = cellProv(a.cell); if (p >= 0 && g.reg[p] === r) return a.prov = p; }
   if (a.prov == null || g.reg[a.prov] !== r) a.prov = g.main[r] != null ? g.main[r] : (g.byReg[r] || [0])[0];
   return a.prov;
 }
@@ -310,17 +312,167 @@ function findProvPath(a, toReg, toProv, fromProv) {
   const path = []; let v = goal; while (v !== from) { path.unshift(v); v = prev.get(v); }
   return path;
 }
-function pathDays(a) { const g = provGraph(); let s = 0, v = armyProv(a); for (const w of a.path) { const e = g.adj[v].find(x => x.to === w); s += e ? e.d : 0; v = w; } return s; }
+/* --- сетка перемещений (grid.bin, mkgrid.py): клетка 6 px карты. Войско стоит в любой клетке (a.cell); путь — A* по клеткам с 8 соседями,
+   время клетки = км / (MARCH_KM × множитель местности), переправы и перевалы — задержки на рёбрах. Решения ИИ — по графу провинций (как раньше),
+   а сам путь строится по сетке внутри «коридора» провинций этого пути. Без сетки (файл не загружен) — прежнее движение по дорогам провинций. --- */
+const GRID = { ok: false };
+function gridInit(buf) {
+  try {
+    const h = new Uint32Array(buf, 0, 5); if (h[0] !== 0x47524944) return;
+    const GW = h[1], GH = h[2], C = h[3], nl = h[4], lens = new Uint32Array(buf, 20, nl), N = GW * GH;
+    let off = 20 + nl * 4; const out = [];
+    for (let l = 0; l < nl; l++) {
+      const src = new Uint16Array(buf.slice(off, off + lens[l] * 2)), a = l === 1 ? new Uint16Array(N) : new Uint8Array(N); let p = 0;
+      for (let i = 0; i < src.length; i += 2) { a.fill(src[i], p, p + src[i + 1]); p += src[i + 1]; }
+      out.push(a); off += lens[l] * 2;
+    }
+    const k = MAPINFO.W / 5298, kx = C * 0.63 / k, ky = C * 0.82 / k;
+    Object.assign(GRID, { ok: true, GW, GH, C, N, cls: out[0], prov: out[1], flags: out[2], edge: out[3], kx, ky, kd: Math.hypot(kx, ky),
+      g: new Float32Array(N), from: new Int32Array(N), stamp: new Int32Array(N), closed: new Int32Array(N), gen: 0, cache: new Map() });
+    GRID.mult = new Float32Array(N); for (let i = 0; i < N; i++) GRID.mult[i] = cellMult(i);
+  } catch (e) { GRID.ok = false; }
+}
+if (typeof globalThis !== 'undefined' && globalThis.__GRID_BUF__) gridInit(globalThis.__GRID_BUF__);
+else if (!HEADLESS && typeof fetch !== 'undefined' && typeof location !== 'undefined' && location.protocol !== 'file:') fetch('grid.bin').then(r => r.ok ? r.arrayBuffer() : null).then(b => { if (b) gridInit(b); }).catch(() => { });
+// множитель скорости клетки (0 — непроходима для войска на суше): тот же объект MOVE
+function cellMult(i) {
+  const f = GRID.flags[i], c = GRID.cls[i], m = MOVE.mult;
+  if (!(f & 1) || !(f & 2) || (f & 16)) return 0;
+  let t = m.plain;
+  if (c & 1) t = Math.min(t, m.hills); if (c & 64) t = Math.min(t, m.steppe); if (c & 32) t = Math.min(t, m.desert);
+  const forest = c & 2, hard = c & (4 | 8 | 16);
+  if (forest) t = Math.min(t, m.forest);
+  if (c & (4 | 8)) t = Math.min(t, m.mountains); if (c & 16) t = Math.min(t, m.swamp);
+  if (f & 4) t = hard ? t : forest ? Math.max(t, m.forestRoad) : Math.max(t, m.road);   // дорога: по равнине, холмам, степи, пустыне — 1,25; через лес — 0,85; горы и болото — как есть
+  return t;
+}
+const cellXY = c => [(c % GRID.GW) * GRID.C + GRID.C / 2, Math.floor(c / GRID.GW) * GRID.C + GRID.C / 2];
+const cellAt = (x, y) => clamp(Math.floor(y / GRID.C), 0, GRID.GH - 1) * GRID.GW + clamp(Math.floor(x / GRID.C), 0, GRID.GW - 1);
+const cellProv = c => GRID.prov[c] - 1;
+const cellDist = (a, b) => Math.max(Math.abs(a % GRID.GW - b % GRID.GW), Math.abs(Math.floor(a / GRID.GW) - Math.floor(b / GRID.GW)));
+// переправа между соседними клетками (dx, dy ∈ −1..1): 0 нет, 1 брод, 2 большая река, 3 мост
+function edgeCode(a, dx, dy) {
+  const E = GRID.edge, W = GRID.GW;
+  if (dy === 0) return dx > 0 ? E[a] & 3 : E[a - 1] & 3;
+  if (dx === 0) return dy > 0 ? (E[a] >> 2) & 3 : (E[a - W] >> 2) & 3;
+  if (dx === dy) return dy > 0 ? (E[a] >> 4) & 3 : (E[a - W - 1] >> 4) & 3;
+  return dy > 0 ? (E[a] >> 6) & 3 : (E[a - W + 1] >> 6) & 3;
+}
+const EDGE_DAYS = () => [0, MOVE.ford, MOVE.bigRiver, MOVE.bridge];
+// ближайшая проходимая клетка (по суше), по возможности — в провинции prov
+function snapCell(c, prov, R0 = 12) {
+  const W = GRID.GW, x0 = c % W, y0 = Math.floor(c / W); let best = -1, bd = 1e9;
+  for (let r = 0; r <= R0 && best < 0; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+    const x = x0 + dx, y = y0 + dy; if (x < 0 || y < 0 || x >= W || y >= GRID.GH) continue;
+    const i = y * W + x; if (!GRID.mult[i] || (prov != null && cellProv(i) !== prov)) continue;
+    const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; }
+  }
+  return best >= 0 ? best : (prov != null ? snapCell(c, null, R0) : c);
+}
+// клетка «города» региона (его крепость): у центра региона
+const CITY = {};
+function cityCell(rid) {
+  rid = RID(rid); if (CITY[rid] != null) return CITY[rid];
+  const p = MAPINFO.pos[rid], g = provGraph(); if (!p) return CITY[rid] = 0;
+  return CITY[rid] = snapCell(cellAt(p[0], p[1]), g.main[rid]);
+}
+const MEET = 2;   // встреча и бой — враги в пределах 2 клеток (~10 км); осада — в тех же пределах от города
+const nearCity = (a, rid) => !GRID.ok || cellDist(armyCell(a), cityCell(rid)) <= MEET;
+// клетка войска: если не задана или не в его регионе — у города региона (новое войско, отступление, событие)
+function armyCell(a) {
+  if (!GRID.ok) return 0;
+  if (a.cell == null || provReg(cellProv(a.cell)) !== RID(a.region)) { a.cell = cityCell(a.region); const k = G.armies.filter(x => x !== a && x.cell === a.cell).length; if (k) a.cell = snapCell(a.cell + (k % 3 - 1) + (k > 2 ? GRID.GW : -GRID.GW), provGraph().main[RID(a.region)], 3); a.route = null; }
+  return a.cell;
+}
+// A*: от клетки s до t; можно — только суша провинций из набора allow (и море, если seaOk). Возвращает {c: клетки, d: накопленные дни} или null
+function gridPath(s, t, allow, seaOk, maxN = 250000) {
+  const W = GRID.GW, Hh = GRID.GH, g = GRID.g, from = GRID.from, st = GRID.stamp, cl = GRID.closed, M = GRID.mult, F = GRID.flags, P = GRID.prov;
+  const gen = ++GRID.gen, ED = EDGE_DAYS(), vmax = MARCH_KM * MOVE.mult.road, vh = seaOk ? Math.max(SAIL_KM, vmax) : vmax;
+  const tx = t % W, ty = Math.floor(t / W), hf = c => Math.hypot((c % W - tx) * GRID.kx, (Math.floor(c / W) - ty) * GRID.ky) / vh;
+  const ok = c => (M[c] > 0 && allow.has(P[c] - 1)) || (seaOk && (F[c] & 32));
+  const heap = [], push = (f, c) => { heap.push([f, c]); let i = heap.length - 1; while (i > 0) { const q = (i - 1) >> 1; if (heap[q][0] <= heap[i][0]) break; [heap[q], heap[i]] = [heap[i], heap[q]]; i = q; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  st[s] = gen; g[s] = 0; from[s] = -1; push(hf(s), s); let n = 0;
+  while (heap.length && n++ < maxN) {
+    const [, c] = pop(); if (cl[c] === gen) continue; cl[c] = gen;
+    if (c === t) {
+      const cells = []; let v = t; while (v >= 0) { cells.push(v); v = from[v]; } cells.reverse();
+      return { c: cells, d: cells.map(v => g[v]) };
+    }
+    const cx = c % W, cy = (c - cx) / W, sea = !(F[c] & 1);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue; const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= W || y >= Hh) continue;
+      const v = y * W + x; if (cl[v] === gen || !ok(v)) continue;
+      const vsea = !(F[v] & 1), km = dx && dy ? GRID.kd : dx ? GRID.kx : GRID.ky;
+      let d = vsea || sea ? km / SAIL_KM : km / (MARCH_KM * M[v]);
+      if (!vsea && !sea) { d += ED[edgeCode(c, dx, dy)]; if ((F[v] & 8) && !(F[c] & 8)) d += MOVE.pass; }
+      const nd = g[c] + d; if (st[v] === gen && nd >= g[v]) continue;
+      st[v] = gen; g[v] = nd; from[v] = c; push(nd + hf(v), v);
+    }
+  }
+  return null;
+}
+// маршрут войска по сетке: коридор — провинции пути (с текущей); если не вышло — регионы пути целиком
+function planRoute(a) {
+  const s = armyCell(a), path = a.path.filter(k => typeof k === 'number'); if (!path.length) return null;
+  const goalProv = path[path.length - 1], t = a.goal != null && cellProv(a.goal) === goalProv ? a.goal : snapCell(cityCell(provReg(goalProv)), goalProv);
+  const pg = provGraph(); let seaOk = false, v = armyProv(a);
+  for (const w of path) { const e = pg.adj[v].find(x => x.to === w); if (e && (e.t === 'sea' || e.t === 'strait')) seaOk = true; v = w; }
+  const key = a.owner + ':' + s + '>' + t + ':' + path.join(',');
+  if (GRID.cache.has(key)) return GRID.cache.get(key);
+  const allow = new Set([armyProv(a), ...path]);
+  let r = gridPath(s, t, allow, seaOk);
+  if (!r) { const regs = new Set([RID(a.region), ...path.map(k => pg.reg[k])]); const wide = new Set(); pg.reg.forEach((rr, k) => { if (regs.has(rr)) wide.add(k); }); r = gridPath(s, t, wide, seaOk); }
+  if (GRID.cache.size > 400) GRID.cache.delete(GRID.cache.keys().next().value);
+  if (!r) GRID.fails = (GRID.fails || 0) + 1; GRID.plans = (GRID.plans || 0) + 1;
+  GRID.cache.set(key, r); return r;
+}
+function routeDaysLeft(a) { const r = a.route; return r ? Math.max(0, r.d[r.d.length - 1] - (a.rt || 0)) : 0; }
+// войско на сетке: день пути. Вход в другой регион — как раньше (stepArmy: захват); сражение — враги в той же или соседней клетке
+const gridFoe = (a, c) => G.armies.find(x => x !== a && atWar(a.owner, x.owner) && x.units.length && cellDist(armyCell(x), c) <= MEET);
+async function gridDay(a) {
+  armyCell(a);
+  { const foe = gridFoe(a, a.cell); if (foe) { const won = await fieldBattle(a, foe, R(provReg(cellProv(a.cell)) || a.region)); GRID.meets = (GRID.meets || 0) + 1; if (G.over) return; a.route = null; if (!won || !G.armies.includes(a)) { a.path = []; return; } } }
+  if (!a.path.length) { a.route = null; return; }                    // «стоять»: остаётся там, где стоит
+  if (!a.route) { const r = planRoute(a); if (!r || r.c.length < 2) { a.path = []; a.route = null; return; } a.route = { c: r.c.slice(), d: r.d.slice() }; a.ri = 0; a.rt = 0; a.siege = 0; }
+  const R0 = a.route; a.rt += 1;
+  while (a.ri < R0.c.length - 1 && R0.d[a.ri + 1] <= a.rt) {
+    const nc = R0.c[a.ri + 1], np = cellProv(nc);
+    if (np >= 0 && np !== a.prov) {
+      const rt = provReg(np);
+      if (rt !== RID(a.region)) {
+        if (a.owner === 'byz' && !canEnter('byz', rt)) { a.path = []; a.route = null; return; }
+        await stepArmy(a, rt); if (G.over) return;
+        if (!G.armies.includes(a) || RID(a.region) !== rt) { a.path = []; a.route = null; return; }
+      }
+      a.prov = np; const i = a.path.indexOf(np); if (i >= 0) a.path.splice(0, i + 1); if (!a.path.length) a.path = [cellProv(R0.c[R0.c.length - 1])];
+    }
+    a.cell = nc; a.ri++;
+    const foe = gridFoe(a, nc);
+    if (foe) {
+      const won = await fieldBattle(a, foe, R(provReg(np >= 0 ? np : a.prov) || a.region)); if (G.over) return;
+      GRID.meets = (GRID.meets || 0) + 1; a.route = null; if (!won || !G.armies.includes(a)) { a.path = []; return; }
+      break;   // после боя — новый расчёт пути на следующий день
+    }
+  }
+  if (a.route && a.ri >= a.route.c.length - 1) { a.route = null; a.path = []; }
+}
+function pathDays(a) { if (GRID.ok && a.path.length) { if (!a.route) { const r = planRoute(a); if (r) { a.route = { c: r.c.slice(), d: r.d.slice() }; a.ri = 0; a.rt = 0; } } return Math.round(routeDaysLeft(a)); } const g = provGraph(); let s = 0, v = armyProv(a); for (const w of a.path) { const e = g.adj[v].find(x => x.to === w); s += e ? e.d : 0; v = w; } return s; }
 function findPath(a, to) { const p = findProvPath(a, to); return p; }
 // свой маршрут: продолжить путь от последней точки похода до новой провинции (Ctrl/Shift + щелчок)
-function addWaypoint(a, to, prov) {
+function addWaypoint(a, to, prov, cell) {
+  if (GRID.ok) {   // сетка: продолжение похода — путь до новой точки от конца текущего (маршрут пересчитывается целиком)
+    const last = a.path.length ? a.path[a.path.length - 1] : armyProv(a), p = prov === last ? [] : findProvPath(a, to, prov, last); if (!p) return false;
+    a.path = a.path.concat(p); if (!a.path.length) a.path = [prov]; a.goal = cell != null ? snapCell(cell, prov) : null; a.route = null; return !!pathDays(a) || true;
+  }
   const last = a.path.length ? a.path[a.path.length - 1] : armyProv(a);
   if (prov === last) return true;
   const p = findProvPath(a, to, prov, last); if (!p) return false;
   a.path = a.path.concat(p); return true;
 }
 // отряды между войсками в одной провинции
-function armiesTogether(a, b) { return a !== b && a.owner === b.owner && !a.leg && !b.leg && armyProv(a) === armyProv(b); }
+function armiesTogether(a, b) { return a !== b && a.owner === b.owner && !a.leg && !b.leg && !a.route && !b.route && (GRID.ok ? cellDist(armyCell(a), armyCell(b)) <= 2 : armyProv(a) === armyProv(b)); }
 function transferUnits(from, to, idx) {
   const room = 12 - to.units.length, take = idx.slice().sort((x, y) => y - x).slice(0, Math.max(0, room));
   const moved = take.map(i => from.units.splice(i, 1)[0]).reverse(); to.units.push(...moved);
@@ -330,11 +482,22 @@ function transferUnits(from, to, idx) {
 function splitArmy(a, idx) {
   if (!idx.length || idx.length >= a.units.length) return null;
   if (a.owner === 'byz' && myArmies().length >= 2 + G.heroes.filter(h => h.role === 'general' && h.status === 'court').length) return null;
-  const n = addArmy(a.owner, a.region, [], 'Войско ' + (myArmies().length + 1)); n.prov = armyProv(a);
+  const n = addArmy(a.owner, a.region, [], 'Войско ' + (myArmies().length + 1)); n.prov = armyProv(a); if (GRID.ok) n.cell = armyCell(a);
   transferUnits(a, n, idx); return n;
 }
-function setArmyPath(a, to, prov) {
-  to = RID(to);
+function setArmyPath(a, to, prov, cell) {
+  to = RID(to); a.route = null;
+  if (GRID.ok) {   // сетка: цель — клетка (щелчок), иначе город региона; путь по провинциям — только для «коридора» и решений
+    armyCell(a);
+    const pg = provGraph(), goal = cell != null ? snapCell(cell, prov != null ? prov : cellProv(cell)) : (prov != null ? snapCell(cellAt(MAPINFO.provs[prov][1], MAPINFO.provs[prov][2]), prov) : cityCell(to));
+    const gp = cellProv(goal); if (gp < 0) return false;
+    if (goal === a.cell) { a.path = []; return true; }
+    if (pg.reg[gp] !== RID(a.region) && !canEnter(a.owner, pg.reg[gp])) return false;
+    const p = gp === armyProv(a) ? [gp] : findProvPath(a, pg.reg[gp], gp); if (!p) return false;
+    a.path = p.length ? p : [gp]; a.goal = goal;
+    const r = planRoute(a); if (!r) { a.path = []; return false; }
+    a.route = { c: r.c.slice(), d: r.d.slice() }; a.ri = 0; a.rt = 0; return true;
+  }
   if (to === RID(a.region) && (prov == null || prov === armyProv(a))) { a.path = []; return true; }
   if (to !== RID(a.region) && !canEnter(a.owner, to)) return false;
   const p = findProvPath(a, to, prov); if (!p) return false;
@@ -612,7 +775,7 @@ function capture(r, by) {
 }
 async function processSieges() {
   for (const r of Object.values(G.regions)) {
-    const bes = G.armies.filter(a => a.region === r.id && atWar(a.owner, r.owner));
+    const bes = G.armies.filter(a => a.region === r.id && atWar(a.owner, r.owner) && nearCity(a, r.id));   // осада — у города (на сетке)
     if (!bes.length) continue;
     // защитники-армии в области: сначала бой (обычно уже был при входе)
     if (G.armies.some(a => a.region === r.id && a.owner === r.owner)) continue;
@@ -733,7 +896,7 @@ function battleStats(a, d, aWon, place, res) {
 async function stepArmy(a, to) {
   if (!G.armies.includes(a)) return;
   const r = R(to);
-  const enemies = G.armies.filter(x => x.region === to && atWar(a.owner, x.owner));
+  const enemies = GRID.ok ? [] : G.armies.filter(x => x.region === to && atWar(a.owner, x.owner));   // на сетке бой — при встрече (соседние клетки)
   if (enemies.length) {
     const def = enemies.sort((x, y) => armyPower(y) - armyPower(x))[0];
     const won = await fieldBattle(a, def, r);
@@ -762,7 +925,7 @@ async function movePlayerArmies() {
 }
 async function playerStorm(a) {
   const r = R(a.region);
-  if (!atWar('byz', r.owner) || a.stormed) return false;
+  if (!atWar('byz', r.owner) || a.stormed || !nearCity(a, r.id)) return false;   // штурм — только у города
   await stormBattle(a, r);
   return true;
 }
@@ -830,9 +993,10 @@ async function aiMoves() {
     // движение
     for (const a of myArm.slice()) {
       if (!G.armies.includes(a) || !a.units.length) { if (!a.units.length) G.armies = G.armies.filter(x => x !== a); continue; }
-      if (a.leg || a.path.length) continue;   // уже в пути
+      if (a.leg || a.path.length || a.route) continue;   // уже в пути
       const here = R(a.region);
       const pow = armyPower(a);
+      if (atWar(f, here.owner) && !nearCity(a, here.id)) { setArmyPath(a, here.id); continue; }   // на сетке: сначала дойти до города
       if (atWar(f, here.owner)) {
         // осада: штурм или ждём
         const gp = garPower(here) * (1 + here.fort * 0.35);
