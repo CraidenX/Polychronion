@@ -167,7 +167,7 @@ table.t td,table.t th{border-bottom:1px solid #3a2b42;padding:3px 6px;text-align
 <script src="borders.js"></script>
 <script src="roads.js"></script>
 <script>
-const GAME_VERSION = {"v": 97, "date": "26.11.2026 20:38"};
+const GAME_VERSION = {"v": 98, "date": "26.11.2026 21:36"};
 'use strict';
 /* =====================================================================
    ДЕРЖАВА ПАЛЕОЛОГОВ — один файл. Разделы:
@@ -3377,6 +3377,7 @@ function polOverlay(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
 // границы держав в политическом режиме: с каждой стороны — линия в цвете своей державы (затемнённом), ничейные — пунктир
 function polBorders(ctx, z, vx0, vy0, vx1, vy1, pa) {   // I4: полоса 8 px экрана (альфа 0,28) с каждой стороны своим цветом; линия 2 px — цвет державы ×0,8 (по 1 px на сторону); ничейные — пунктир
   const C = VEC.cls; if (!C || !G || !G.prov) return; const band = new Map(), line = new Map(), dash = new Path2D();
+  const zt = clamp((Math.log2(z) + 1) / 3, 0, 1), bw = 4 + 4 * zt, lw = 0.5 + 0.5 * zt;   // J1: полоса 4 → 8 px, линия 1 → 2 px (по половине на сторону) — от 0,5× до 4×
   const side = g => { if (g.side != null) return g.side; const q = g.pts, n = q.length / 2, i = Math.max(0, Math.floor(n / 2) - 1); const dx = q[i * 2 + 2] - q[i * 2], dy = q[i * 2 + 3] - q[i * 2 + 1], L = Math.hypot(dx, dy) || 1, mx = (q[i * 2] + q[i * 2 + 2]) / 2, my = (q[i * 2 + 1] + q[i * 2 + 3]) / 2, nx = -dy / L * 2.5, ny = dx / L * 2.5;
     const pv = (x, y) => { const px = Math.floor(x / PIX.s), py = Math.floor(y / PIX.s); return PIX.ids[py * PIX.w + px] - 1; }; return g.side = pv(mx + nx, my + ny) === g.a ? 1 : pv(mx - nx, my - ny) === g.a ? -1 : 1; };
   const offLine = (path, q, sg, off) => { const n = q.length / 2; for (let i = 0; i < n; i++) { const i0 = Math.max(0, i - 1), i1 = Math.min(n - 1, i + 1), dx = q[i1 * 2] - q[i0 * 2], dy = q[i1 * 2 + 1] - q[i0 * 2 + 1], L = Math.hypot(dx, dy) || 1, x = q[i * 2] - dy / L * off * sg, y = q[i * 2 + 1] + dx / L * off * sg; if (i) path.lineTo(x, y); else path.moveTo(x, y); } };
@@ -3386,15 +3387,15 @@ function polBorders(ctx, z, vx0, vy0, vx1, vy1, pa) {   // I4: полоса 8 px
     const oa = G.prov[g.a], ob = G.prov[g.b];
     if (oa === 'free' || ob === 'free' || !oa || !ob) { const q = g.pts; dash.moveTo(q[0], q[1]); for (let i = 2; i < q.length; i += 2) dash.lineTo(q[i], q[i + 1]); }
     const sg = side(g);
-    for (const [o, s2] of [[oa, sg], [ob, -sg]]) { if (!o || o === 'free' || !FACTIONS[o]) continue; offLine(get(band, o), g.pts, s2, 4 / z); offLine(get(line, o), g.pts, s2, 0.5 / z); }
+    for (const [o, s2] of [[oa, sg], [ob, -sg]]) { if (!o || o === 'free' || !FACTIONS[o]) continue; offLine(get(band, o), g.pts, s2, bw / 2 / z); offLine(get(line, o), g.pts, s2, lw / 2 / z); }
   }
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
-  ctx.globalAlpha = 0.28 * pa; ctx.lineWidth = 8 / z; for (const [o, p] of band) { ctx.strokeStyle = FACTIONS[o].color; ctx.stroke(p); }
-  ctx.globalAlpha = pa; ctx.lineWidth = 1 / z; for (const [o, p] of line) { ctx.strokeStyle = polDark(FACTIONS[o].color); ctx.stroke(p); }
+  ctx.globalAlpha = 0.25 * pa; ctx.lineWidth = bw / z; for (const [o, p] of band) { ctx.strokeStyle = FACTIONS[o].color; ctx.stroke(p); }
+  ctx.globalAlpha = pa; ctx.lineWidth = lw / z; for (const [o, p] of line) { ctx.strokeStyle = polDark(FACTIONS[o].color); ctx.stroke(p); }
   ctx.setLineDash([4 / z, 3 / z]); ctx.strokeStyle = 'rgba(40,30,25,.85)'; ctx.lineWidth = 1.3 / z; ctx.stroke(dash); ctx.setLineDash([]);
   ctx.restore();
 }
-const polDark = hex => { const n = parseInt(hex.slice(1), 16); return `rgb(${(n >> 16 & 255) * 0.8 | 0},${(n >> 8 & 255) * 0.8 | 0},${(n & 255) * 0.8 | 0})`; };   // цвет державы ×0,8
+const polDark = hex => { const n = parseInt(hex.slice(1), 16); return `rgb(${(n >> 16 & 255) * 0.75 | 0},${(n >> 8 & 255) * 0.75 | 0},${(n & 255) * 0.75 | 0})`; };   // цвет державы ×0,75
 // I4: заливка цветом державы (точный цвет из states.md / FACTIONS), альфа 0,35, обычное смешивание поверх итоговой картинки.
 // В каждом пикселе — ровно одна держава (цвета соседей не смешиваются): издали — готовая картинка в разрешении карты,
 // вблизи — слой в разрешении экрана, граница между державами — по сглаженной (а не ступенчатой) линии; собирается, когда карта остановилась
@@ -3430,22 +3431,33 @@ function polFillBuild(vx0, vy0, vx1, vy1, kb) {
   }
   x.putImageData(im, 0, 0); POLF.c = { cv, X0, Y0, X1, Y1, kb, sig: POLF.sig };
 }
-function polFill(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
+function polFill(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {   // J1: внутри держав итоговая картинка обесцвечивается (~65 %) и высветляется, поверх — цвет державы, альфа 0,5
   if (!PIX.ids || !G || !G.prov) return; polFillPrep();
-  const kz = dpr * z, M = MAPINFO;
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 0.35; ctx.globalCompositeOperation = 'source-over';
+  const kz = dpr * z, M = MAPINFO, cw = ctx.canvas.width, ch = ctx.canvas.height;
+  // маска держав (точный цвет, альфа 255; море, ничейные и земли вне игры — пусто) в кадре — на отдельном холсте экрана
+  const mk = POLF.mk || (POLF.mk = document.createElement('canvas')); if (mk.width !== cw || mk.height !== ch) { mk.width = cw; mk.height = ch; }
+  const m = mk.getContext('2d'); m.setTransform(1, 0, 0, 1, 0, 0); m.globalCompositeOperation = 'copy'; m.globalAlpha = 1;
   if (kz * PIX.s <= 2.5) {   // издали: пиксель карты держав не крупнее ~2,5 px экрана
-    const c = POLF.full, s = c.width / M.W; ctx.imageSmoothingEnabled = kz * PIX.s < 1;
-    const X0 = Math.max(0, vx0), Y0 = Math.max(0, vy0);
-    ctx.drawImage(c, X0 * s, Y0 * s, (Math.min(M.W, vx1) - X0) * s, (Math.min(M.H, vy1) - Y0) * s, dpr * v.x + X0 * kz, dpr * v.y + Y0 * kz, (Math.min(M.W, vx1) - X0) * kz, (Math.min(M.H, vy1) - Y0) * kz);
+    const c = POLF.full, s = c.width / M.W; m.imageSmoothingEnabled = kz * PIX.s < 1;
+    const X0 = Math.max(0, vx0), Y0 = Math.max(0, vy0), X1 = Math.min(M.W, vx1), Y1 = Math.min(M.H, vy1);
+    m.clearRect(0, 0, cw, ch); m.globalCompositeOperation = 'source-over';
+    m.drawImage(c, X0 * s, Y0 * s, (X1 - X0) * s, (Y1 - Y0) * s, dpr * v.x + X0 * kz, dpr * v.y + Y0 * kz, (X1 - X0) * kz, (Y1 - Y0) * kz);
   } else {
     const kb = Math.pow(2, Math.ceil(Math.log2(kz) * 2 - 1e-6) / 2), c = POLF.c, moving = performance.now() - (UI.lastMove || 0) < 160;
     const fits = c && c.sig === POLF.sig && Math.abs(c.kb - kb) < 1e-6 && vx0 >= c.X0 && vy0 >= c.Y0 && vx1 <= c.X1 && vy1 <= c.Y1;
     if (!fits) { if (!moving || !c || c.sig !== POLF.sig) polFillBuild(vx0, vy0, vx1, vy1, kb); else { clearTimeout(POLF.t); POLF.t = setTimeout(scheduleVector, 180); } }
-    const g = POLF.c; ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(g.cv, dpr * v.x + g.X0 * kz, dpr * v.y + g.Y0 * kz, (g.X1 - g.X0) * kz, (g.Y1 - g.Y0) * kz);
+    const g = POLF.c; m.clearRect(0, 0, cw, ch); m.globalCompositeOperation = 'source-over'; m.imageSmoothingEnabled = true;
+    m.drawImage(g.cv, dpr * v.x + g.X0 * kz, dpr * v.y + g.Y0 * kz, (g.X1 - g.X0) * kz, (g.Y1 - g.Y0) * kz);
   }
-  ctx.restore();
+  // обработанный кадр: серое 65 % (фильтр холста), высветление (0,25 + 0,75 × серое ≈ белый поверх 16 %), цвет державы 0,5 — и только внутри маски
+  const sc = POLF.sc || (POLF.sc = document.createElement('canvas')); if (sc.width !== cw || sc.height !== ch) { sc.width = cw; sc.height = ch; }
+  const q = sc.getContext('2d'); q.setTransform(1, 0, 0, 1, 0, 0); q.globalAlpha = 1; q.globalCompositeOperation = 'copy';
+  if ('filter' in q) q.filter = 'grayscale(65%)';
+  q.drawImage(ctx.canvas, 0, 0); if ('filter' in q) q.filter = 'none';
+  q.globalCompositeOperation = 'source-over'; q.fillStyle = 'rgba(255,255,255,0.1625)'; q.fillRect(0, 0, cw, ch);
+  q.globalAlpha = 0.5; q.drawImage(mk, 0, 0); q.globalAlpha = 1;
+  q.globalCompositeOperation = 'destination-in'; q.drawImage(mk, 0, 0); q.globalCompositeOperation = 'source-over';
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(sc, 0, 0); ctx.restore();
 }
 /* --- подкраска спрайтов под землю (G1): вариант спрайта с цветом тона земли у подножия (mktone.py, 8 тонов), с сохранением яркости:
    у подножия ~60 %, к вершине ~15 %, снег не трогаем. Варианты делаются один раз по требованию и хранятся (не больше ~400) --- */
