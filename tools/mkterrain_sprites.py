@@ -133,23 +133,21 @@ SIZE = {'peaks_snow': (140, 190), 'ridges_snow_h': (200, 250), 'ridges_snow_d1':
         'pass_1': (235, 235), 'pass_1b': (235, 235), 'pass_2': (235, 235)}
 ANCHOR = {'peaks_snow': 0.82, 'hills': 0.7, 'hills_d1': 0.7, 'hills_d2': 0.7, 'hills_single': 0.7, 'pass_1': 0.7, 'pass_1b': 0.7, 'pass_2': 0.7}
 NV = {n: len(glob.glob(f'{ART}/{n}/peak_*.png')) for n in os.listdir(ART) if os.path.isdir(f'{ART}/{n}')}
+# «конструктор» (terrain_lego, нарезка prepare_lego.sh): хребты parts_ridges_a по направлениям из dirs.txt и одиночные вершины parts_summits
+LEGO = SP + 'terrain_lego'
+_pk = lambda d: sorted(glob.glob(f'{LEGO}/{d}/peak_*.png'), key=lambda f: int(f.split('_')[-1][:-4]))
+_rd = open(f'{LEGO}/parts_ridges_a/dirs.txt').read().split()
+LEGO_FILES = {f'lego_ridge_{d}': [f for f, dd in zip(_pk('parts_ridges_a'), _rd) if dd == d] for d in ('h', 'd1', 'd2')}
+LEGO_FILES['lego_summit'] = _pk('parts_summits')
+for n, fs in LEGO_FILES.items(): NV[n] = len(fs); SIZE[n] = (150, 200) if 'ridge' in n else (95, 130); ANCHOR[n] = 0.85
+spath = lambda n, k: LEGO_FILES[n][k] if n in LEGO_FILES else f'{ART}/{n}/peak_{k}.png'
 items = []
-def add(y, x, name, scale=1.0):
+def add(y, x, name, scale=1.0, px=3):   # px — пикселей экрана на пиксель карты, в которых задан размер набора (проба 3×, конструктор 4×)
     lo, hi_ = SIZE[name]
-    items.append((int(y), name, int(x), int(rng.integers(NV[name])), round(float(rng.uniform(lo, hi_) * scale / 3), 1)))
+    items.append((int(y), name, int(x), int(rng.integers(NV[name])), round(float(rng.uniform(lo, hi_) * scale / px), 1)))
 sea = ~land
-# 1) непроходимые: плотная цепь (шаг ~14 px), спрайты перекрываются
-step = 14
-gy, gx = np.mgrid[step // 2:H:step, step // 2:W:int(step * 1.25)]
-for y, x in zip(gy.ravel(), gx.ravel()):
-    y = int(y + rng.integers(-3, 4)); x = int(x + rng.integers(-3, 4))
-    if not (0 <= y < H and 0 <= x < W) or impass[y, x] <= 0.6 or saddle[y, x] >= 0.35 or lm_block[y, x]: continue
-    d = direction(y, x)
-    name = {'h': 'ridges_snow_h', 'd1': 'ridges_snow_d1', 'd2': 'ridges_snow_d2'}.get(d, 'peaks_snow')
-    if rng.random() < 0.2: name = 'peaks_snow'
-    add(y, x, name, 0.55 + 0.45 * np.clip((impass[y, x] - 0.6) / 0.3, 0, 1))
 # 2) проходимые и холмы: разреженно, по убыванию высоты, с минимальным расстоянием (сетка ускоряет проверку)
-def sparse(mask, score, mind):
+def sparse(mask, score, mind, kx=0.8):
     ys, xs = np.nonzero(mask)
     order = np.argsort(-score[ys, xs]); taken = []; cell = {}; cs = mind
     for i in order:
@@ -157,7 +155,7 @@ def sparse(mask, score, mind):
         for a in (cy - 1, cy, cy + 1):
             for b in (cx - 2, cx - 1, cx, cx + 1, cx + 2):
                 for ty, tx in cell.get((a, b), ()):
-                    if (y - ty) ** 2 + ((x - tx) * 0.8) ** 2 <= mind ** 2: ok = False; break
+                    if (y - ty) ** 2 + ((x - tx) * kx) ** 2 <= mind ** 2: ok = False; break
                 if not ok: break
             if not ok: break
         if ok: taken.append((y, x)); cell.setdefault((cy, cx), []).append((y, x))
@@ -170,6 +168,19 @@ hz = hills_m & (saddle < 0.35) & ~lm_block & (noise(10, 2) > 0.1)
 for y, x in sparse(hz, base_h + 6 * noise(10 / 3 * 3, 2), 32):
     d = direction(y, x)
     add(y, x, {'h': 'hills', 'd1': 'hills_d1', 'd2': 'hills_d2'}.get(d, 'hills_single'), rng.uniform(0.8, 1.0))
+# 1) непроходимые — из «конструктора» (образец terrain_lego/lego_render.py): центры вразброс с шагом ~13 px карты;
+#    направление — тензор структуры маски непроходимых гор; при когерентности > 0,2 — с вероятностью 75 % хребет этого направления
+#    (150–200 px экрана при 4×), иначе одиночная вершина (95–130)
+impm = (impass > 0.6) & (saddle < 0.35) & ~lm_block
+mi = nd.gaussian_filter(impm.astype(np.float32), 3); gyi, gxi = np.gradient(mi)
+Ixx = nd.gaussian_filter(gxi * gxi, 6); Iyy = nd.gaussian_filter(gyi * gyi, 6); Ixy = nd.gaussian_filter(gxi * gyi, 6)
+iang = 0.5 * np.degrees(np.arctan2(2 * Ixy, Ixx - Iyy)) + 90; iang = (iang + 90) % 180 - 90
+icoh = np.sqrt((Ixx - Iyy) ** 2 + 4 * Ixy ** 2) / (Ixx + Iyy + 1e-9)
+del mi, gyi, gxi, Ixx, Iyy, Ixy
+for y, x in sparse(impm, rng.random((H, W)).astype(np.float32), 13, 1.0):
+    a = iang[y, x]; d = ('h' if abs(a) < 25 else ('d1' if a > 0 else 'd2')) if icoh[y, x] > 0.2 else None
+    if d and rng.random() < 0.75: add(y, x, f'lego_ridge_{d}', px=4)
+    else: add(y, x, 'lego_summit', px=4)
 # 3) перевалы: дорога поперёк хребта
 for p in PASSES:
     x, y = int(p[2]), int(p[3])
@@ -235,12 +246,21 @@ def ragged_foot(im, name):
     yy = (np.arange(h)[:, None] + 0.5) / h; f = np.clip((yy - 0.5) / 0.1, 0, 1)   # с 55 % высоты вниз — рвём край, вершина чёткая
     a[..., 3] = al * (1 - f * (1 - mask)) * 255
     return Image.fromarray(a.astype(np.uint8), 'RGBA')
+def fade_bottom(im, n, k, frac=0.28):   # низ растворяется с шумом (как в lego_render.py)
+    a = np.asarray(im).astype(np.float32); h, w = a.shape[:2]; r = np.random.default_rng(sum(map(ord, n)) * 31 + k)
+    ex = np.clip(np.minimum(a[..., 0], a[..., 2]) - a[..., 1], 0, None)   # остаток пурпурного фона: красный и синий выше зелёного — к серому
+    a[..., 0] -= ex * 0.85; a[..., 2] -= ex * 0.85
+    f = np.clip((1 - (np.arange(h) + 0.5) / h) / frac, 0, 1)[:, None]
+    nz = nd.gaussian_filter(r.standard_normal((h, w)).astype(np.float32), 2.5 * w / 130); nz = (nz - nz.min()) / (np.ptp(nz) + 1e-9)
+    a[..., 3] *= np.clip(f * (0.6 + 0.8 * nz), 0, 1)
+    return Image.fromarray(a.astype(np.uint8), 'RGBA')
 for n in sorted(used):
     for k in range(NV[n]):
-        im = grade(Image.open(f'{ART}/{n}/peak_{k}.png').convert('RGBA'), n)
-        mw = 900 if n.startswith(('lm_', 'pass_')) else 270
+        im = grade(Image.open(spath(n, k)).convert('RGBA'), n)
+        mw = 900 if n.startswith(('lm_', 'pass_')) else 400 if n.startswith('lego_') else 270
         if im.width > mw: im = im.resize((mw, max(1, round(im.height * mw / im.width))), Image.LANCZOS)
         if n.startswith('lm_'): im = ragged_foot(im, n)
+        if n.startswith('lego_'): im = fade_bottom(im, n, k)
         spr.append((n, k, im))
 AW = 4096; x = y = rowh = 0; rects = {}
 spr.sort(key=lambda t: -t[2].height)
