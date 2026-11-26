@@ -456,6 +456,12 @@ function outerAtClient(clientX, clientY) {
   return outerAt(px, py);
 }
 // уникальная гора под курсором (только вблизи, где она нарисована)
+function bridgeAt(cx, cy) {   // K3: мост под курсором (значок ~ 22 px экрана)
+  if (RIVS.st !== 2 || UI.view.z < 2) return null;
+  const r = $('mapwrap').getBoundingClientRect(), mx = (cx - r.left - UI.view.x) / UI.view.z, my = (cy - r.top - UI.view.y) / UI.view.z, R2 = 12 / UI.view.z;
+  for (const b of RIVS.br) if (Math.abs(b[0] - mx) < R2 && Math.abs(b[1] - my) < R2) return b;
+  return null;
+}
 function landmarkAt(cx, cy) {
   if (TSP.st !== 2 || geoU(UI.view.z) < 0.5) return null;
   const r = $('mapwrap').getBoundingClientRect(), mx = (cx - r.left - UI.view.x) / UI.view.z, my = (cy - r.top - UI.view.y) / UI.view.z;
@@ -463,7 +469,8 @@ function landmarkAt(cx, cy) {
   return null;
 }
 function provTip(cx, cy) {
-  const t = $('ptip'), lm = landmarkAt(cx, cy);
+  const t = $('ptip'), lm = landmarkAt(cx, cy), bz = bridgeAt(cx, cy);
+  if (bz) { t.innerHTML = `<b>${esc(bz[3] || 'Мост')}</b><br><span class="muted">Каменный мост через большую реку${bz[4] === 'город' ? ' у города' : bz[4] === 'дорога' ? ' на дороге' : ''}: переправа без задержки. Без моста большую реку не перейти.</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; }
   if (lm) { t.innerHTML = `<b>${esc(lm.name)}</b><br><span class="muted">${esc(lm.info)}</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; }
   const k = provAt(cx, cy);
   if (k < 0 && G) { const oi = outerAtClient(cx, cy); if (oi >= 0) { t.innerHTML = `<b>${esc(MAPINFO.outer[oi][0])}</b> <span class="muted">· за пределами карты</span>`; t.style.left = (cx + 14) + 'px'; t.style.top = (cy + 16) + 'px'; t.classList.remove('hidden'); return; } }
@@ -1070,17 +1077,23 @@ function riversSmall(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   for (const g of G2) if (g.b) { const w = g.w * zs; ctx.strokeStyle = 'rgba(120,160,190,0.35)'; ctx.lineWidth = Math.max(1, w * 0.35); ctx.stroke(g.P); }                                // стремнина
   ctx.restore();
 }
-// мосты: деревянный настил поперёк реки (по направлению переправы), размер на экране постоянный; видны с 1,5×
+// K3: мосты — каменный арочный мост поперёк реки (в духе значка перевала), размер на экране постоянный; виден с 2×
 function bridgesDraw(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
-  if (z < 1.5) return; if (RIVS.st !== 2) { rivLoad(); return; }
-  const k = dpr * z, L = (z >= 3 ? 18 : 13) * dpr, Wd = L * 0.38;
-  ctx.save();
-  for (const [x, y, an] of RIVS.br) {
-    if (x < vx0 - 5 || x > vx1 + 5 || y < vy0 - 5 || y > vy1 + 5) continue;
+  if (z < 2) return; if (RIVS.st !== 2) { rivLoad(); return; }
+  const k = dpr * z, L = Math.max(22 * dpr, Math.min(14 * k, 40 * dpr)), Wd = L * 0.32, a = Math.min(1, (z - 2) * 3);
+  ctx.save(); ctx.globalAlpha = a;
+  for (const b of RIVS.br) {
+    const x = b[0], y = b[1]; if (x < vx0 - 5 || x > vx1 + 5 || y < vy0 - 5 || y > vy1 + 5) continue;
+    let an = b[2]; while (an > Math.PI / 2) an -= Math.PI; while (an < -Math.PI / 2) an += Math.PI;   // настил — не вверх ногами
     ctx.setTransform(1, 0, 0, 1, dpr * v.x + x * k, dpr * v.y + y * k); ctx.rotate(an);
-    ctx.fillStyle = 'rgba(30,22,14,0.35)'; ctx.fillRect(-L / 2 + 1.5 * dpr, -Wd / 2 + 2 * dpr, L, Wd);   // тень
-    ctx.fillStyle = '#9a7048'; ctx.strokeStyle = '#3a2614'; ctx.lineWidth = 1.2 * dpr; ctx.fillRect(-L / 2, -Wd / 2, L, Wd); ctx.strokeRect(-L / 2, -Wd / 2, L, Wd);
-    ctx.beginPath(); for (let i = 1; i < 5; i++) { const t = -L / 2 + L * i / 5; ctx.moveTo(t, -Wd / 2); ctx.lineTo(t, Wd / 2); } ctx.lineWidth = 0.8 * dpr; ctx.stroke();   // доски
+    ctx.fillStyle = 'rgba(25,18,10,0.35)'; ctx.beginPath(); ctx.ellipse(1.5 * dpr, Wd * 0.75, L * 0.52, Wd * 0.45, 0, 0, Math.PI * 2); ctx.fill();   // тень
+    ctx.beginPath(); ctx.moveTo(-L / 2, Wd / 2);   // каменное тело с тремя арками снизу
+    ctx.lineTo(-L / 2, -Wd / 2); ctx.quadraticCurveTo(0, -Wd * 0.95, L / 2, -Wd / 2); ctx.lineTo(L / 2, Wd / 2);
+    for (let i = 2; i >= 0; i--) { const c = -L / 2 + L * (i + 0.5) / 3, r = L / 7.5; ctx.lineTo(c + r, Wd / 2); ctx.arc(c, Wd / 2, r, 0, Math.PI, true); }
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, -Wd, 0, Wd); g.addColorStop(0, '#d8c9a4'); g.addColorStop(1, '#9c8a66'); ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = '#3d3020'; ctx.lineWidth = 1.2 * dpr; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-L / 2, -Wd / 2 + 2 * dpr); ctx.quadraticCurveTo(0, -Wd * 0.95 + 2 * dpr, L / 2, -Wd / 2 + 2 * dpr); ctx.strokeStyle = 'rgba(61,48,32,0.6)'; ctx.lineWidth = 0.8 * dpr; ctx.stroke();   // парапет
   }
   ctx.restore();
 }

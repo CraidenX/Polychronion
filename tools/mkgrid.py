@@ -96,8 +96,7 @@ flags[(blocks(rv & bigzone).mean(2) >= 0.12)] |= 128
 # города — центры провинций (MAPINFO.provs: [регион, x, y, …]) и клетки в пределах 2 от них
 MI_ = json.load(open(SP + 'mapinfo3.json')); city = np.zeros((GH, GW), bool)
 for pv in MI_['provs']: city[min(GH - 1, int(pv[2]) // C), min(GW - 1, int(pv[1]) // C)] = True
-cityN = nd.binary_dilation(city, iterations=3); BRIDGES = []; BIGX = []
-cityD = nd.distance_transform_edt(~city)   # расстояние до ближайшего города, клеток
+BIGX = []
 # переправы на рёбрах: E, S, SE, SW (по 2 бита: 0 нет, 1 брод, 2 большая река, 3 мост)
 edge = np.zeros((GH, GW), np.uint8)
 for sh, (dy, dx) in enumerate(((0, 1), (1, 0), (1, 1), (1, -1))):
@@ -109,31 +108,11 @@ for sh, (dy, dx) in enumerate(((0, 1), (1, 0), (1, 1), (1, -1))):
         hv = rv[py, px]; hit |= hv; big |= hv & bigzone[py, px]
     hit &= ok & ~rv[ry, rx] & ~rv[ry[y2, x2], rx[y2, x2]]
     code = np.where(big & hit, 2, np.where(hit, 1, 0)).astype(np.uint8)
-    # J5: мост — где большую реку пересекает дорога (дорога с обеих сторон) или у города (центр провинции в пределах 2 клеток)
-    rd = (flags & 4) > 0; bridge = (code == 2) & ((rd & rd[y2, x2]) | cityN | cityN[y2, x2])
-    code[bridge] = 3
-    for yy_, xx_ in zip(*np.nonzero(bridge)): BRIDGES.append(((gx[yy_, xx_] + (gx[yy_, xx_] + dx)) / 2 * C + C / 2, (gy[yy_, xx_] + gy[yy_, xx_] + dy) / 2 * C + C / 2, np.arctan2(dy, dx)))
-    for yy_, xx_ in zip(*np.nonzero((code == 2) & ((flags & 2) > 0))): BIGX.append((float(cityD[yy_, xx_]), sh, yy_, xx_, (gx[yy_, xx_] + (gx[yy_, xx_] + dx)) / 2 * C + C / 2, (gy[yy_, xx_] + gy[yy_, xx_] + dy) / 2 * C + C / 2, np.arctan2(dy, dx)))
+    for yy_, xx_ in zip(*np.nonzero(code == 2)): BIGX.append((sh, yy_, xx_, (gx[yy_, xx_] + (gx[yy_, xx_] + dx)) / 2 * C + C / 2, (gy[yy_, xx_] + gy[yy_, xx_] + dy) / 2 * C + C / 2))
     edge |= code << (2 * sh)
-# переправа не реже чем раз в ~120 px вдоль каждой большой реки в игровой зоне — у ближайшего к реке города
-SPAN = 120
-for d_, sh_, yy_, xx_, x, y, an_ in sorted(BIGX):
-    if all((x - a) ** 2 + (y - b) ** 2 > SPAN ** 2 for a, b, _ in BRIDGES):
-        BRIDGES.append((x, y, an_))
-# мосты через водные участки: у городов и дорог, затем не реже чем раз в SPAN px — клетка реки снова переходима (флаг 64 + 128 = мост)
-rdN = nd.binary_dilation((flags & 4) > 0, iterations=1)
-zoneN = nd.binary_dilation((flags & 2) > 0, iterations=2)
-cand = [(float(cityD[y, x]), y, x) for y, x in zip(*np.nonzero(rcell & zoneN))]
-for d_, y, x in sorted(cand):
-    px_, py_ = x * C + C / 2, y * C + C / 2
-    if (cityN[y, x] or rdN[y, x]) or all((px_ - a) ** 2 + (py_ - b) ** 2 > SPAN ** 2 for a, b, _ in BRIDGES):
-        if any((px_ - a) ** 2 + (py_ - b) ** 2 <= 30 ** 2 for a, b, _ in BRIDGES): continue   # не гуще одного моста на 30 px
-        ys_, xs_ = slice(max(0, y - 1), y + 2), slice(max(0, x - 1), x + 2)
-        sub_ = rcell[ys_, xs_]; flags[ys_, xs_][sub_] |= 64
-        BRIDGES.append((px_, py_, 0.0))
-# мост — на всех рёбрах большой реки в пределах 10 px от точки переправы (река шире клетки — иначе мост ведёт в следующую клетку реки)
-for d_, sh_, yy_, xx_, x, y, an_ in BIGX:
-    if any((x - a) ** 2 + (y - b) ** 2 <= 10 ** 2 for a, b, _ in BRIDGES): edge[yy_, xx_] = (int(edge[yy_, xx_]) & (255 ^ (3 << (2 * sh_)))) | (3 << (2 * sh_))
+# K3: мосты — список tools/bridges.json (правится вручную; пересобрать заново: REGEN_BRIDGES=1). Автоматически — у городов на большой реке
+# (центр провинции не дальше 12 px от реки) и на пересечениях дорог (roads.js) с большой рекой; не гуще одного на 25 px.
+# Переход через большую реку — только по мосту: ребро сетки через реку в пределах 10 px от моста, водные клетки реки — в пределах клетки от моста.
 RB_ = json.load(open(OUT + '/rivers_big.json'))['rivers']; SEGS = []
 for b_ in RB_.values():
     q = b_['pts']
@@ -145,13 +124,45 @@ SEGS = np.array(SEGS, np.float64)
 def snap_br(x, y):   # ближайшая точка русла и угол поперёк реки
     ax, ay, bx, by = SEGS.T; dx_, dy_ = bx - ax, by - ay; L2 = np.maximum(dx_ * dx_ + dy_ * dy_, 1e-9)
     t = np.clip(((x - ax) * dx_ + (y - ay) * dy_) / L2, 0, 1); px, py = ax + t * dx_, ay + t * dy_; i = int(np.argmin((px - x) ** 2 + (py - y) ** 2))
-    if (px[i] - x) ** 2 + (py[i] - y) ** 2 > 8 ** 2: return x, y, float(np.arctan2(dy_[i], dx_[i]) + np.pi / 2)   # далеко от линии — место не двигаем, только угол
+    if (px[i] - x) ** 2 + (py[i] - y) ** 2 > 8 ** 2: return x, y, float(np.arctan2(dy_[i], dx_[i]) + np.pi / 2)
     return float(px[i]), float(py[i]), float(np.arctan2(dy_[i], dx_[i]) + np.pi / 2)
-BRIDGES = [snap_br(x, y) for x, y, _ in BRIDGES]
-br_out = []
-for x, y, an_ in BRIDGES:
-    if all((x - a) ** 2 + (y - b) ** 2 > 10 ** 2 for a, b, _ in br_out): br_out.append((x, y, an_))
-json.dump({'_': 'Мосты через большие реки (mkgrid.py): точки в px карты — значки на карте', 'bridges': [[round(x, 1), round(y, 1), round(float(an_), 2)] for x, y, an_ in br_out]}, open(OUT + '/bridges.json', 'w'), separators=(',', ':'))
+BPATH = SP + 'bridges.json'
+if os.path.exists(BPATH) and not os.environ.get('REGEN_BRIDGES'):
+    BL = json.load(open(BPATH))['bridges']
+else:
+    rivpx = (rv & bigzone) | rwat; rivD, (riy, rix) = nd.distance_transform_edt(~rivpx, return_indices=True)
+    cand = []
+    for pv in MI_['provs']:   # города на реке
+        x, y = float(pv[1]), float(pv[2])
+        if 0 <= int(y) < H and 0 <= int(x) < W and rivD[int(y), int(x)] <= 12 and (m['zone'][int(y), int(x)] or True): cand.append((0, x, y, 'город', pv[4]))
+    rimg = Image.new('L', (W, H), 0); drr = ImageDraw.Draw(rimg)   # дороги в px карты
+    for r in roads:
+        if not r: continue
+        pts = []; x = y = 0
+        for i in range(0, len(r), 2): x += r[i]; y += r[i + 1]; pts.append((x, y))
+        if len(pts) > 1: drr.line(pts, fill=255, width=1)
+    xr = (np.asarray(rimg) > 0) & nd.binary_dilation(rivpx, iterations=1)
+    lb_, n_ = nd.label(xr, structure=np.ones((3, 3)))
+    for cy_, cx_ in nd.center_of_mass(xr, lb_, range(1, n_ + 1)): cand.append((1, float(cx_), float(cy_), 'дорога', ''))
+    BL = []
+    for pr, x, y, kind, name in sorted(cand, key=lambda c: c[0]):
+        iy_, ix_ = int(np.clip(y, 0, H - 1)), int(np.clip(x, 0, W - 1))
+        if rivD[iy_, ix_] > 15: continue
+        x, y = float(rix[iy_, ix_]) + 0.5, float(riy[iy_, ix_]) + 0.5   # на воде большой реки (не на ручной линии)
+        _, _, an_ = snap_br(x, y)
+        if any((x - b['x']) ** 2 + (y - b['y']) ** 2 <= 25 ** 2 for b in BL): continue
+        if not name:   # ближайшая провинция
+            k_ = int(np.argmin([(pv[1] - x) ** 2 + (pv[2] - y) ** 2 for pv in MI_['provs']])); name = MI_['provs'][k_][4]
+        BL.append({'x': round(x, 1), 'y': round(y, 1), 'a': round(an_, 2), 'kind': kind, 'name': 'Мост у ' + name.split(',')[0]})
+    json.dump({'_': 'Мосты через большие реки. Правится вручную: x, y — px карты (на русле), a — угол настила (рад), kind — город/дорога, name — подсказка. '
+               'Пересобрать заново: REGEN_BRIDGES=1 python3 -I mkgrid.py ..', 'bridges': BL}, open(BPATH, 'w'), ensure_ascii=False, indent=1)
+for sh_, yy_, xx_, x, y in BIGX:
+    if any((x - b['x']) ** 2 + (y - b['y']) ** 2 <= 10 ** 2 for b in BL): edge[yy_, xx_] = (int(edge[yy_, xx_]) & (255 ^ (3 << (2 * sh_)))) | (3 << (2 * sh_))
+for b in BL:   # водные участки: клетки реки у моста — переходимы (флаг 64 + 128)
+    cx_, cy_ = int(b['x'] // C), int(b['y'] // C); ys_, xs_ = slice(max(0, cy_ - 1), cy_ + 2), slice(max(0, cx_ - 1), cx_ + 2)
+    sub_ = rcell[ys_, xs_]; flags[ys_, xs_][sub_] |= 64
+br_out = BL
+json.dump({'_': 'Мосты (копия tools/bridges.json для игры)', 'bridges': [[b['x'], b['y'], b['a'], b.get('name', ''), b.get('kind', '')] for b in BL]}, open(OUT + '/bridges.json', 'w'), ensure_ascii=False, separators=(',', ':'))
 # запись: заголовок + 5 слоёв, каждый — RLE (значение u16, длина u16), построчно подряд
 def rle(a):
     a = a.ravel().astype(np.int64); out = []; i = 0; n = len(a)
