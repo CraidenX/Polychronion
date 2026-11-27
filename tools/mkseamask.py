@@ -13,6 +13,8 @@ lab, n = nd.label(sea)
 sz = nd.sum(sea, lab, range(1, n + 1))
 big = np.isin(lab, [i + 1 for i, v in enumerate(sz) if v > 150000])
 big |= nd.binary_dilation(big, iterations=2) & (k == 0x000020)          # береговая линия у открытого моря
+if os.path.exists(SP + 'umap/riverland.npy'):   # узкая вода рек (mkriverland.py) — суша с рекой, не море: волны и пена её не трогают
+    RL = nd.binary_dilation(np.load(SP + 'umap/riverland.npy'), iterations=2); big &= ~RL
 H, W = big.shape
 m = Image.fromarray((big * 255).astype(np.uint8)).resize(((W + 1) // 2, (H + 1) // 2), Image.BOX)
 Image.merge('LA', (Image.new('L', m.size, 255), m)).save(OUT + '/sea.png', optimize=True)   # море — непрозрачно, остальное прозрачно (для destination-in)

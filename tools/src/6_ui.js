@@ -642,7 +642,7 @@ function drawHiTiles(ctx, vx0, vy0, vx1, vy1, toS, H = HI) {
     ctx.drawImage(e.im, a, b, c - a, d - b);
   }
   ctx.restore();
-  if (H.img.size > 72) { const old = [...H.img.entries()].sort((p, q) => p[1].use - q[1].use).slice(0, H.img.size - 72); for (const [k] of old) H.img.delete(k); }   // держим в памяти до 72 плиток (файлы всех плиток — в кэше браузера после предзагрузки)
+  if (H.img.size > 160) { const old = [...H.img.entries()].sort((p, q) => p[1].use - q[1].use).slice(0, H.img.size - 160); for (const [k] of old) H.img.delete(k); }   // все плитки обоих уровней держим распакованными: при движении подложка не мутнеет   // держим в памяти до 72 плиток (файлы всех плиток — в кэше браузера после предзагрузки)
 }
 
 // резкая фактура земли вблизи (mkdetail.py): «рельеф» текстур в родном разрешении (повтор — 70 px карты, как в плитках) поверх плитки
@@ -668,6 +668,39 @@ function detailBuild(vx0, vy0, vx1, vy1, kz) {
   }
   GD.c = { cv: C, X0, Y0, X1, Y1, kz };
 }
+function gdWorker() {   // K: слой резкой фактуры земли собирается в фоновом потоке (OffscreenCanvas) — без провалов при движении
+  if (GD.wst === 2) return true; if (GD.wst) return false;
+  if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined' || typeof DOMMatrix === 'undefined') { GD.wst = -1; return false; }
+  GD.wst = 1;
+  const src = function () {
+    let IM = null, WI = null, K = null; const PAT = {};
+    onmessage = e => { const d = e.data;
+      if (d.t === 'init') { IM = d.img; WI = d.w; K = d.K; return; }
+      const { X0, Y0, X1, Y1, kz, MW } = d, w = Math.ceil((X1 - X0) * kz), h = Math.ceil((Y1 - Y0) * kz);
+      const C = new OffscreenCanvas(w, h), c = C.getContext('2d'), T = new OffscreenCanvas(w, h), t = T.getContext('2d');
+      c.fillStyle = 'rgb(128,128,128)'; c.fillRect(0, 0, w, h);
+      for (const k of K) {
+        if (!PAT[k]) { PAT[k] = t.createPattern(IM[k], 'repeat'); PAT[k].setTransform(new DOMMatrix().scale(70 / 1024)); }
+        t.setTransform(1, 0, 0, 1, 0, 0); t.globalCompositeOperation = 'source-over'; t.clearRect(0, 0, w, h);
+        t.setTransform(kz, 0, 0, kz, -X0 * kz, -Y0 * kz); t.fillStyle = PAT[k]; t.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+        t.globalCompositeOperation = 'destination-in'; t.imageSmoothingEnabled = true; const wi = WI[k], s = wi.width / MW;
+        const sx0 = Math.max(0, X0 * s - 1), sy0 = Math.max(0, Y0 * s - 1), sw = Math.min(wi.width - sx0, (X1 - X0) * s + 2), sh = Math.min(wi.height - sy0, (Y1 - Y0) * s + 2);
+        if (sw > 0 && sh > 0) t.drawImage(wi, sx0, sy0, sw, sh, sx0 / s, sy0 / s, sw / s, sh / s);
+        c.drawImage(T, 0, 0);
+      }
+      const bm = C.transferToImageBitmap(); postMessage({ bm, X0, Y0, X1, Y1, kz }, [bm]); };
+  };
+  try {
+    const w = new Worker(URL.createObjectURL(new Blob(['(' + src.toString() + ')()'], { type: 'text/javascript' })));
+    w.onmessage = e => { const d = e.data; GD.busy = 0; const old = GD.c && GD.c.cv; GD.c = { cv: d.bm, X0: d.X0, Y0: d.Y0, X1: d.X1, Y1: d.Y1, kz: d.kz }; if (old && old.close && old !== d.bm) old.close(); scheduleVector(); };
+    w.onerror = () => { GD.wst = -1; GD.busy = 0; };
+    Promise.all(GD.K.flatMap(k => [createImageBitmap(GD.img[k]), createImageBitmap(GD.w[k])])).then(bms => {
+      const img = {}, wi = {}; GD.K.forEach((k, i) => { img[k] = bms[i * 2]; wi[k] = bms[i * 2 + 1]; });
+      w.postMessage({ t: 'init', img, w: wi, K: GD.K }, bms); GD.w2 = w; GD.wst = 2; scheduleVector();
+    }).catch(() => { GD.wst = -1; });
+  } catch (e) { GD.wst = -1; }
+  return false;
+}
 function groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   const a = clamp((z * dpr - 4) / 4, 0, 1); if (a <= 0) return;
   if (!GD.st) gdLoad();
@@ -676,7 +709,9 @@ function groundDetail(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
   // пересборка (заливка узорами четырёх текстур) — самое дорогое при приближении, раньше шла на каждом новом масштабе
   const kz = dpr * z, kb = Math.pow(2, Math.ceil(Math.log2(kz) * 4 - 1e-6) / 4), c = GD.c, moving = performance.now() - (UI.lastMove || 0) < 160;
   const fits = c && Math.abs(c.kz - kb) < 1e-6 && vx0 >= c.X0 && vy0 >= c.Y0 && vx1 <= c.X1 && vy1 <= c.Y1;
-  if (!fits) { if (!moving || !c) detailBuild(vx0, vy0, vx1, vy1, kb); else { clearTimeout(GD.t); GD.t = setTimeout(scheduleVector, 180); } }
+  if (!fits) {   // в фоновом потоке — и во время движения (по одному заказу), иначе — сразу, если слоя ещё нет совсем
+    if (gdWorker()) { if (!GD.busy) { GD.busy = 1; const M = MAPINFO, mx = (vx1 - vx0) * 0.4, my = (vy1 - vy0) * 0.4; GD.w2.postMessage({ t: 'build', X0: vx0 - mx, Y0: vy0 - my, X1: vx1 + mx, Y1: vy1 + my, kz: kb, MW: M.W }); } }
+    else if (!moving || !c) detailBuild(vx0, vy0, vx1, vy1, kb); else { clearTimeout(GD.t); GD.t = setTimeout(scheduleVector, 180); } }
   const g = GD.c; if (!g) return;
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = a; ctx.imageSmoothingEnabled = true;
   ctx.drawImage(g.cv, dpr * v.x + g.X0 * kz, dpr * v.y + g.Y0 * kz, (g.X1 - g.X0) * kz, (g.Y1 - g.Y0) * kz);   // во время приближения — растянутый прежний слой
@@ -693,6 +728,12 @@ function vecInit() {
     return { a: b[0], b: b[1], pts, x0, y0, x1, y1 };
   });
 }
+function onBigRiver(g) {   // участок границы идёт вдоль большой реки (≥ 60 % точек ближе ~9 px к её линии)
+  if (RIVS.st !== 2) return false; if (g.rv != null) return g.rv;
+  if (!RIVS.bh) { const h = RIVS.bh = new Set(); for (const r of RIVS.lines) { if (!r.b) continue; const a = r.a; for (let i = 0; i + 3 < a.length; i += 2) { const L = Math.hypot(a[i + 2] - a[i], a[i + 3] - a[i + 1]), n = Math.max(1, Math.ceil(L / 2)); for (let t = 0; t <= n; t++) { const x = a[i] + (a[i + 2] - a[i]) * t / n, y = a[i + 1] + (a[i + 3] - a[i + 1]) * t / n; for (let dy = -9; dy <= 9; dy += 3) for (let dx = -9; dx <= 9; dx += 3) if (dx * dx + dy * dy <= 81) h.add(((y + dy) / 3 | 0) * 4096 + ((x + dx) / 3 | 0)); } } } }
+  const q = g.pts, n = q.length / 2; let k = 0; for (let i = 0; i < n; i++) if (RIVS.bh.has((q[i * 2 + 1] / 3 | 0) * 4096 + (q[i * 2] / 3 | 0))) k++;
+  return g.rv = n > 0 && k / n >= 0.6;
+}
 function vecClassify() {
   const P = MAPINFO.provs, own = k => (G.prov && G.prov[k]) || (P[k][0] >= 0 ? R(ID_BY_IDX[P[k][0]]).owner : null);
   const key = (G.prov || []).join(',');
@@ -702,7 +743,7 @@ function vecClassify() {
     const a = g.a, b = g.b;
     if (a === -1 || b === -1) { if (!(typeof TSP !== 'undefined' && TSP.models && TSP.models.some(md => g.x0 >= md.isthmus && g.x1 <= md.land[2] + 3 && g.y0 >= md.land[1] - 3 && g.y1 <= md.land[3] + 3))) c.push(g); continue; }   // берег под моделью (Афон) не обводим
     if (a < 0 || b < 0) { e.push(g); continue; }
-    if (own(a) !== own(b)) s.push(g); else if (P[a][0] !== P[b][0]) r.push(g); else p.push(g);
+    if (own(a) !== own(b)) { if (!onBigRiver(g)) s.push(g); } else if (P[a][0] !== P[b][0]) { if (!onBigRiver(g)) r.push(g); } else p.push(g);   // по большой реке границу держав и регионов обозначает сама река (линия по старой ступенчатой воде не рисуется)
   }
   VEC.cls = { c, p, r, s, e };
   VEC.cache = null;   // картинку границ пересоберём при следующей отрисовке
@@ -927,13 +968,15 @@ const polDark = hex => { const n = parseInt(hex.slice(1), 16); return `rgb(${(n 
 // вблизи — слой в разрешении экрана, граница между державами — по сглаженной (а не ступенчатой) линии; собирается, когда карта остановилась
 const POLF = { sig: '', full: null, ow: null, cols: null, c: null };
 function polFillPrep() {   // владельцы в половинном разрешении карты держав (текстуры слоя — 4× меньше памяти видеокарты: не «слетают» при движении)
-  const sig = G.prov.join(','); if (sig === POLF.sig && POLF.ow) return;
+  const sig = G.prov.join(',') + (WV.md ? '|m' : ''); if (sig === POLF.sig && POLF.ow) return;
   POLF.sig = sig; POLF.c = null;
   const W0 = PIX.w, ids = PIX.ids, W = Math.ceil(PIX.w / 2), H = Math.ceil(PIX.h / 2), fl = Object.keys(FACTIONS), fi = {}; fl.forEach((f, i) => fi[f] = i);
   const cols = fl.map(f => { const n = parseInt((FACTIONS[f].color || '#808080').slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; });
   const ow = new Int16Array(W * H).fill(-1), any = new Uint8Array(W * H);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = ids[Math.min(PIX.h - 1, y * 2 + 1) * W0 + Math.min(W0 - 1, x * 2 + 1)]; if (v) { any[y * W + x] = 1; const o = G.prov[v - 1]; if (o && o !== 'free' && o in fi) ow[y * W + x] = fi[o]; } }
-  Object.assign(POLF, { ow, any, cols, W, H });
+  const o2 = ow.slice();   // заливка до кромки берега: соседний владелец заходит на 1 px (≈ 2 px карты) в море и пустые пиксели
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; if (ow[i] >= 0 || any[i] || !WV.md || WV.md[Math.min(WV.mh - 1, y) * WV.mw + Math.min(WV.mw - 1, x)] >= 254) continue; const n = ow[i - 1] >= 0 ? ow[i - 1] : ow[i + 1] >= 0 ? ow[i + 1] : ow[i - W] >= 0 ? ow[i - W] : ow[i + W]; if (n >= 0) o2[i] = n; }
+  Object.assign(POLF, { ow: o2, any, cols, W, H });
 }
 function polFillBuild(vx0, vy0, vx1, vy1, kb) {
   const mx = (vx1 - vx0) * 0.15, my = (vy1 - vy0) * 0.15, X0 = vx0 - mx, Y0 = vy0 - my, X1 = vx1 + mx, Y1 = vy1 + my;
@@ -1032,7 +1075,11 @@ function preloadAll() {
   const wait = () => { if (!HI.idx || !HIC.idx) return setTimeout(wait, 150);
     const urls = [...HI.idx.tiles.map(t => HI.dir + '/' + t[0] + '_' + t[1] + '.jpg'), ...HIC.idx.tiles.map(t => HIC.dir + '/' + t[0] + '_' + t[1] + '.jpg')];
     PRL.tilesN = urls.length; let i = 0;
-    const next = () => { if (i >= urls.length) return; const u = urls[i++]; fetch(u, { cache: 'force-cache' }).then(r => r.blob()).catch(() => {}).then(() => { PRL.tiles++; next(); }); };
+    const keys = [...HI.idx.tiles.map(t => [HI, t[0] + '_' + t[1]]), ...HIC.idx.tiles.map(t => [HIC, t[0] + '_' + t[1]])];
+    const next = () => { if (i >= keys.length) return; const [Hs, key] = keys[i++]; let e = Hs.img.get(key);   // сразу распакованная картинка в наборе плиток
+      if (e) { PRL.tiles++; next(); return; }
+      const im = new Image(); e = { im, ok: false, use: 0 }; Hs.img.set(key, e);
+      im.onload = () => { (im.decode ? im.decode() : Promise.resolve()).catch(() => {}).then(() => { e.ok = true; PRL.tiles++; next(); }); }; im.onerror = () => { PRL.tiles++; next(); }; im.src = Hs.dir + '/' + key + '.jpg'; };
     for (let k = 0; k < 6; k++) next(); };
   wait();
   const tick = () => {
@@ -1058,7 +1105,7 @@ function rivLoad() {
   Promise.all([fetch('rivers.json').then(r => r.json()), fetch('bridges.json').then(r => r.json()).catch(() => ({ bridges: [] })), fetch('settlements.json').then(r => r.json()).catch(() => ({ settlements: [] }))]).then(([j, b, se]) => {
     RIVS.st5 = se.settlements || [];
     for (const e of j.edges) { const a = Float32Array.from(e.p); let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); } RIVS.lines.push({ a, w: e.w, b: e.b, o: e.o, bb: [x0, y0, x1, y1] }); }
-    RIVS.br = b.bridges || []; RIVS.st = 2; scheduleVector();
+    RIVS.br = b.bridges || []; RIVS.st = 2; VEC.key = ''; RIVS.bh = null; scheduleVector();
   }).catch(() => { RIVS.st = 3; });
 }
 // K2: реки вблизи — граф (mkrivgraph.py): сглаженные кривые (Катмулл — Ром), ширина по порядку Штралера (малые 1,5–3 px при 4×, большие 5–9),
@@ -1333,7 +1380,7 @@ function terrainLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v) {
       for (const f2 of [f, 2, 1, 0]) { let got = 0; for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) if (put(L2, f2, x, y, clip)) got++; if (got) { any = true; break; } }
       if (any) break; }
     if (!any) {   // нет ничего — участок дальней плитки (там рельеф и деревья уже впечатаны): одна копия вместо живой отрисовки
-      const X0 = cx * CS, Y0 = cy * CS; if (!hiRegion(ctx, X0, Y0, X0 + CS, Y0 + CS, clip, k, dpr, v)) {
+      const X0 = cx * CS, Y0 = cy * CS; if (true) {   // живьём — так же, как будет выглядеть готовый кусок (дальняя плитка давала «мигание» другой земли)
         ctx.save(); ctx.beginPath(); ctx.rect(clip[0], clip[1], clip[2], clip[3]); ctx.clip(); ctx.setTransform(k, 0, 0, k, dpr * v.x, dpr * v.y);   // и плитки нет — живьём
         const g = ICO.sg, q = [];
         for (let gy = Math.floor((Y0 - 30) / ICO.CELL); gy <= Math.floor((Y0 + CS + 150) / ICO.CELL); gy++) for (let gx = Math.floor((X0 - 150) / ICO.CELL); gx <= Math.floor((X0 + CS + 150) / ICO.CELL); gx++) { const a = g.get(gy * ICO.cw + gx); if (a) for (const o of a) if (!o.lm && tchShow(o, f)) q.push(o); }
@@ -1475,7 +1522,7 @@ function paintVector() {
         const W = PIX.w, H2 = PIX.h, tw = Math.ceil(W / 2), th = Math.ceil(H2 / 2), c = document.createElement('canvas'); c.width = tw; c.height = th;
         const cx = c.getContext('2d'), im = cx.createImageData(tw, th), d = im.data, ids = PIX.ids, ou = PIX.outer, mt = PIX.mtn;
         const riv = i => mt && (mt[i] === 2 || mt[i + 1] === 2 || mt[i + W] === 2 || mt[i + W + 1] === 2);   // клетка 2×2 с рекой — без вуали: русло видно и издали
-        for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) { const i = Math.min(H2 - 2, y * 2) * W + Math.min(W - 2, x * 2); if (!ids[i] && ou[i] && !riv(i)) { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } }
+        for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) { const i = Math.min(H2 - 2, y * 2) * W + Math.min(W - 2, x * 2); if (!ids[i] && ou[i])   /* реки — линиями поверх вуали: «дыры» по старому руслу давали ступенчатую кайму */ { const o = (y * tw + x) * 4; d[o] = 118; d[o + 1] = 116; d[o + 2] = 112; d[o + 3] = 175; } }
         cx.putImageData(im, 0, 0); PIX.outerCv = c;
       }
       const t = PIX.outerCv, k = t.width / M.W; ctx.drawImage(t, vx0 * k, vy0 * k, (vx1 - vx0) * k, (vy1 - vy0) * k, dx0, dy0, dx1 - dx0, dy1 - dy0);
@@ -1749,7 +1796,7 @@ function cloudFrame(now) {
   const cv = $('cloudcv'); if (!cv) return;
   const show = CL.on && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
   if (!show) { if (cv.width) { cv.width = 0; } CL.last = now; return; }
-  if (now - CL.last < 33 || !CA.img) return;   // ~30 кадров/с
+  const vk = UI.view.x + ',' + UI.view.y + ',' + UI.view.z; if ((now - CL.last < 33 && vk === CL.vk) || !CA.img) return; CL.vk = vk;   // ~30 кадров/с; при смене вида — в том же кадре
   const dt = Math.min(0.2, (now - CL.last) / 1000); CL.last = now;
   skyInit(); SKY.t += dt;
   const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;
@@ -2102,7 +2149,7 @@ function waveFrame(now) {
   const cv = $('wavecv'); if (!cv) return;
   const show = (WV.on || WV.foam) && G && UI.tab === 'map' && !$('app').classList.contains('hidden') && !document.hidden;
   if (!show) { if (cv.width) cv.width = 0; WV.last = now; seaGLDraw(0, 1, 0, 0, false); return; }
-  if (now - WV.last < 33) return;
+  const vk = UI.view.x + ',' + UI.view.y + ',' + UI.view.z; if (now - WV.last < 33 && vk === WV.vk) return; WV.vk = vk;   // вид сменился — рисуем в том же кадре, что и сушу (иначе море отстаёт на кадр и «наползает» на края)
   const dt = Math.min(0.2, (now - WV.last) / 1000); WV.last = now; WV.t += dt;
   wavesInit(); if (!WV.pts) return;
   const wrap = $('mapwrap'), dpr = Math.min(2, window.devicePixelRatio || 1), Wd = wrap.clientWidth, Hd = wrap.clientHeight;

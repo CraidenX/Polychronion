@@ -4,6 +4,7 @@
 import json, os, sys, glob
 from collections import defaultdict
 import numpy as np
+from scipy import ndimage as nd
 from PIL import Image
 SP = os.path.dirname(os.path.abspath(__file__)) + '/'
 OUT = sys.argv[1] if len(sys.argv) > 1 else SP + '..'
@@ -13,6 +14,8 @@ POL = sorted(glob.glob(SP + '../source/*political*.png'))[0]
 P = np.asarray(Image.open(POL).convert('RGB')).astype(np.int32)
 KK = (P[..., 0] << 16) | (P[..., 1] << 8) | P[..., 2]
 sea = KK == 0x001F48
+RL = np.load(SP + 'umap/riverland.npy') if os.path.exists(SP + 'umap/riverland.npy') else np.zeros(sea.shape, bool)   # узкая вода рек (mkriverland.py) — суша: без «берегов» по Евфрату и Дунаю
+sea &= ~RL
 LINE = np.isin(KK, [0xDFDFDF, 0x262626, 0x000020, 0x404040, 0x8B5A2B, 0x4A2F1A, 0xFF00FF])   # только линии и игровые горы, не серый фон за краем зоны
 # реки и прочие незакрашенные пиксели суши — к соседней провинции (чтобы не было «берегов» по рекам)
 L = pl.copy()
@@ -23,7 +26,8 @@ def near(dy, dx):
     return r
 ENCL = (near(0, 1) & near(0, -1)) | (near(1, 0) & near(-1, 0))   # линия зажата провинциями с двух сторон
 LINE &= ENCL
-for _ in range(10):
+LINE |= RL | (nd.binary_dilation(RL, iterations=3) & (pl < 0) & ~sea)   # и незакрашенная кромка бывшего русла — к соседней провинции
+for _ in range(16):
     hole = (L < 0) & ~sea & LINE
     if not hole.any(): break
     for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):

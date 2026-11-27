@@ -88,14 +88,15 @@ for a, b, p in edges:
         tx, ty = x - np.mean([q[0] for q in tail]), y - np.mean([q[1] for q in tail]); L = np.hypot(tx, ty)
         if L < 0.5: continue
         tx, ty = tx / L, ty / L
-        sel = (np.abs(sx - x) <= 6) & (np.abs(sy - y) <= 6)
-        best = None
+        sel = (np.abs(sx - x) <= 10) & (np.abs(sy - y) <= 10)
+        best = None   # по направлению — до 10 px (≤ 60°); в любую сторону — до 5 px: висячий конец у другой реки впадает в неё
         for qx, qy in zip(sx[sel], sy[sel]):
             if lab[qy, qx] == lab[y, x]: continue
             vx, vy = qx - x, qy - y; d = np.hypot(vx, vy)
-            if d < 1 or d > 6: continue
-            if (vx * tx + vy * ty) / d < 0.6: continue   # по направлению (≤ ~53°)
-            if best is None or d < best[0]: best = (d, qx, qy)
+            if d < 1 or d > 10: continue
+            if d > 5 and (vx * tx + vy * ty) / d < 0.5: continue
+            sc_ = d - (vx * tx + vy * ty) / d * 2   # предпочтение — вперёд по течению
+            if best is None or sc_ < best[0]: best = (sc_, qx, qy)
         if best: dd.line([(x, y), (best[1], best[2])], fill=255, width=1); joins += 1
 sk = skeletonize(np.asarray(dr) > 0)
 # ---------- устья: висячий конец у моря — дотянуть до воды ----------
@@ -105,7 +106,7 @@ for a, b, p in edges: deg[a] += 1; deg[b] += 1
 _, (iy, ix) = nd.distance_transform_edt(~sea, return_indices=True)
 mouth = set()
 for k, (x, y) in enumerate(nodes):
-    if deg[k] == 1 and seaD[y, x] <= 6: mouth.add(k)
+    if deg[k] == 1 and seaD[y, x] <= 12: mouth.add(k)   # устье: до 12 px от моря — дотягивается до воды
 # ---------- сток и направление: расстояние по графу до стока ----------
 adj = [[] for _ in nodes]
 for e, (a, b, p) in enumerate(edges): L = plen(p); adj[a].append((b, e, L)); adj[b].append((a, e, L))
@@ -148,16 +149,25 @@ def rdp(p, eps):
     d = [abs(ab[0] * (q[1] - a[1]) - ab[1] * (q[0] - a[0])) / L for q in p[1:-1]]; i = int(np.argmax(d)) + 1
     return rdp(p[:i + 1], eps)[:-1] + rdp(p[i:], eps) if d[i - 1] > eps else [p[0], p[-1]]
 omax = max(1, int(order.max()))
+# большие реки: ширина растёт к устью плавно — по расстоянию до стока вдоль графа (5 px у верховья → 9 у устья), а не по Штралеру (в протоках он скачет)
+isbig = {e: np.mean([bigm[y, x] for x, y in p]) > 0.5 for e, (a, b, p) in enumerate(edges)}
+dmaxc = {}
+for e, (a, b, p) in enumerate(edges):
+    if isbig[e]: u_ = down[e][0]; dmaxc[comp[u_]] = max(dmaxc.get(comp[u_], 0), dist[u_] if np.isfinite(dist[u_]) else 0)
 out = []; ras = Image.new('L', (W, H), 0); dr2 = ImageDraw.Draw(ras)
 for e, (a, b, p) in enumerate(edges):
     u, d = down[e]; pts = p if a == u else p[::-1]
     if plen(pts) < 1.5: continue
-    big = np.mean([bigm[y, x] for x, y in pts]) > 0.5
+    big = isbig[e]
     if d in mouth:   # устье — до ближайшей воды
         x, y = pts[-1]; pts = pts + [(int(ix[y, x]), int(iy[y, x]))]
-    q = rdp([(x + 0.5, y + 0.5) for x, y in pts], 0.5)
+    P_ = np.array([(x + 0.5, y + 0.5) for x, y in pts], np.float64)
+    for _ in range(30 if big else 2):   # сглаживание (большие реки — сильнее: ровная лента) лесенки скелета (концы на месте — стыки и устья не расходятся), затем лёгкое упрощение
+        if len(P_) > 2: P_[1:-1] = (P_[:-2] + 2 * P_[1:-1] + P_[2:]) / 4
+    q = rdp([tuple(t) for t in P_], 0.25)
     o = int(order[e])
-    w = round(5 + 4 * min(1, (o - 1) / 4), 2) if big else round(1.5 + 1.5 * min(1, (o - 1) / max(1, min(omax, 5) - 1)), 2)
+    dd_ = dist[d] if np.isfinite(dist[d]) else 0
+    w = round(9 - 4 * min(1, dd_ / max(1.0, dmaxc.get(comp[d], 1))), 2) if big else round(1.5 + 1.5 * min(1, (o - 1) / max(1, min(omax, 5) - 1)), 2)
     out.append({'p': [round(float(v), 1) for pt in q for v in pt], 'o': o, 'b': int(big), 'w': w})
     dr2.line([(x + 0.5, y + 0.5) for x, y in pts], fill=2 if big else 1, width=2 if big else 1)
 json.dump({'_': 'Реки (mkrivgraph.py): рёбра графа вниз по течению; o — порядок Штралера, b — большая река, w — ширина в px экрана при 4×', 'edges': out},
