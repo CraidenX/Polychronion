@@ -926,15 +926,14 @@ const polDark = hex => { const n = parseInt(hex.slice(1), 16); return `rgb(${(n 
 // В каждом пикселе — ровно одна держава (цвета соседей не смешиваются): издали — готовая картинка в разрешении карты,
 // вблизи — слой в разрешении экрана, граница между державами — по сглаженной (а не ступенчатой) линии; собирается, когда карта остановилась
 const POLF = { sig: '', full: null, ow: null, cols: null, c: null };
-function polFillPrep() {
-  const sig = G.prov.join(','); if (sig === POLF.sig && POLF.full) return;
+function polFillPrep() {   // владельцы в половинном разрешении карты держав (текстуры слоя — 4× меньше памяти видеокарты: не «слетают» при движении)
+  const sig = G.prov.join(','); if (sig === POLF.sig && POLF.ow) return;
   POLF.sig = sig; POLF.c = null;
-  const W = PIX.w, H = PIX.h, ids = PIX.ids, fl = Object.keys(FACTIONS), fi = {}; fl.forEach((f, i) => fi[f] = i);
+  const W0 = PIX.w, ids = PIX.ids, W = Math.ceil(PIX.w / 2), H = Math.ceil(PIX.h / 2), fl = Object.keys(FACTIONS), fi = {}; fl.forEach((f, i) => fi[f] = i);
   const cols = fl.map(f => { const n = parseInt((FACTIONS[f].color || '#808080').slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; });
-  const ow = new Int16Array(W * H).fill(-1); for (let i = 0; i < W * H; i++) { const v = ids[i]; if (v) { const o = G.prov[v - 1]; if (o && o !== 'free' && o in fi) ow[i] = fi[o]; } }
-  const c = POLF.full || document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), im = x.createImageData(W, H), d = im.data;
-  for (let i = 0; i < W * H; i++) { const o = ow[i]; if (o < 0) continue; const q = i * 4, cc = cols[o]; d[q] = cc[0]; d[q + 1] = cc[1]; d[q + 2] = cc[2]; d[q + 3] = 255; }
-  x.putImageData(im, 0, 0); Object.assign(POLF, { full: c, ow, cols });
+  const ow = new Int16Array(W * H).fill(-1), any = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = ids[Math.min(PIX.h - 1, y * 2 + 1) * W0 + Math.min(W0 - 1, x * 2 + 1)]; if (v) { any[y * W + x] = 1; const o = G.prov[v - 1]; if (o && o !== 'free' && o in fi) ow[y * W + x] = fi[o]; } }
+  Object.assign(POLF, { ow, any, cols, W, H });
 }
 function polFillBuild(vx0, vy0, vx1, vy1, kb) {
   const mx = (vx1 - vx0) * 0.15, my = (vy1 - vy0) * 0.15, X0 = vx0 - mx, Y0 = vy0 - my, X1 = vx1 + mx, Y1 = vy1 + my;
@@ -961,17 +960,17 @@ function polFillBuild(vx0, vy0, vx1, vy1, kb) {
 // обесцвечивание (режим «насыщенность», 65 %), высветление («экран» серым 0,25 = 0,25 + 0,75 × серое), цвет державы 0,5 + полоса у границ +0,25
 function polTex() {
   polFillPrep(); if (POLF.tx && POLF.tx.sig === POLF.sig) return POLF.tx;
-  const W = PIX.w, H = PIX.h, ow = POLF.ow, cols = POLF.cols, N = W * H;
+  const W = POLF.W, H = POLF.H, ow = POLF.ow, cols = POLF.cols, N = W * H, any = POLF.any;
   const bd = new Float32Array(N).fill(1e9);   // расстояние до границы с другой державой (или ничейной землёй), px карты держав
-  const ids = PIX.ids, other = (i, j) => ow[j] !== ow[i] && (ow[j] >= 0 || ids[j]);
+  const other = (i, j) => ow[j] !== ow[i] && (ow[j] >= 0 || any[j]);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (ow[i] < 0) continue;
     if ((x > 0 && other(i, i - 1)) || (x < W - 1 && other(i, i + 1)) || (y > 0 && other(i, i - W)) || (y < H - 1 && other(i, i + W))) bd[i] = 0; }
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; let m = bd[i]; if (x > 0) m = Math.min(m, bd[i - 1] + 1); if (y > 0) m = Math.min(m, bd[i - W] + 1); bd[i] = m; }
   for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) { const i = y * W + x; let m = bd[i]; if (x < W - 1) m = Math.min(m, bd[i + 1] + 1); if (y < H - 1) m = Math.min(m, bd[i + W] + 1); bd[i] = m; }
   const mk = (fill) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), im = x.createImageData(W, H), d = im.data;
     for (let i = 0; i < N; i++) { const o = ow[i]; if (o < 0) continue; fill(d, i * 4, o, i); } x.putImageData(im, 0, 0);
-    const s2 = document.createElement('canvas'); s2.width = W; s2.height = H; const y2 = s2.getContext('2d'); if ('filter' in y2) y2.filter = 'blur(0.7px)'; y2.drawImage(c, 0, 0); return s2; };
-  const BW = 4 / PIX.s;   // полоса у границ: ≈ 4 px карты
+    const s2 = document.createElement('canvas'); s2.width = W; s2.height = H; const y2 = s2.getContext('2d'); if ('filter' in y2) y2.filter = 'blur(0.45px)'; y2.drawImage(c, 0, 0); return s2; };
+  const BW = 2 / PIX.s;   // полоса у границ: ≈ 4 px карты (2 px текстуры половинного разрешения)
   const tx = { sig: POLF.sig,
     sat: mk((d, q) => { d[q] = d[q + 1] = d[q + 2] = 128; d[q + 3] = 166; }),
     scr: mk((d, q) => { d[q] = d[q + 1] = d[q + 2] = 64; d[q + 3] = 255; }),
@@ -1458,7 +1457,7 @@ function paintVector() {
   if (zd >= 1.5) icoLoad();
   const shSame = sk && sk.geo === shGeo && sk.ver === PIX.shInv && sk.ico === (ICO.st === 2 && (shGeo || UI.ridgeA < 190));
   const shFits = shSame && sk.S === shS && vx0 >= sk.X0 && vy0 >= sk.Y0 && vx1 <= sk.X1 && vy1 <= sk.Y1;
-  const shMoving = performance.now() - (UI.lastMove || 0) < 140, shWant = PIX.ids && PIX.pCol && (shGeo ? z >= GEO_T0 : zd >= 1.8);
+  const shMoving = performance.now() - (UI.lastMove || 0) < 140, shWant = false;   // чёткий слой отключён: при движении он растягивался и сдвигал вуаль внешних земель на край карты
   if (shWant && !shFits && !shMoving) {
     const G16 = 16;
     const X0 = Math.max(0, Math.floor((vx0 - (vx1 - vx0) * 0.3) / G16) * G16), Y0 = Math.max(0, Math.floor((vy0 - (vy1 - vy0) * 0.3) / G16) * G16);
@@ -1557,6 +1556,7 @@ function paintVector() {
     }
   }
   landmarksLive(ctx, vx0, vy0, vx1, vy1, z, dpr, v);   // уникальные горы вблизи — поверх границ (границы под ними)
+  if (G && G.prov && PIX.ids && !POLF.pre) { POLF.pre = 1; setTimeout(() => { try { polTex(); } catch (e) {} }, 300); }   // слой держав — заранее, до первого переключения
   if (polA() > 0) { polFill(ctx, vx0, vy0, vx1, vy1, z, dpr, v); ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * v.x, dpr * v.y); polBorders(ctx, z, vx0, vy0, vx1, vy1, 1); }   // I4: заливка, полоса и линия — поверх всего
   if (G) paintSelection(ctx, z);
 }
